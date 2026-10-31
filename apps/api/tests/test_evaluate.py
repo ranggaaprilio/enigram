@@ -2,10 +2,8 @@ import json
 
 from test_golden import INTRO, Q1, Q2, question_yaml, write_golden
 from test_golden_run import FailOnQuestion
-from test_judges import FakeLaya
 from test_query import FakeRag, success_response
 
-from enigram.adapters.driven.laya_scorer import LayaScorer
 from enigram.application.evaluation import evaluate
 
 CLAIM = "Captain Mira Okafor designed the protocol [1]."
@@ -36,7 +34,6 @@ def _install(monkeypatch, install, rag, deps):
         return question == UNANSWERABLE_Q
 
     monkeypatch.setattr(evaluate, "judge_abstention", abstention)
-    deps.claim_scorer = lambda: LayaScorer(FakeLaya())
 
 
 def _rag_with_claim() -> FakeRag:
@@ -67,16 +64,14 @@ async def test_run_eval_scores_both_systems_and_writes_report(cfg, deps, golden_
     assert agreement["labelled_claims"] == 2
     assert agreement["unmatched_labels"] == 1
     assert agreement["llm"]["accuracy"] == 0.0  # the judge said grounded, the human did not
-    assert agreement["laya_calibrated"]["threshold"] is None  # too few labels
 
     assert run.verdicts == {
         "faithfulness_graphrag": "INSUFFICIENT DATA",
         "multihop_graphrag_beats_baseline": "INSUFFICIENT DATA",
-        "laya_agrees_with_humans": "INSUFFICIENT DATA",
     }
     assert any(r["metric"] == "answer_correctness" for r in data["missing"])
     judgment = data["items"]["mix"][0]["claim_judgments"][0]
-    assert judgment["laya_p"] == 0.2 and judgment["human"] is False
+    assert judgment["llm"] is True and judgment["human"] is False
 
     md = run.report_path.read_text()
     for section in (

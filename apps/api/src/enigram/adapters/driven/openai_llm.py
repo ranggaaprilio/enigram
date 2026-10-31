@@ -1,5 +1,5 @@
-"""The OpenAI-compatible LLM endpoint (OMLX or DeepSeek): request settings, the callbacks
-LightRAG calls, the ChatModel the judges use, and the startup check."""
+"""The OpenAI-compatible chat endpoint (DeepSeek): request settings, the callback LightRAG
+calls, the ChatModel the judges and the code use cases use, and the startup check."""
 
 import json
 import logging
@@ -8,43 +8,29 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-import numpy as np
-from lightrag.llm.openai import openai_complete_if_cache, openai_embed
-from lightrag.utils import EmbeddingFunc, wrap_embedding_func_with_attrs
+from lightrag.llm.openai import openai_complete_if_cache
+from openai import APIError, AsyncOpenAI
 
+from enigram.application.ports import ChatReply, ToolCall
 from enigram.config import Config
-from enigram.domain.errors import OmlxUnavailableError
+from enigram.domain.errors import EnigramError, ProviderUnavailableError
 from enigram.domain.llm_output import repair_relation_lines, strip_think
 
 log = logging.getLogger(__name__)
 
-# Qwen3's recommended non-thinking sampling. OMLX defaults (temperature 1.0, no top_k, no
-# penalty) sent the 4-bit model into endless repetition during entity extraction.
-QWEN3_SAMPLING = {"temperature": 0.7, "top_p": 0.8, "presence_penalty": 1.5}
-QWEN3_TOP_K = 20
 DEEPSEEK_NO_THINKING = {"thinking": {"type": "disabled"}}
+CHAT_TIMEOUT_SECS = 120
+CHAT_MAX_RETRIES = 3
 
 
 def prepare_request(cfg: Config, prompt: str, kwargs: dict[str, Any]) -> str:
-    """Fill in sampling, the output cap and thinking control; caller-set values win.
+    """Fill in the output cap and thinking control; caller-set values win.
 
-    Sampling is a Qwen3-on-OMLX setting; DeepSeek keeps its own sampling defaults but, like OMLX,
-    has thinking turned off unless THINKING_MODE=on (its reasoning otherwise eats max_tokens).
+    Thinking is off unless THINKING_MODE=on: DeepSeek's reasoning otherwise eats max_tokens.
     """
     kwargs.setdefault("max_tokens", cfg.llm_max_tokens)
-    if cfg.llm_provider != "omlx":
-        if cfg.thinking_mode != "on":
-            kwargs["extra_body"] = {**DEEPSEEK_NO_THINKING, **(kwargs.get("extra_body") or {})}
-        return prompt
-    for name, value in QWEN3_SAMPLING.items():
-        kwargs.setdefault(name, value)
-    extra_body = dict(kwargs.get("extra_body") or {})
-    extra_body.setdefault("top_k", QWEN3_TOP_K)
-    if cfg.thinking_mode == "template":
-        extra_body.setdefault("chat_template_kwargs", {"enable_thinking": False})
-    elif cfg.thinking_mode == "suffix":
-        prompt = f"{prompt}\n/no_think"
-    kwargs["extra_body"] = extra_body
+    if cfg.thinking_mode != "on":
+        kwargs["extra_body"] = {**DEEPSEEK_NO_THINKING, **(kwargs.get("extra_body") or {})}
     return prompt
 
 
@@ -70,28 +56,17 @@ def make_llm_func(cfg: Config):
     return llm_model_func
 
 
-def make_embedding_func(cfg: Config) -> EmbeddingFunc:
-    @wrap_embedding_func_with_attrs(
-        embedding_dim=cfg.embed_dim,
-        max_token_size=cfg.embed_max_tokens,
-        model_name=cfg.embed_model,
-    )
-    async def embedding_func(texts: list[str]) -> np.ndarray:
-        return await openai_embed.func(
-            texts,
-            model=cfg.embed_model,
-            api_key=cfg.omlx_api_key,
-            base_url=cfg.omlx_base_url,
-        )
-
-    return embedding_func
-
-
 class OpenAIChatModel:
-    """ChatModel on cfg's endpoint, with the same sampling and thinking control as indexing."""
+    """ChatModel on cfg's endpoint, with the same thinking control as indexing."""
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
+        self.client = AsyncOpenAI(
+            base_url=cfg.llm_base_url,
+            api_key=cfg.llm_api_key,
+            max_retries=CHAT_MAX_RETRIES,
+            timeout=CHAT_TIMEOUT_SECS,
+        )
 
     async def complete(
         self, prompt: str, *, temperature: float | None = None, json_mode: bool = False
@@ -108,13 +83,64 @@ class OpenAIChatModel:
         )
         return strip_think(raw)
 
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        json_mode: bool = False,
+    ) -> ChatReply:
+        cfg = self.cfg
+        forced = tool_choice == "required" or isinstance(tool_choice, dict)
+        if forced and cfg.thinking_mode == "on":
+            raise EnigramError(
+                "tool_choice=required needs THINKING_MODE=off "
+                "(DeepSeek returns 400 in thinking mode)"
+            )
+        kwargs: dict[str, Any] = {"max_tokens": max_tokens or cfg.llm_max_tokens}
+        if cfg.thinking_mode != "on":
+            kwargs["extra_body"] = DEEPSEEK_NO_THINKING
+        if tools:
+            kwargs["tools"] = tools
+        if tool_choice:
+            kwargs["tool_choice"] = tool_choice
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        start = time.perf_counter()
+        try:
+            resp = await self.client.chat.completions.create(
+                model=cfg.llm_model, messages=messages, **kwargs
+            )
+        except (APIError, httpx.HTTPError) as e:
+            raise EnigramError(f"{cfg.llm_provider} chat failed: {e}") from e
+        choice = resp.choices[0]
+        msg = choice.message
+        calls = [
+            ToolCall(id=c.id, name=c.function.name, arguments=c.function.arguments or "")
+            for c in (msg.tool_calls or [])
+        ]
+        usage = resp.usage
+        return ChatReply(
+            text=strip_think(msg.content or ""),
+            tool_calls=calls,
+            finish_reason=choice.finish_reason or "",
+            tokens_in=usage.prompt_tokens if usage else 0,
+            tokens_out=usage.completion_tokens if usage else 0,
+            secs=round(time.perf_counter() - start, 2),
+        )
+
 
 @dataclass(frozen=True)
-class OmlxCheck:
+class ProviderCheck:
     models: list[str]
     completion_secs: float
-    raw_had_think: bool
     json_mode_ok: bool
+    embed_model: str
     embed_dim: int
 
 
@@ -125,31 +151,31 @@ async def _list_models(name: str, base_url: str, api_key: str) -> list[str]:
                 f"{base_url}/models", headers={"Authorization": f"Bearer {api_key}"}
             )
     except httpx.HTTPError as e:
-        raise OmlxUnavailableError(f"Cannot reach {name} at {base_url}: {e}") from e
+        raise ProviderUnavailableError(f"Cannot reach {name} at {base_url}: {e}") from e
     if resp.status_code == 401:
-        raise OmlxUnavailableError(f"{name} rejected the API key (401)")
+        raise ProviderUnavailableError(f"{name} rejected the API key (401)")
     if resp.status_code != 200:
-        raise OmlxUnavailableError(f"GET /models returned {resp.status_code}: {resp.text[:200]}")
+        raise ProviderUnavailableError(
+            f"GET /models returned {resp.status_code}: {resp.text[:200]}"
+        )
     return [m["id"] for m in resp.json().get("data", [])]
 
 
-async def check_omlx(cfg: Config) -> OmlxCheck:
-    """Fail fast on a misconfigured OMLX or LLM provider before any slow parsing or indexing."""
-    omlx_models = await _list_models("OMLX", cfg.omlx_base_url, cfg.omlx_api_key)
-    llm_models = omlx_models
-    if cfg.llm_provider != "omlx":
-        llm_models = await _list_models(cfg.llm_provider, cfg.llm_base_url, cfg.llm_api_key)
-    expected = ((cfg.embed_model, omlx_models), (cfg.llm_model, llm_models))
-    missing = [model for model, served in expected if model not in served]
-    models = sorted(set(omlx_models) | set(llm_models))
-    if missing:
-        raise OmlxUnavailableError(f"Model(s) {missing} not served. Available: {models}")
+async def check_providers(cfg: Config) -> ProviderCheck:
+    """Fail fast on a misconfigured DeepSeek or Voyage before any slow parsing or indexing."""
+    import numpy as np
 
-    # Call the client directly (not make_llm_func) to see the raw, unstripped output.
+    from enigram.adapters.driven.voyage_embedding import make_embedding_func
+
+    models = sorted(await _list_models(cfg.llm_provider, cfg.llm_base_url, cfg.llm_api_key))
+    missing = sorted({cfg.llm_model, cfg.judge_model} - set(models))
+    if missing:
+        raise ProviderUnavailableError(f"Model(s) {missing} not served. Available: {models}")
+
     kwargs: dict[str, Any] = {}
     prompt = prepare_request(cfg, "Reply with exactly: OK", kwargs)
     start = time.perf_counter()
-    raw = await openai_complete_if_cache(
+    await openai_complete_if_cache(
         cfg.llm_model, prompt, api_key=cfg.llm_api_key, base_url=cfg.llm_base_url, **kwargs
     )
     completion_secs = time.perf_counter() - start
@@ -170,14 +196,14 @@ async def check_omlx(cfg: Config) -> OmlxCheck:
     vectors = await make_embedding_func(cfg).func(["embedding dimension probe"])
     embed_dim = int(np.asarray(vectors).shape[-1])
     if embed_dim != cfg.embed_dim:
-        raise OmlxUnavailableError(
+        raise ProviderUnavailableError(
             f"Embedding model returned dim {embed_dim}, but EMBED_DIM={cfg.embed_dim}"
         )
 
-    return OmlxCheck(
+    return ProviderCheck(
         models=models,
         completion_secs=completion_secs,
-        raw_had_think="<think>" in raw,
         json_mode_ok=json_mode_ok,
+        embed_model=cfg.embed_model,
         embed_dim=embed_dim,
     )

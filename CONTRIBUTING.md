@@ -37,12 +37,11 @@ data/            runtime data (gitignored); .env sits next to it
 ## Development Setup
 
 Prerequisites: [uv](https://docs.astral.sh/uv/), Node 22.22 or newer (`.node-version`),
-Docker (for Postgres), and a chat + embedding model reachable over an OpenAI-compatible API
-(see the README for oMLX and DeepSeek).
+Docker (for Postgres), and DeepSeek and Voyage API keys (see the README).
 
 ```bash
 uv sync
-cp .env.example .env            # fill in the model settings
+cp .env.example .env            # fill in DEEPSEEK_API_KEY and VOYAGE_API_KEY
 docker compose up -d postgres
 uv run enigram check
 npm --prefix apps/web install
@@ -55,14 +54,14 @@ uv run pre-commit install       # git hooks: ruff, tsc, commit-message lint
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run pytest -m "not omlx and not docling"   # fast unit tests
+uv run pytest -m "not live and not docling"   # fast unit tests
 npm --prefix apps/web test && npm --prefix apps/web run build
 ```
 
 The same as `make lint test web-build`.
 
 Run the slower integration tests when your change touches parsing or the LLM path:
-`uv run pytest` (needs the Docling models and, for the `omlx` tests, a running model server).
+`uv run pytest` (needs the Docling models and, for the `live` tests, both API keys; they spend tokens).
 
 ## Pull Requests
 

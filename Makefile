@@ -18,10 +18,10 @@ format: ## ruff fixes and formatting
 	uv run ruff check --fix . && uv run ruff format .
 
 test: ## fast tests: Python unit tests and web tests
-	uv run pytest -m "not omlx and not docling"
+	uv run pytest -m "not live and not docling"
 	npm --prefix apps/web test
 
-test-all: ## every Python test (Docling; OMLX, Laya, Postgres when configured)
+test-all: ## every Python test (Docling; live APIs and Postgres when configured)
 	uv run pytest
 
 api: ## HTTP API on 127.0.0.1:8080 (start Postgres first: make db)

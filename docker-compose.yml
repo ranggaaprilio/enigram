@@ -16,17 +16,11 @@ x-enigram: &enigram
     POSTGRES_HOST: postgres
     POSTGRES_PORT: "5432"
     DATA_DIR: /app/data
-    # Models stay outside compose: oMLX on the host (or LLM_PROVIDER=deepseek).
-    OMLX_BASE_URL: ${COMPOSE_OMLX_BASE_URL:-http://host.docker.internal:8000/v1}
-    # The host's absolute path, mounted at the same path below, so an index built on the host
-    # keeps matching its recorded chunk settings. A Hugging Face model id works too.
-    TOKENIZER_PATH: ${COMPOSE_TOKENIZER_PATH:-${HOME}/.omlx/models/mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ}
   extra_hosts:
     - "host.docker.internal:host-gateway" # Linux; Docker Desktop already has it
   volumes:
     - ./data:/app/data
-    - ${HOME}/.omlx/models:${HOME}/.omlx/models:ro
-    - model-cache:/root/.cache # Docling layout models and Hugging Face downloads
+    - model-cache:/root/.cache # Docling layout models, Hugging Face downloads, tiktoken
   depends_on:
     postgres:
       condition: service_healthy

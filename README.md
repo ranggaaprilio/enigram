@@ -1,7 +1,7 @@
 # Enigram
 
 Turns written documents into a knowledge graph an agent can read (GraphRAG via
-[LightRAG](https://github.com/HKUDS/LightRAG)), fully local through oMLX. It indexes digital
+[LightRAG](https://github.com/HKUDS/LightRAG)), with DeepSeek (chat) and Voyage (embeddings). It indexes digital
 (non-scanned) English journal papers in PDF, plus Markdown files, and answers questions with citations, from the CLI
 or from Claude Code over MCP.
 
@@ -9,25 +9,25 @@ See `.claude/PRPs/prds/enigram-graphrag.prd.md` for the product plan.
 
 ## Setup
 
-Prerequisites: oMLX running on `http://localhost:8000` with a chat model (Qwen3-8B) and an
-embedding model (Qwen3-Embedding-0.6B), and [uv](https://docs.astral.sh/uv/).
+Prerequisites: a [DeepSeek](https://platform.deepseek.com) API key, a
+[Voyage AI](https://www.voyageai.com) API key, Node 22 (for the TypeScript code graph sidecar in
+`tools/ts-graph`) and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
 cp .env.example .env
 ```
 
-Fill in `.env`: `OMLX_API_KEY`, and `LLM_MODEL` / `EMBED_MODEL` exactly as listed by
-`GET /v1/models`. To run every LLM call (entity extraction, answers, judges) on the DeepSeek API
-instead, set `LLM_PROVIDER=deepseek` and `DEEPSEEK_API_KEY`; `LLM_MODEL` then defaults to
-`deepseek-flash`. Embeddings always stay on oMLX. Then verify:
+Fill in `.env`: `DEEPSEEK_API_KEY` and `VOYAGE_API_KEY`. Every chat call (entity extraction,
+answers, judges) goes to DeepSeek (`LLM_MODEL` defaults to `deepseek-flash`); document and memory
+embeddings go to Voyage (`EMBED_MODEL` defaults to `voyage-4-lite`). Then verify:
 
 ```bash
 uv run enigram check
 ```
 
-All lines should be ✓. If the raw output still contains `<think>`, set `THINKING_MODE=suffix`
-and run `check` again.
+All lines should be ✓: the DeepSeek models are served, JSON mode works and the Voyage embedding
+has `EMBED_DIM` dimensions.
 
 ### Index storage
 
@@ -86,7 +86,7 @@ uv run enigram query "How do AI coding agents relate to code review practices in
 
 Prints the answer (Markdown, citing `[n]`), the sources (paper title, section, pages) and the
 time. Retrieval combines the knowledge graph and vector search (LightRAG mode `mix`). A new
-question takes ~40-50 s on Qwen3-8B; asking the same question again is answered from the cache.
+question is answered from the cache when asked again.
 
 To compare against plain vector RAG, add `--mode naive`:
 
@@ -161,11 +161,9 @@ worker and the web UI on `http://localhost:3000`. Uploads land in `data/books/`;
 pipeline as `enigram index`, and every query is stored with its retrieval trace.
 
 The service needs `STORAGE_BACKEND=postgres` (the job queue lives there, and only Postgres lets
-the API see what the worker indexed). Models stay outside compose: oMLX on the host is reached at
-`host.docker.internal` (override with `COMPOSE_OMLX_BASE_URL`), and `~/.omlx/models` is mounted
-at the same absolute path so the tokenizer path of an index built on the host still matches
-(override with `COMPOSE_TOKENIZER_PATH`). The first PDF downloads Docling's layout models into the
-`model-cache` volume. Do not run `enigram index` on the host while the worker runs: both would
+the API see what the worker indexed). Models are online (DeepSeek, Voyage); the image also
+carries Node and the `tools/ts-graph` sidecar. The first PDF downloads Docling's layout models into
+the `model-cache` volume. Do not run `enigram index` on the host while the worker runs: both would
 write the same index.
 
 | Endpoint | Does |
@@ -359,12 +357,11 @@ sheets in `data/eval/`, so new claims can be labelled for the next run.
 | context recall, context precision | Deterministic: retrieved chunks vs. the golden evidence chunks |
 | claim faithfulness (LLM) | The judge model judges each sentence of the answer against the retrieved context |
 | abstention | The judge model decides whether each answer declines to answer: the share of `unanswerable` questions refused (higher is better) and of answerable ones refused (false abstention, lower is better). Reported only, no target |
-| Laya | P(grounded) per sentence; reported zero-shot (P ≥ 0.5) and with a threshold calibrated on the human labels (5-fold CV), plus AUROC |
 
 `--labels` takes one or more label sheets; claims are matched by question and sentence text, so
-sheets from `golden answer` or an earlier `eval` both work. The report answers the three PRD
-criteria (GraphRAG faithfulness ≥ 0.9, GraphRAG beats the baseline on multi-hop questions, Laya
-agrees with humans) with PASS, FAIL or INSUFFICIENT DATA, lists every missing score with its
+sheets from `golden answer` or an earlier `eval` both work. The report answers the PRD criteria
+(GraphRAG faithfulness ≥ 0.9, GraphRAG beats the baseline on multi-hop questions) with PASS, FAIL
+or INSUFFICIENT DATA, lists every missing score with its
 reason, and compares the headline numbers with the previous run.
 
 With only one paper indexed, both systems retrieve every chunk: context recall is always 1.0 and
@@ -394,6 +391,6 @@ CONTRIBUTING.md for the layout, and `make` for shortcuts).
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run pytest -m "not omlx and not docling"   # fast unit tests
-uv run pytest                                  # + Docling, + OMLX when OMLX_API_KEY is set
+uv run pytest -m "not live and not docling"   # fast unit tests
+uv run pytest                                  # + Docling, + live APIs when both keys are set
 ```

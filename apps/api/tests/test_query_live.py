@@ -1,4 +1,6 @@
-"""Index the synthetic harbor PDF and ask a 2-hop question. Skipped unless OMLX_API_KEY is set."""
+"""Index the synthetic harbor PDF and ask a 2-hop question.
+
+Skipped unless DEEPSEEK_API_KEY and VOYAGE_API_KEY are set."""
 
 import dataclasses
 
@@ -19,7 +21,7 @@ def live_cfg(tmp_path) -> Config:
     return dataclasses.replace(cfg, data_dir=tmp_path / "data", storage="file")
 
 
-@pytest.mark.omlx
+@pytest.mark.live
 @pytest.mark.docling
 async def test_query_answers_two_hop_question_with_sources(live_cfg, book_pdf):
     await index.run_index(live_cfg, build_deps(live_cfg), book_pdf.parent)

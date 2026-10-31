@@ -15,7 +15,7 @@ from enigram.application.files import (
     write_chunks_jsonl,
 )
 from enigram.application.ports import Deps, KnowledgeEngine
-from enigram.config import Config
+from enigram.config import CHUNK_TOKENIZER, Config
 from enigram.domain.chunk import PARSER_VERSION, SOURCE_SUFFIXES, Chunk, book_name, citation_path
 from enigram.domain.errors import EnigramError
 
@@ -66,7 +66,7 @@ def guard_chunk_settings(cfg: Config, manifest: dict[str, Any]) -> None:
         "chunk_max_tokens": cfg.chunk_max_tokens,
         "docling_version": version("docling"),
         "parser_version": PARSER_VERSION,
-        "tokenizer": str(cfg.tokenizer_path),
+        "tokenizer": CHUNK_TOKENIZER,
     }
     stored = {k: manifest.get(k) for k in current}
     if _has_index(cfg) and manifest.get("books") and stored != current:
@@ -101,9 +101,6 @@ def guard_llm_model(cfg: Config, manifest: dict[str, Any]) -> None:
     """Entities and relations from two extraction models must not mix in one graph."""
     current = {"llm_provider": cfg.llm_provider, "llm_model": cfg.llm_model}
     stored = {k: manifest.get(k) for k in current}
-    if stored == {"llm_provider": None, "llm_model": None} and cfg.llm_provider == "omlx":
-        # Indexes built before the provider was recorded were always extracted on OMLX.
-        stored = current
     if _has_index(cfg) and manifest.get("books") and stored != current:
         raise EnigramError(
             f"Extraction LLM changed from {stored} to {current}. "

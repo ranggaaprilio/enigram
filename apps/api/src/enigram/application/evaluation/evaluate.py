@@ -19,13 +19,12 @@ from enigram.application.evaluation.golden_run import (
 )
 from enigram.application.evaluation.judges import (
     JUDGE_TEMPERATURE,
-    claim_premises,
     judge_abstention,
     judge_claims_llm,
 )
 from enigram.application.files import atomic_write_text, file_sha256
 from enigram.application.indexing import load_manifest
-from enigram.application.ports import AnswerScorer, ChatModel, ClaimScorer, Deps
+from enigram.application.ports import AnswerScorer, ChatModel, Deps
 from enigram.config import Config
 from enigram.domain import stats
 from enigram.domain.answer import QUERY_MODES
@@ -43,8 +42,6 @@ METRICS = (
 MULTI_HOP = ("multi_section", "multi_paper")
 # PRD Key Hypothesis targets.
 FAITHFULNESS_TARGET = 0.9
-LAYA_ACCURACY_TARGET = 0.8
-LAYA_KAPPA_TARGET = 0.6
 MIN_LABELLED_CLAIMS = 30  # PRD: ~30-50 human-labelled claims
 MIN_ANSWERS = 5  # below this a mean says nothing
 MAX_LISTED_CLAIMS = 50
@@ -96,23 +93,8 @@ async def _score_item(judge: ChatModel, scorer: AnswerScorer, item: dict[str, An
     }
     item["score_errors"] = errors
     item["claim_judgments"] = [
-        {"claim": c, "llm": v, "laya_p": None, "laya_truncated": None, "human": None}
-        for c, v in zip(item["claims"], llm, strict=True)
+        {"claim": c, "llm": v, "human": None} for c, v in zip(item["claims"], llm, strict=True)
     ]
-
-
-def _score_laya(scorer: ClaimScorer, item: dict[str, Any]) -> None:
-    judgments = item["claim_judgments"]
-    try:
-        results = scorer.score_claims(
-            [(j["claim"], claim_premises(j["claim"], item["chunks"])) for j in judgments]
-        )
-    except Exception as e:  # noqa: BLE001 - a judge failure is reported, not fatal
-        item["score_errors"]["laya"] = f"{type(e).__name__}: {e}"[:300]
-        return
-    for judgment, result in zip(judgments, results, strict=True):
-        judgment["laya_p"] = result["p_grounded"]
-        judgment["laya_truncated"] = result["truncated"]
 
 
 def _aggregate(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -156,10 +138,6 @@ def _judgments(runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
 def _agreement(judgments: list[dict[str, Any]], n_labels: int) -> dict[str, Any]:
     labelled = [j for j in judgments if j["human"] is not None]
     llm = [(j["llm"], j["human"]) for j in labelled if j["llm"] is not None]
-    laya = [(j["laya_p"], j["human"]) for j in labelled if j["laya_p"] is not None]
-    laya_scores, laya_labels = [p for p, _ in laya], [h for _, h in laya]
-    zero_shot = [(p >= 0.5, h) for p, h in laya]
-    judged = [j for j in judgments if j["laya_truncated"] is not None]
     matched_keys = {(j["id"], j["claim"]) for j in labelled}
     return {
         "labelled_claims": len(labelled),
@@ -169,17 +147,6 @@ def _agreement(judgments: list[dict[str, Any]], n_labels: int) -> dict[str, Any]
             "accuracy": stats.accuracy(llm),
             "kappa": stats.cohen_kappa(llm),
         },
-        "laya_zero_shot": {
-            "n": len(zero_shot),
-            "threshold": 0.5,
-            "accuracy": stats.accuracy(zero_shot),
-            "kappa": stats.cohen_kappa(zero_shot),
-        },
-        "laya_calibrated": stats.cv_threshold(laya_scores, laya_labels),
-        "laya_auroc": stats.auroc(laya_scores, laya_labels),
-        "laya_truncation_rate": (
-            sum(j["laya_truncated"] for j in judged) / len(judged) if judged else None
-        ),
     }
 
 
@@ -212,14 +179,6 @@ def _hypothesis(
         else None
     )
 
-    def laya_ok(block: dict[str, Any]) -> bool:
-        acc, kappa = block.get("accuracy"), block.get("kappa")
-        return (acc is not None and acc >= LAYA_ACCURACY_TARGET) or (
-            kappa is not None and kappa >= LAYA_KAPPA_TARGET
-        )
-
-    zero, cal = agreement["laya_zero_shot"], agreement["laya_calibrated"]
-    laya_result = zero["accuracy"] if zero["accuracy"] is not None else cal.get("accuracy")
     return {
         "faithfulness_graphrag": {
             "target": f"≥ {FAITHFULNESS_TARGET}",
@@ -242,17 +201,6 @@ def _hypothesis(
                 + (" · only 1 paper indexed: both systems see every chunk" if books < 2 else "")
             ),
         },
-        "laya_agrees_with_humans": {
-            "target": f"accuracy ≥ {LAYA_ACCURACY_TARGET} or κ ≥ {LAYA_KAPPA_TARGET}",
-            "result": laya_result,
-            "n": agreement["labelled_claims"],
-            "verdict": _verdict(
-                laya_result,
-                laya_ok(zero) or laya_ok(cal),
-                agreement["labelled_claims"] >= MIN_LABELLED_CLAIMS,
-            ),
-            "note": "zero-shot (threshold 0.5) or calibrated threshold (5-fold CV)",
-        },
     }
 
 
@@ -265,11 +213,7 @@ def _failures(runs: dict[str, dict[str, Any]]) -> dict[str, Any]:
             if (item.get("scores") or {}).get("faithfulness") is not None
         ]
         lowest[mode] = [{"id": qid, "faithfulness": f} for f, qid in sorted(scored)[:5]]
-    flagged = [
-        j
-        for j in _judgments(runs)
-        if j["llm"] is False or (j["laya_p"] is not None and j["laya_p"] < 0.5)
-    ]
+    flagged = [j for j in _judgments(runs) if j["llm"] is False]
     return {
         "lowest_faithfulness": lowest,
         "not_grounded_claims": flagged[:MAX_LISTED_CLAIMS],
@@ -299,7 +243,6 @@ def _headline(data: dict[str, Any]) -> dict[str, float | None]:
     for mode, block in data["systems"].items():
         head[f"{mode}.abstention_unanswerable"] = block["abstention"]["unanswerable"]["rate"]
         head[f"{mode}.abstention_answerable"] = block["abstention"]["answerable"]["rate"]
-    head["laya_zero_shot.accuracy"] = data["agreement"]["laya_zero_shot"]["accuracy"]
     head["llm.accuracy"] = data["agreement"]["llm"]["accuracy"]
     return head
 
@@ -348,7 +291,6 @@ def _metadata(
     secs: float,
     query_budget: dict[str, int],
 ) -> dict[str, Any]:
-    weights = cfg.laya_path / "model.safetensors"
     books = [b for b, e in load_manifest(cfg)["books"].items() if e.get("status") == "indexed"]
     return {
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -359,18 +301,9 @@ def _metadata(
             "embedding": cfg.embed_model,
             "judge_provider": cfg.judge_provider,
             "judge": cfg.judge_model,
-            # Ragas always turns thinking off on OMLX; an API judge follows THINKING_MODE.
             "judge_temperature": JUDGE_TEMPERATURE,
-            "judge_thinking": cfg.judge_provider != "omlx" and cfg.thinking_mode == "on",
-            "laya_path": str(cfg.laya_path),
-            "laya_weights_bytes": weights.stat().st_size if weights.exists() else None,
-            "laya_weights_mtime": (
-                datetime.fromtimestamp(weights.stat().st_mtime).isoformat(timespec="seconds")
-                if weights.exists()
-                else None
-            ),
+            "judge_thinking": cfg.thinking_mode == "on",
             "ragas_version": _version("ragas"),
-            "laya_version": _version("laya"),
         },
         "golden": {
             "file": str(golden_path),
@@ -429,13 +362,7 @@ async def run_eval(
                 time.perf_counter() - t,
             )
 
-    # Laya runs after every OMLX call so the two models are not busy at the same time.
     scored = [item for run in runs.values() for item in run["items"] if "claim_judgments" in item]
-    if scored:
-        log.info("[eval] Laya: %d claims", sum(len(i["claim_judgments"]) for i in scored))
-        laya = deps.claim_scorer()
-        for item in scored:
-            _score_laya(laya, item)
     for item in scored:
         for j in item["claim_judgments"]:
             j["human"] = human.get((item["id"], j["claim"]))
@@ -539,7 +466,6 @@ def render_markdown(data: dict[str, Any]) -> str:
             f"| {mode} | {_fmt(un['rate'])} (n={un['n']}) | {', '.join(un['answered']) or '—'} "
             f"| {_fmt(ans['rate'])} (n={ans['n']}) | {', '.join(ans['refused']) or '—'} |"
         )
-    zero, cal = agreement["laya_zero_shot"], agreement["laya_calibrated"]
     lines += [
         "",
         "## Judge agreement with human labels",
@@ -553,14 +479,6 @@ def render_markdown(data: dict[str, Any]) -> str:
         f"| LLM claim judge (`{meta['models']['judge']}`) | {agreement['llm']['n']} "
         f"| {_fmt(agreement['llm']['accuracy'])} | {_fmt(agreement['llm']['kappa'])} "
         f"| temperature {meta['models']['judge_temperature']} |",
-        f"| Laya zero-shot (P ≥ 0.5) | {zero['n']} | {_fmt(zero['accuracy'])} "
-        f"| {_fmt(zero['kappa'])} | |",
-        f"| Laya calibrated (5-fold CV) | {cal['n']} | {_fmt(cal.get('accuracy'))} "
-        f"| {_fmt(cal.get('kappa'))} | threshold {_fmt(cal.get('threshold'))}"
-        f"{' · ' + cal['reason'] if cal.get('reason') else ''} |",
-        "",
-        f"Laya AUROC: {_fmt(agreement['laya_auroc'])} · claims truncated by Laya's 512-token "
-        f"window: {_fmt(agreement['laya_truncation_rate'])}",
         "",
         "## Failures",
         "",
@@ -569,17 +487,16 @@ def render_markdown(data: dict[str, Any]) -> str:
         listed = ", ".join(f"{r['id']} ({_fmt(r['faithfulness'])})" for r in rows) or "—"
         lines.append(f"- Lowest faithfulness, {mode}: {listed}")
     total = data["failures"]["not_grounded_total"]
-    lines += ["", f"Claims judged not grounded by the LLM judge or Laya: {total}", ""]
+    lines += ["", f"Claims judged not grounded by the LLM judge: {total}", ""]
     if total:
         lines += [
-            "| Mode | Question | Claim | LLM | Laya P | Human |",
-            "|---|---|---|---|---|---|",
+            "| Mode | Question | Claim | LLM | Human |",
+            "|---|---|---|---|---|",
         ]
         for j in data["failures"]["not_grounded_claims"]:
             claim = j["claim"].replace("|", "¦")[:160]
             lines.append(
-                f"| {j['mode']} | {j['id']} | {claim} | {_fmt(j['llm'])} | {_fmt(j['laya_p'])} "
-                f"| {_fmt(j['human'])} |"
+                f"| {j['mode']} | {j['id']} | {claim} | {_fmt(j['llm'])} | {_fmt(j['human'])} |"
             )
     lines += ["", "## Missing scores", ""]
     if data["missing"]:
@@ -612,9 +529,7 @@ def render_markdown(data: dict[str, Any]) -> str:
             if models["judge"] == models["generator"]
             else "- The judge is a different model from the generator."
         ),
-        f"- Laya: `{models['laya_path']}` ({_fmt(models['laya_weights_bytes'])} bytes, "
-        f"{models['laya_weights_mtime'] or '—'}), laya {models['laya_version']}, ragas "
-        f"{models['ragas_version']}",
+        f"- ragas {models['ragas_version']}",
         f"- Golden sha256 `{meta['golden']['sha256'][:12]}`, by category "
         f"{meta['golden']['by_category']}",
         f"- Label files: {', '.join(meta['label_files']) or 'none'}",

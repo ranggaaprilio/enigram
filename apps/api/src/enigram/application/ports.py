@@ -136,12 +136,42 @@ class DocumentParser(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # raw JSON text from the model; may be invalid, validate before use
+
+
+@dataclass(frozen=True)
+class ChatReply:
+    text: str
+    tool_calls: list[ToolCall]
+    finish_reason: str  # "stop" | "length" | "tool_calls" | ...
+    tokens_in: int
+    tokens_out: int
+    secs: float
+
+
 class ChatModel(Protocol):
-    """One prompt in, the reply out (reasoning blocks removed)."""
+    """A chat model: one prompt in, the reply out (reasoning blocks removed)."""
 
     async def complete(
         self, prompt: str, *, temperature: float | None = None, json_mode: bool = False
     ) -> str: ...
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        json_mode: bool = False,
+    ) -> ChatReply:
+        """One chat-completions call with token usage; `tools` in the OpenAI function format."""
+        ...
 
 
 class AnswerScorer(Protocol):
@@ -151,14 +181,6 @@ class AnswerScorer(Protocol):
         self, question: str, answer: str, contexts: list[str], reference: str
     ) -> tuple[dict[str, float | None], dict[str, str]]:
         """Scores per metric (None when it failed) and the reason per failure."""
-        ...
-
-
-class ClaimScorer(Protocol):
-    """A second, non-LLM opinion on whether each claim is grounded."""
-
-    def score_claims(self, claims: list[tuple[str, list[str]]]) -> list[dict[str, Any]]:
-        """Per (claim, premises): {"p_grounded": float | None, "truncated": bool}."""
         ...
 
 
@@ -176,7 +198,7 @@ class Deps:
     load_graph: Callable[[], Awaitable["nx.Graph"]]  # the entity graph, for the index report
     new_parser: Callable[[], DocumentParser]
     check_llm: Callable[[], Awaitable[Any]]  # fails fast on a misconfigured LLM endpoint
+    generator: Callable[[], ChatModel]  # the answer/summary/agent model (cfg, not cfg.judge)
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
-    claim_scorer: Callable[[], ClaimScorer]  # loads a local model: only built when needed
     query_budget: dict[str, int]  # the engine's retrieval token caps, recorded in eval reports

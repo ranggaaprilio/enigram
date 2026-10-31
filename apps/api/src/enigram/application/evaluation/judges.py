@@ -1,9 +1,7 @@
-"""LLM judges: per-claim grounding and abstention. Ragas and Laya are scorer adapters."""
+"""LLM judges: per-claim grounding and abstention. Ragas is a scorer adapter."""
 
 import json
 import logging
-import re
-from typing import Any
 
 from enigram.application.ports import ChatModel
 from enigram.domain.claims import JUDGE_TEMPERATURE  # noqa: F401 - re-exported
@@ -11,7 +9,6 @@ from enigram.domain.claims import JUDGE_TEMPERATURE  # noqa: F401 - re-exported
 log = logging.getLogger(__name__)
 
 # The judge must be deterministic; it is pinned in every report.
-_CITATION = re.compile(r"\[(\d+)\]")
 
 
 def _judge_prompt(claims: list[str], contexts: list[str]) -> str:
@@ -73,10 +70,3 @@ async def judge_abstention(judge: ChatModel, question: str, answer: str) -> bool
         log.warning("[eval] abstention judge returned invalid JSON: %s", e)
         return None
     return verdict if isinstance(verdict, bool) else None
-
-
-def claim_premises(claim: str, chunks: list[dict[str, Any]]) -> list[str]:
-    """The chunks the claim cites as [n]; all retrieved chunks when it cites none (or unknown)."""
-    by_ref = {c["ref"]: c["text"] for c in chunks}
-    cited = [by_ref[int(n)] for n in _CITATION.findall(claim) if int(n) in by_ref]
-    return cited or [c["text"] for c in chunks]

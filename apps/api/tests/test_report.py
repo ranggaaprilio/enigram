@@ -89,7 +89,7 @@ async def test_build_report_writes_md_json_and_review(cfg):
     assert data["graph"]["entities"] == 4
     assert data["totals"]["parse_secs_per_page"] == 0.5
     assert data["manual_precision"] is None
-    assert "test-key-not-real" not in md_path.read_text()
+    assert "ds-key-not-real" not in md_path.read_text()
     assert list(cfg.reports_dir.glob("review-*.md"))
 
 

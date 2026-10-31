@@ -25,7 +25,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="enigram", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("check", help="verify OMLX models, thinking mode and embedding dim")
+    sub.add_parser(
+        "check", help="verify the DeepSeek and Voyage endpoints, thinking mode and embedding dim"
+    )
 
     index = sub.add_parser("index", help="parse PDF/Markdown files and build the LightRAG graph")
     index.add_argument("folder", type=Path, help="folder containing *.pdf, *.md or *.markdown")
@@ -116,12 +118,11 @@ async def _check(cfg: Config) -> int:
     from enigram.bootstrap import build_deps
 
     result = await build_deps(cfg).check_llm()
-    print(f"✓ models served: {', '.join(result.models)}")
-    think = "✗ raw output still contains <think>" if result.raw_had_think else "✓ no <think>"
-    print(f"{think} (thinking_mode={cfg.thinking_mode}, {result.completion_secs:.1f}s)")
+    print(f"✓ {cfg.llm_provider} models served: {', '.join(result.models)}")
+    print(f"✓ completion {result.completion_secs:.1f}s (thinking_mode={cfg.thinking_mode})")
     print("✓ JSON mode works" if result.json_mode_ok else "✗ JSON mode failed (see log)")
-    print(f"✓ embedding dim {result.embed_dim}")
-    return 0 if result.json_mode_ok and not result.raw_had_think else 1
+    print(f"✓ voyage {result.embed_model} dim {result.embed_dim}")
+    return 0 if result.json_mode_ok else 1
 
 
 async def _preflight(cfg: Config) -> None:

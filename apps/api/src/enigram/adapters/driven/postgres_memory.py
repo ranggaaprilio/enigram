@@ -57,7 +57,7 @@ class PostgresMemoryStore:
     async def _embed(self, text: str) -> str:
         try:
             vectors = np.asarray(await self.embed([text]))
-        except Exception as e:  # the embedding client raises its own errors (OMLX down, ...)
+        except Exception as e:  # the embedding client raises its own errors (Voyage down, ...)
             raise EnigramError(f"Embedding failed: {e}") from e
         if vectors.shape != (1, self.dim):
             raise EnigramError(
