@@ -126,8 +126,9 @@ class MemoryRepository(Protocol):
 class DocumentParser(Protocol):
     """Turns one PDF or Markdown file into cited chunks; may hold models between documents."""
 
-    def parse(self, path: Path, pages: tuple[int, int] | None = None) -> "ParsedBook":
-        """`pages` only applies to PDFs."""
+    def parse(self, path: Path, sha256: str, pages: tuple[int, int] | None = None) -> "ParsedBook":
+        """`sha256` is the file's content hash (also the parse cache key); `pages` only applies
+        to PDFs."""
         ...
 
     def close(self) -> None:
@@ -169,6 +170,9 @@ class Deps:
 
     # open_engine(require_index=True): an async context manager yielding a KnowledgeEngine.
     open_engine: Callable[..., AbstractAsyncContextManager[KnowledgeEngine]]
+    open_store: Callable[[], Awaitable[JobRepository]]  # the job queue and query log
+    # new_memory(store): agent memories, sharing the store's connections (store.close() ends both).
+    new_memory: Callable[[JobRepository], Awaitable[MemoryRepository]]
     load_graph: Callable[[], Awaitable["nx.Graph"]]  # the entity graph, for the index report
     new_parser: Callable[[], DocumentParser]
     check_llm: Callable[[], Awaitable[Any]]  # fails fast on a misconfigured LLM endpoint

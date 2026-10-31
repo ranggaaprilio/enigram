@@ -8,7 +8,6 @@ import pytest
 
 from enigram.adapters.driven import lightrag_engine, openai_llm
 from enigram.application import indexing as index
-from enigram.application import report
 from enigram.bootstrap import build_deps
 from enigram.config import Config
 
@@ -42,7 +41,7 @@ async def test_index_end_to_end_and_resume(live_cfg, book_pdf, monkeypatch):
     entry = run.books["harbor-book"]
     assert entry["status"] == "indexed", entry
     assert entry["docs"]["processed"] == entry["chunks"]
-    graph = nx.read_graphml(report.find_graph_file(live_cfg))
+    graph = nx.read_graphml(lightrag_engine.find_graph_file(live_cfg))
     assert graph.number_of_nodes() >= 1
     assert json.loads(run.report_path.with_suffix(".json").read_text())["graph"]["entities"] >= 1
 

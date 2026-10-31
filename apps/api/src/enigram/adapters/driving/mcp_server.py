@@ -12,10 +12,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from enigram.adapters.driven.lightrag_engine import open_engine
 from enigram.application.documents import documents_overview
-from enigram.application.ports import JobRepository, KnowledgeEngine, MemoryRepository
+from enigram.application.ports import Deps, JobRepository, KnowledgeEngine, MemoryRepository
 from enigram.application.querying import answer_question
+from enigram.bootstrap import build_deps
 from enigram.config import Config
 from enigram.domain.answer import QUERY_MODE, ContextChunk, Source
 from enigram.domain.errors import EnigramError
@@ -75,10 +75,11 @@ def _api_key(ctx: Context[AppContext]) -> str | None:
 def create_server(
     cfg: Config,
     lifespan: Callable[[MCPServer], AbstractAsyncContextManager[AppContext]] | None = None,
+    deps: Deps | None = None,
 ) -> MCPServer:
     @asynccontextmanager
     async def open_index(server: MCPServer) -> AsyncIterator[AppContext]:
-        async with open_engine(cfg) as engine:
+        async with (deps or build_deps(cfg)).open_engine() as engine:
             yield AppContext(engine=engine)
 
     mcp = MCPServer("enigram", lifespan=lifespan or open_index)

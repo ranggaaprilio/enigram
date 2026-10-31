@@ -18,16 +18,13 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from enigram.adapters.driven.lightrag_engine import open_engine
-from enigram.adapters.driven.openai_llm import make_embedding_func
-from enigram.adapters.driven.postgres_jobs import open_store
-from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
 from enigram.adapters.driving.mcp_server import AppContext, create_server
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
-from enigram.application.ports import JobRepository
+from enigram.application.ports import Deps, JobRepository
 from enigram.application.querying import answer_question
 from enigram.application.repo_sync import check_ref, check_repo_url
+from enigram.bootstrap import build_deps
 from enigram.config import Config
 from enigram.domain.answer import QUERY_MODE
 from enigram.domain.chunk import SOURCE_SUFFIXES, book_name
@@ -155,7 +152,9 @@ def _key_name(request: Request) -> str | None:
     return getattr(request.state, "api_key", None)
 
 
-def create_app(cfg: Config) -> FastAPI:
+def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
+    """`deps` defaults to the real adapters; tests pass fakes."""
+    deps = deps or build_deps(cfg)
     if cfg.storage != "postgres":
         raise EnigramError(
             "The API needs STORAGE_BACKEND=postgres: the job queue lives there, and only "
@@ -185,16 +184,11 @@ def create_app(cfg: Config) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if not cfg.api_keys:
             log.warning("[api] ENIGRAM_API_KEYS is not set: every route is open")
-        store = await open_store(cfg)
-        # Shares the store's pool, which store.close() closes.
-        memory = PostgresMemoryStore(
-            store.pool, cfg.workspace, make_embedding_func(cfg), cfg.embed_dim
-        )
-        await memory.ensure_schema()
-        app.state.memory = memory
+        store = await deps.open_store()
+        app.state.memory = await deps.new_memory(store)
         try:
             # require_index=False: a fresh deployment has no index yet and must still start.
-            async with open_engine(cfg, query_cache=False, require_index=False) as engine:
+            async with deps.open_engine(query_cache=False, require_index=False) as engine:
                 app.state.store, app.state.engine = store, engine
                 # A mounted app's own lifespan never runs, so the MCP session manager starts here.
                 async with mcp.session_manager.run():

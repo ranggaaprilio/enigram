@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from enigram.adapters.driven import docling_parser
-from enigram.application.files import read_chunks_jsonl, write_chunks_jsonl
+from enigram.application.files import file_sha256, read_chunks_jsonl, write_chunks_jsonl
 from enigram.domain import chunk as parse
 from enigram.domain.chunk import Chunk, book_name, citation_path, is_backmatter
 
@@ -143,7 +143,7 @@ def test_parser_skips_front_back_small_and_duplicate_chunks(cfg, tmp_path, monke
     fake_doc = type("Doc", (), {"pages": {1: 0, 2: 0, 3: 0}, "texts": [title_item]})()
     monkeypatch.setattr(parser, "_load_document", lambda path, sha, pages: fake_doc)
 
-    parsed = parser.parse(pdf)
+    parsed = parser.parse(pdf, "sha")
 
     assert [c.headings for c in parsed.chunks] == [("1 Intro",), ("2 Method",)]
     assert [c.chunk_id for c in parsed.chunks] == ["paper-c00000", "paper-c00001"]
@@ -181,7 +181,7 @@ def test_chunks_jsonl_roundtrip(tmp_path):
 
 @pytest.mark.docling
 def test_parse_pdf_keeps_headings_and_pages(cfg, book_pdf):
-    parsed = docling_parser.parse_pdf(book_pdf, cfg)
+    parsed = docling_parser.parse_pdf(book_pdf, file_sha256(book_pdf), cfg)
 
     assert parsed.book == "harbor-book"
     assert parsed.title == "Harbor Signals Study"
@@ -209,11 +209,12 @@ def test_parse_pdf_uses_cache_and_skips_cache_for_page_subset(cfg, book_pdf, mon
 
     monkeypatch.setattr(docling_parser, "build_converter", counting_build)
 
-    docling_parser.parse_pdf(book_pdf, cfg, pages=(1, 1))
+    sha = file_sha256(book_pdf)
+    docling_parser.parse_pdf(book_pdf, sha, cfg, pages=(1, 1))
     assert not list(cfg.parsed_dir.glob("*.docling.json"))
 
-    docling_parser.parse_pdf(book_pdf, cfg)
-    docling_parser.parse_pdf(book_pdf, cfg)
+    docling_parser.parse_pdf(book_pdf, sha, cfg)
+    docling_parser.parse_pdf(book_pdf, sha, cfg)
     assert len(calls) == 2  # subset + first full run; the second full run hits the cache
 
 
@@ -273,7 +274,7 @@ def test_convert_markdown_keeps_headings(cfg, tmp_path):
 def test_parse_markdown_end_to_end(cfg, tmp_path):
     md = tmp_path / "harbor notes.md"
     md.write_text(MD, encoding="utf-8")
-    parsed = docling_parser.parse_pdf(md, cfg)
+    parsed = docling_parser.parse_pdf(md, file_sha256(md), cfg)
 
     assert parsed.book == "harbor-notes"
     assert parsed.title == "Harbor Notes"

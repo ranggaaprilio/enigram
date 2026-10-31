@@ -9,6 +9,7 @@ from test_worker import FakeJobStore
 from enigram.adapters.driven import lightrag_engine
 from enigram.adapters.driving import http_api as api
 from enigram.application import indexing as index
+from enigram.bootstrap import build_deps
 from enigram.config import Config
 from enigram.domain.errors import EnigramError
 
@@ -17,34 +18,38 @@ LAPTOP_KEY = "l" * 32
 WEB_KEY = "w" * 32
 
 
-@pytest.fixture(autouse=True)
-def fake_memory(monkeypatch):
-    """The lifespan's PostgresMemoryStore, without a database; the instance the app built."""
-    built = []
+@pytest.fixture
+def fake_memory():
+    """The FakeMemoryStore instances the app built (see _deps)."""
+    return []
 
-    def make(*args):
-        built.append(FakeMemoryStore(*args))
+
+def _deps(cfg, store, built):
+    """The real adapters, with the job store and memory replaced by fakes."""
+    deps = build_deps(cfg)
+
+    async def open_store():
+        return store
+
+    async def new_memory(store):
+        built.append(FakeMemoryStore())
         return built[-1]
 
-    monkeypatch.setattr(api, "PostgresMemoryStore", make)
-    return built
+    deps.open_store, deps.new_memory = open_store, new_memory
+    return deps
 
 
 @pytest.fixture
-def env(pg_cfg, monkeypatch):
+def env(pg_cfg, fake_memory, monkeypatch):
     """A running app over a FakeJobStore and FakeRag; yields (client, store, rag, build_kw)."""
     store, rag, build_kw = FakeJobStore(), FakeRag(), {}
-
-    async def fake_open_store(cfg):
-        return store
 
     def fake_build_rag(cfg, **kw):
         build_kw.update(kw)
         return rag
 
-    monkeypatch.setattr(api, "open_store", fake_open_store)
     monkeypatch.setattr(lightrag_engine, "build_rag", fake_build_rag)
-    with TestClient(api.create_app(pg_cfg)) as client:
+    with TestClient(api.create_app(pg_cfg, _deps(pg_cfg, store, fake_memory))) as client:
         yield client, store, rag, build_kw
 
 
@@ -60,16 +65,12 @@ def test_create_app_refuses_file_storage(cfg):
 def test_lifespan_builds_rag_without_query_cache_and_cleans_up(pg_cfg, monkeypatch):
     store, rag, build_kw = FakeJobStore(), FakeRag(), {}
 
-    async def fake_open_store(cfg):
-        return store
-
     def fake_build_rag(cfg, **kw):
         build_kw.update(kw)
         return rag
 
-    monkeypatch.setattr(api, "open_store", fake_open_store)
     monkeypatch.setattr(lightrag_engine, "build_rag", fake_build_rag)
-    with TestClient(api.create_app(pg_cfg)) as client:
+    with TestClient(api.create_app(pg_cfg, _deps(pg_cfg, store, []))) as client:
         assert client.get("/health").json() == {"status": "ok", "workspace": "default"}
 
     assert build_kw == {"query_cache": False}
@@ -252,18 +253,14 @@ def test_list_queries_limit(env):
 
 
 @pytest.fixture
-def keyed_env(pg_cfg, clean_env, monkeypatch):
+def keyed_env(pg_cfg, clean_env, fake_memory, monkeypatch):
     """Like `env`, with ENIGRAM_API_KEYS set; yields (client, store, rag)."""
     monkeypatch.setenv("ENIGRAM_API_KEYS", f"laptop-a:{LAPTOP_KEY},web:{WEB_KEY}")
     cfg = Config.from_env(clean_env)
     store, rag = FakeJobStore(), FakeRag()
 
-    async def fake_open_store(cfg):
-        return store
-
-    monkeypatch.setattr(api, "open_store", fake_open_store)
     monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: rag)
-    with TestClient(api.create_app(cfg)) as client:
+    with TestClient(api.create_app(cfg, _deps(cfg, store, fake_memory))) as client:
         yield client, store, rag
 
 

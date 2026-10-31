@@ -6,11 +6,11 @@ import re
 from typing import Any
 
 from enigram.application.ports import ChatModel
+from enigram.domain.claims import JUDGE_TEMPERATURE  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 
 # The judge must be deterministic; it is pinned in every report.
-JUDGE_TEMPERATURE = 0.0
 _CITATION = re.compile(r"\[(\d+)\]")
 
 

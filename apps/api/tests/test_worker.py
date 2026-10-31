@@ -13,8 +13,6 @@ from enigram.domain.job import ACTIVE, Job
 class FakeJobStore:
     """In-memory JobRepository."""
 
-    pool = None  # the API hands it to PostgresMemoryStore, which tests replace with FakeMemoryStore
-
     def __init__(self):
         self.jobs: list[Job] = []
         self.queries: list[dict] = []
@@ -179,18 +177,19 @@ class _Stop(Exception):
     pass
 
 
-async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, monkeypatch):
+async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, deps, monkeypatch):
     store = FakeJobStore()
     interrupted = await store.enqueue("index", {"book": "p"})
     await store.claim()
 
-    async def fake_open_store(cfg):
+    async def fake_open_store():
         return store
 
     async def stop(cfg, store, deps):
         raise _Stop
 
-    monkeypatch.setattr(worker, "open_store", fake_open_store)
+    deps.open_store = fake_open_store
+    monkeypatch.setattr(worker, "build_deps", lambda cfg: deps)
     monkeypatch.setattr(worker, "process_next", stop)
     with pytest.raises(_Stop):
         await worker.run_worker(cfg)

@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from enigram.application.files import file_sha256
 from enigram.config import Config
 from enigram.domain.chunk import (
     MIN_CHUNK_TOKENS,
@@ -138,11 +137,11 @@ class DoclingParser:
         stream = DocumentStream(name=path.name, stream=BytesIO(body.encode("utf-8")))
         return self.converter.convert(stream).document
 
-    def parse(self, path: Path, pages: tuple[int, int] | None = None) -> ParsedBook:
+    def parse(self, path: Path, sha256: str, pages: tuple[int, int] | None = None) -> ParsedBook:
         """Parse one PDF or Markdown file; `pages` only applies to PDFs."""
         start = time.perf_counter()
         book = book_name(path)
-        sha = file_sha256(path)
+        sha = sha256
         if is_markdown(path):
             meta_title, body = split_front_matter(path.read_text(encoding="utf-8"))
             doc = self._convert_markdown(path, body)
@@ -211,10 +210,12 @@ class DoclingParser:
         return parsed
 
 
-def parse_pdf(path: Path, cfg: Config, pages: tuple[int, int] | None = None) -> ParsedBook:
+def parse_pdf(
+    path: Path, sha256: str, cfg: Config, pages: tuple[int, int] | None = None
+) -> ParsedBook:
     """Parse a single PDF or Markdown file; use DoclingParser directly to reuse models."""
     parser = DoclingParser(cfg)
     try:
-        return parser.parse(path, pages)
+        return parser.parse(path, sha256, pages)
     finally:
         parser.close()

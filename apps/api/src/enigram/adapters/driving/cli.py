@@ -96,15 +96,23 @@ def _setup_logging(level: str) -> None:
 
 
 async def _check(cfg: Config) -> int:
-    from enigram.adapters.driven.openai_llm import check_omlx
+    from enigram.bootstrap import build_deps
 
-    result = await check_omlx(cfg)
+    result = await build_deps(cfg).check_llm()
     print(f"✓ models served: {', '.join(result.models)}")
     think = "✗ raw output still contains <think>" if result.raw_had_think else "✓ no <think>"
     print(f"{think} (thinking_mode={cfg.thinking_mode}, {result.completion_secs:.1f}s)")
     print("✓ JSON mode works" if result.json_mode_ok else "✗ JSON mode failed (see log)")
     print(f"✓ embedding dim {result.embed_dim}")
     return 0 if result.json_mode_ok and not result.raw_had_think else 1
+
+
+async def _preflight(cfg: Config) -> None:
+    """Open the index once: raises `No index found` before the MCP server starts."""
+    from enigram.bootstrap import build_deps
+
+    async with build_deps(cfg).open_engine():
+        pass
 
 
 async def _index(cfg: Config, args: argparse.Namespace) -> int:
@@ -220,12 +228,9 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_query(cfg, args.question, args.mode))
         if args.command == "mcp":
             from enigram.adapters.driving.mcp_server import create_server
-            from enigram.application.report import find_graph_file
 
             # Fail with a readable error before the host only sees a server that died.
-            # (Postgres has no file to look for; open_engine checks it when the server starts.)
-            if cfg.storage == "file":
-                find_graph_file(cfg)
+            asyncio.run(_preflight(cfg))
             create_server(cfg).run()  # blocks; runs its own event loop, stdout is the wire
             return 0
         if args.command == "api":

@@ -171,7 +171,7 @@ def _parse_all(
             book = book_name(pdf)
             entry = manifest["books"].setdefault(book, {})
             try:
-                parsed = parser.parse(pdf, pages)
+                parsed = parser.parse(pdf, file_sha256(pdf), pages)
                 write_chunks_jsonl(_chunks_path(cfg, book), parsed.chunks)
                 entry.update(
                     title=parsed.title,

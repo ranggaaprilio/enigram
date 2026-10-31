@@ -12,20 +12,12 @@ import networkx as nx
 from lightrag.constants import GRAPH_FIELD_SEP
 
 from enigram.config import Config
-from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
 
 REVIEW_SAMPLE_SIZE = 20
 REVIEW_SEED = 42
 _REVIEW_LINE = re.compile(r"^- \[(?P<mark>[ xX-])\] (?P<kind>[ER])\d+\b")
-
-
-def find_graph_file(cfg: Config) -> Path:
-    files = sorted(cfg.rag_dir.rglob("*.graphml")) if cfg.rag_dir.exists() else []
-    if not files:
-        raise EnigramError(f"No index found in {cfg.index_location}. Run `enigram index` first.")
-    return files[0]
 
 
 def _books_of(file_path: str | None) -> set[str]:

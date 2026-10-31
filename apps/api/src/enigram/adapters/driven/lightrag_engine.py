@@ -3,6 +3,7 @@
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import networkx as nx
@@ -11,7 +12,6 @@ from lightrag.base import DocStatus
 from lightrag.query_validation import QueryValidationError
 
 from enigram.adapters.driven.openai_llm import make_embedding_func, make_llm_func
-from enigram.application import report
 from enigram.application.ports import DeleteOutcome
 from enigram.config import LIGHTRAG_CHUNK_TOKEN_SIZE, Config
 from enigram.domain.answer import (
@@ -223,6 +223,14 @@ class LightRagEngine:
         return _outcome(await self.rag.adelete_by_relation(source, target))
 
 
+def find_graph_file(cfg: Config) -> Path:
+    """The GraphML file of a file-storage index; raises when `enigram index` has not run."""
+    files = sorted(cfg.rag_dir.rglob("*.graphml")) if cfg.rag_dir.exists() else []
+    if not files:
+        raise EnigramError(f"No index found in {cfg.index_location}. Run `enigram index` first.")
+    return files[0]
+
+
 @asynccontextmanager
 async def open_engine(
     cfg: Config, *, query_cache: bool = True, require_index: bool = True
@@ -230,7 +238,7 @@ async def open_engine(
     """Load the index once. With require_index, fails fast when `enigram index` has not run yet;
     the API turns it off because a fresh deployment has no index and must still start."""
     if require_index and cfg.storage == "file":
-        report.find_graph_file(cfg)
+        find_graph_file(cfg)
     rag = build_rag(cfg, query_cache=query_cache)
     await rag.initialize_storages()
     try:
@@ -248,7 +256,7 @@ async def open_engine(
 async def load_graph(cfg: Config) -> nx.Graph:
     """The entity graph as NetworkX, read from whichever storage holds the index."""
     if cfg.storage == "file":
-        return nx.read_graphml(report.find_graph_file(cfg))
+        return nx.read_graphml(find_graph_file(cfg))
     rag = build_rag(cfg)
     await rag.initialize_storages()
     try:

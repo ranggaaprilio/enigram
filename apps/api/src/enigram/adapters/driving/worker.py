@@ -4,7 +4,6 @@ only one process writes the index."""
 import asyncio
 import logging
 
-from enigram.adapters.driven.postgres_jobs import open_store
 from enigram.application.graph_edits import GRAPH_JOB_KINDS, apply_graph_job
 from enigram.application.indexing import delete_document, run_index
 from enigram.application.ports import Deps, JobRepository
@@ -106,8 +105,8 @@ async def process_next(cfg: Config, store: JobRepository, deps: Deps) -> Job | N
 
 
 async def run_worker(cfg: Config) -> None:
-    store = await open_store(cfg)
     deps = build_deps(cfg)
+    store = await deps.open_store()
     try:
         async with store.worker_lock():
             # Safe under the lock: no other worker can be running these.
