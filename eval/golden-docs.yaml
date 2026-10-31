@@ -1,0 +1,349 @@
+# Document golden set (web PRD Phase 4). Check it with:
+#   uv run enigram golden check --file eval/golden-docs.yaml
+#
+# category: single_hop     → the answer is in ONE chunk
+#           multi_section  → needs ≥2 sections of the same document
+#           multi_paper    → needs ≥2 documents
+#           unanswerable   → the documents do not hold the answer; no evidence, and the answer
+#                            says what is missing. The system should decline.
+# answer:   the ground truth, 1-3 sentences
+# evidence: verbatim quotes copied from the document, ≥20 letters/digits each. They are matched
+#           against the indexed text ignoring case, spaces and punctuation.
+# Target: 10 questions per answerable category, 5 unanswerable. Quote ids so YAML keeps them as text.
+#
+# Drafted by Claude from data/markdown/01-04 (AI SDLC series, fictional Kestrel Labs case study);
+# review before trusting the scores. golden check cannot prove an unanswerable question is
+# really unanswered, so those were checked by reading all four documents.
+version: 1
+questions:
+  # ---------------------------------------------------------------- single_hop
+  - id: "s01"
+    category: single_hop
+    question: "What is the size limit for agent-authored pull requests at Kestrel Labs?"
+    answer: >
+      Agent-authored pull requests are limited to 400 changed lines; an agent that needs more must
+      split the ticket. Human pull requests only get a soft warning at 800 lines.
+    evidence:
+      - quote: "Agent-authored pull requests at Kestrel are limited to 400 changed lines"
+
+  - id: "s02"
+    category: single_hop
+    question: "Which paths count as high-risk under the two-key rule?"
+    answer: >
+      Authentication, payment flows, data deletion, database migrations and
+      infrastructure-as-code.
+    evidence:
+      - quote: "High-risk paths are authentication, payment flows, data deletion, database migrations and infrastructure-as-code"
+
+  - id: "s03"
+    category: single_hop
+    question: "For what kind of change is autonomy level L4 permitted?"
+    answer: >
+      Only for dependency updates that have a full test suite and an automatic rollback.
+    evidence:
+      - quote: "permitted only for dependency updates with a full test suite and an automatic rollback"
+
+  - id: "s04"
+    category: single_hop
+    question: "What mutation score blocks a release of a module at Kestrel?"
+    answer: >
+      Kestrel runs nightly mutation testing on modules that are more than half AI-generated; a
+      mutation score below 60% blocks the next release of that module.
+    evidence:
+      - quote: "A mutation score below 60% blocks the next release of that module"
+
+  - id: "s05"
+    category: single_hop
+    question: "How many engineers and product teams does Kestrel Labs have?"
+    answer: "Kestrel Labs has 140 engineers in 12 product teams."
+    evidence:
+      - quote: "Kestrel Labs has 140 engineers in 12 product teams"
+
+  - id: "s06"
+    category: single_hop
+    question: "What is slopsquatting?"
+    answer: >
+      Models sometimes import packages that do not exist; slopsquatting is attackers registering
+      those package names on public registries with malicious code.
+    evidence:
+      - quote: "Attackers register those names on public registries with malicious code, a practice known as slopsquatting"
+
+  - id: "s07"
+    category: single_hop
+    question: "How is the golden set of the Harbor assistant composed?"
+    answer: >
+      It has 120 questions: 80 answerable from the product documentation and 40 that the
+      documentation does not answer.
+    evidence:
+      - quote: "Its golden set has 120 questions: 80 answerable from the documentation and 40"
+
+  - id: "s08"
+    category: single_hop
+    question: "How long did the refund retry incident last and how much did it cost?"
+    answer: >
+      Over 47 minutes, 212 customers received duplicate refunds totalling 38,400 euros before an
+      alert on refund volume fired and the change was rolled back.
+    evidence:
+      - quote: "Over 47 minutes, 212 customers received duplicate refunds totalling 38,400 euros"
+
+  - id: "s09"
+    category: single_hop
+    question: "Which accountabilities are never delegated to a model in the AI SDLC?"
+    answer: >
+      Scope ownership (the product owner), merge authority (a named engineer approves every
+      change) and incident command (a human incident commander leads every incident).
+    evidence:
+      - quote: "Three accountabilities are never delegated to a model in the AI SDLC"
+
+  - id: "s10"
+    category: single_hop
+    question: "Below what Cohen's kappa is an LLM judge not trusted on its own?"
+    answer: >
+      A judge whose agreement with human labels has a kappa below 0.6 is not trusted on its own.
+    evidence:
+      - quote: "a judge with a kappa below 0.6 is not trusted on its own"
+
+  # ------------------------------------------------------------- multi_section
+  - id: "m01"
+    category: multi_section
+    question: "Which Kestrel teams were first to run implementation at L3, and what does an agent do at that level?"
+    answer: >
+      The Payments and Search teams moved implementation to L3 in August 2025. At L3 the agent
+      picks up tickets, opens PRs and answers review comments on its own, while a human approves
+      and merges.
+    evidence:
+      - quote: "the Payments team and the Search team became the first teams to run implementation at L3"
+      - quote: "Picks up tickets, opens PRs and answers review comments on its own"
+
+  - id: "m02"
+    category: multi_section
+    question: "What becomes the bottleneck of delivery in the AI SDLC, and what happened to Kestrel's review latency in 2025?"
+    answer: >
+      Review effort, not writing effort, becomes the bottleneck. At Kestrel median review latency
+      grew from 5 hours to 11 hours by December 2025.
+    evidence:
+      - quote: "review effort, not writing effort, becomes the bottleneck of delivery"
+      - quote: "median review latency had grown from 5 hours to 11 hours"
+
+  - id: "m03"
+    category: multi_section
+    question: "What is the most common reason agent-authored pull requests were rejected, and which checklist item targets it?"
+    answer: >
+      Not matching the ticket (41% of rejections). Checklist item 1 requires confirming that the
+      change does what the ticket asks, checked by running it rather than reading the
+      description.
+    evidence:
+      - quote: "mostly for not matching the ticket (41% of rejections)"
+      - quote: "The change does what the ticket asks, checked by running it, not by reading the description"
+
+  - id: "m04"
+    category: multi_section
+    question: "What does an agent have to do when a change exceeds the size limit, and how did the limit affect rework?"
+    answer: >
+      An agent that needs more than 400 changed lines must split the ticket. After the limit was
+      introduced, the rework rate of agent-authored changes fell from 19% in October to 13% in
+      December 2025.
+    evidence:
+      - quote: "an agent that needs more must split the ticket"
+      - quote: "the rework rate of agent-authored changes fell from 19% in October to 13%"
+
+  - id: "m05"
+    category: multi_section
+    question: "Why do reviewers tend to approve AI-generated diffs too quickly, and what did Kestrel add to support them?"
+    answer: >
+      Large, plausible diffs produced in minutes cause approval fatigue. Kestrel added an AI
+      pre-review that posts checklist findings before a human looks; it never approves, and it cut
+      median review latency from 11 to 8 hours.
+    evidence:
+      - quote: "Reviewers also report approval fatigue"
+      - quote: "AI pre-review that posts checklist findings before a human looks"
+
+  - id: "m06"
+    category: multi_section
+    question: "Why did Kestrel hold back the Harbor model upgrade, and which golden-set practice made that visible?"
+    answer: >
+      The new model answered 18 of the 40 unanswerable questions instead of 12, inventing
+      undocumented product limits. It was visible because the golden set includes questions the
+      system should refuse because its sources do not contain the answer.
+    evidence:
+      - quote: "including questions the system should refuse because its sources do not contain the answer"
+      - quote: "answered 18 of the 40 instead of 12"
+
+  - id: "m07"
+    category: multi_section
+    question: "Did Kestrel's Harbor evaluation follow the guidance on LLM judges?"
+    answer: >
+      Yes. The guidance says the judge should be a different model from the generator and be
+      checked against human labels; Harbor's judge came from a different vendor and agreed with
+      two support engineers at accuracy 0.86 and kappa 0.71, above the 0.6 threshold.
+    evidence:
+      - quote: "The judge should therefore be a different model from the one that generates answers"
+      - quote: "the judge was a model from a different vendor"
+
+  - id: "m08"
+    category: multi_section
+    question: "How do Kestrel's agent credentials relate to the rule for agents that read untrusted data?"
+    answer: >
+      An agent that reads untrusted data must not also hold write access to production systems;
+      accordingly agents get short-lived, per-task credentials scoped to one repository, with no
+      access to production data.
+    evidence:
+      - quote: "an agent that reads untrusted data must not also hold write access to production systems"
+      - quote: "Agents get short-lived, per-task credentials scoped to one repository"
+
+  - id: "m09"
+    category: multi_section
+    question: "What makes it possible to trace an incident back to the instruction that caused it, and what was wrong with the instruction behind the refund incident?"
+    answer: >
+      Every agent action is logged with the ticket it served. The refund ticket only said "make
+      refunds more reliable" without acceptance criteria for idempotency.
+    evidence:
+      - quote: "Every agent action is logged with the ticket it served"
+      - quote: "without acceptance criteria for idempotency"
+
+  - id: "m10"
+    category: multi_section
+    question: "What condition must a team meet to move up an autonomy level, and how is the measure it relies on defined?"
+    answer: >
+      The team's escaped-defect rate must not rise for two consecutive months. The escaped-defect
+      rate is the number of defects found in production per 100 merged pull requests.
+    evidence:
+      - quote: "requires two consecutive months in which the team's escaped-defect rate does not rise"
+      - quote: "defects found in production per 100 merged pull requests"
+
+  # --------------------------------------------------------------- multi_paper
+  - id: "p01"
+    category: multi_paper
+    question: "At what autonomy level was the team that caused the refund retry incident running implementation?"
+    answer: >
+      The refund service belongs to the Payments team, which had run implementation at L3 since
+      August 2025.
+    evidence:
+      - quote: "changed the retry logic of the refund service, owned by the Payments team"
+      - quote: "the Payments team and the Search team became the first teams to run implementation at L3"
+
+  - id: "p02"
+    category: multi_paper
+    question: "When was the two-key rule introduced and when was it actually enforced in tooling?"
+    answer: >
+      It was introduced in October 2025 but only enforced in the code host on 20 October 2025,
+      after the 14 October refund incident had been approved by a single reviewer.
+    evidence:
+      - quote: "Kestrel introduced provenance labels and the checklist in September 2025 and the two-key rule in"
+      - quote: "enforce the two-key rule in the code host on 20 October 2025"
+
+  - id: "p03"
+    category: multi_paper
+    question: "Which review checklist item and which build control protect against slopsquatting?"
+    answer: >
+      Checklist item 2 requires every imported package to exist in the approved registry, and
+      builds may only resolve packages from an internal mirror, with new packages needing a
+      human request.
+    evidence:
+      - quote: "Every imported package exists in the approved registry"
+      - quote: "builds may only resolve packages from an internal mirror"
+
+  - id: "p04"
+    category: multi_paper
+    question: "How did Kestrel's median review latency change from the start of AI adoption to after the AI pre-review?"
+    answer: >
+      It grew from 5 hours to 11 hours during 2025 as AI wrote more code, then the AI pre-review
+      brought it down from 11 hours to 8 hours.
+    evidence:
+      - quote: "median review latency had grown from 5 hours to 11 hours"
+      - quote: "which cut median review latency from 11 hours to 8 hours"
+
+  - id: "p05"
+    category: multi_paper
+    question: "Why did the generated tests miss the refund bug, and which testing practice is meant to prevent that?"
+    answer: >
+      The generated tests mocked the payment provider and never simulated a timeout after a
+      successful refund. The practice is to turn the ticket's acceptance criteria into tests
+      before the agent starts, which the agent may not edit.
+    evidence:
+      - quote: "The generated tests mocked the payment provider and never simulated a timeout"
+      - quote: "the ticket's acceptance criteria are turned into tests before the agent starts"
+
+  - id: "p06"
+    category: multi_paper
+    question: "Who leads production incidents in the AI SDLC, and what role does Kestrel's operations model play?"
+    answer: >
+      A human incident commander leads every production incident. Kestrel's operations model only
+      proposes a likely cause for each alert, which the on-call engineer confirms or rejects;
+      remediations are never executed automatically.
+    evidence:
+      - quote: "A human incident commander leads every production incident"
+      - quote: "the on-call engineer confirms or rejects it"
+
+  - id: "p07"
+    category: multi_paper
+    question: "Who has merge authority in the AI SDLC, and what extra approval does an agent-authored change to a payment flow need?"
+    answer: >
+      A named engineer approves every change that reaches the main branch. An agent-authored
+      change to a high-risk path such as a payment flow needs approvals from two engineers, at
+      least one of whom owns that path.
+    evidence:
+      - quote: "A named engineer approves every change that reaches the main branch"
+      - quote: "needs approvals from two engineers, at least one of whom owns that path"
+
+  - id: "p08"
+    category: multi_paper
+    question: "What is the agent-ready label used for, and what did Kestrel require for it after the refund incident?"
+    answer: >
+      The coding agent opens pull requests from tickets labelled agent-ready. After the incident,
+      a ticket needs written acceptance criteria before it can be labelled agent-ready.
+    evidence:
+      - quote: "using a coding agent that opens pull requests from tickets labelled"
+      - quote: "require written acceptance criteria before a ticket can be labelled"
+
+  - id: "p09"
+    category: multi_paper
+    question: "Where does Kestrel scan for secrets, and what does the review checklist require about them?"
+    answer: >
+      Secret scanning runs on every pull request and on every prompt that leaves the company
+      network; reviewers also confirm that no secret, token or personal data appears in code,
+      fixtures or logs.
+    evidence:
+      - quote: "Secret scanning runs on every pull request and on every prompt that leaves the company network"
+      - quote: "No secret, token or personal data appears in code, fixtures or logs"
+
+  - id: "p10"
+    category: multi_paper
+    question: "What is the fail-first check, and why do generated tests need it?"
+    answer: >
+      A new test must fail on the code before the change (checklist item 5). Generated tests tend
+      to assert what the code does rather than what it should do, so a test that passes on the old
+      code proves nothing.
+    evidence:
+      - quote: "A new test must fail on the code before the change"
+      - quote: "generated tests that pass on the old code prove nothing"
+
+  # -------------------------------------------------------------- unanswerable
+  - id: "u01"
+    category: unanswerable
+    question: "How much does Kestrel pay per month for its coding agent licences?"
+    answer: "The documents do not report the cost of the coding agent or its licences."
+
+  - id: "u02"
+    category: unanswerable
+    question: "Which vendor's model did Kestrel use as the judge for the Harbor evaluation?"
+    answer: >
+      The documents only say the judge came from a different vendor than the generator; the
+      vendor and model are not named.
+
+  - id: "u03"
+    category: unanswerable
+    question: "What was the Payments team's escaped-defect rate after it moved to L3?"
+    answer: "The documents define the escaped-defect rate but do not report it for the Payments team."
+
+  - id: "u04"
+    category: unanswerable
+    question: "How many Kestrel teams were running implementation at L4 by December 2025?"
+    answer: >
+      The documents do not say; they only state that L4 is rare and limited to dependency
+      updates.
+
+  - id: "u05"
+    category: unanswerable
+    question: "In which programming language is Kestrel's refund service written?"
+    answer: "The documents do not mention the programming language of the refund service."

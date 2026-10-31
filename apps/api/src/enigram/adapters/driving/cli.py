@@ -60,7 +60,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     golden = sub.add_parser("golden", help="golden set: check questions, answer them, count labels")
     gsub = golden.add_subparsers(dest="golden_command", required=True)
-    check = gsub.add_parser("check", help="validate the golden set against the index")
+    check = gsub.add_parser(
+        "check",
+        help="validate the golden set against the index (document set) or the pinned "
+        "repository (code set)",
+    )
     answer = gsub.add_parser("answer", help="answer every golden question and write a label sheet")
     for p in (check, answer):
         p.add_argument("--file", type=Path, default=Path("eval/golden.yaml"), help="golden YAML")
@@ -70,6 +74,19 @@ def _build_parser() -> argparse.ArgumentParser:
     answer.add_argument("--limit", type=int, help="only the first N questions (quick trial)")
     labels = gsub.add_parser("labels", help="count human claim labels in a label sheet")
     labels.add_argument("sheet", type=Path, help="data/eval/labels-<mode>-<ts>.md")
+    blind = gsub.add_parser(
+        "blind", help="one blind label sheet from several systems' answers (normalized, shuffled)"
+    )
+    blind.add_argument(
+        "answers",
+        type=Path,
+        nargs="+",
+        metavar="ANSWERS",
+        help="data/eval/answers-<mode>-<ts>.json, one per system",
+    )
+    blind.add_argument("--seed", type=int, help="shuffle seed (default random; kept in the key)")
+    unblind = gsub.add_parser("unblind", help="score a labelled blind sheet per system")
+    unblind.add_argument("sheet", type=Path, help="data/eval/blind-<ts>.md")
 
     evaluate = sub.add_parser(
         "eval", help="evaluate GraphRAG and the vector baseline on the golden set (~1 h)"
@@ -147,26 +164,57 @@ async def _query(cfg: Config, question: str, mode: str) -> int:
 
 def _golden_check(cfg: Config, path: Path) -> int:
     from enigram.application.evaluation.golden import (
-        CATEGORIES,
+        BEHAVIOR,
+        BEHAVIOR_ANNOTATION,
+        DOC_CATEGORIES,
+        INJECTION,
+        SPLITS,
+        TARGET_BEHAVIOR_ANNOTATION,
+        TARGET_INJECTION,
         TARGET_PER_CATEGORY,
+        TARGET_SPLITS,
         TARGET_UNANSWERABLE,
+        TARGET_UNANSWERABLE_CODE,
         UNANSWERABLE,
         check_golden,
     )
+    from enigram.application.files import file_sha256
 
-    questions, problems = check_golden(cfg, path)
+    golden_set, problems = check_golden(cfg, path)
+    questions = golden_set.questions
+    width = 14 if golden_set.repo is None else 20
     for q in questions:
+        head = f"{q.id:<6} {q.category:<{width}}"
+        if golden_set.repo is not None:
+            head += f" {q.split or '-':<8}"
         if q.id in problems:
-            print(f"{q.id:<6} {q.category:<14} ✗")
+            print(f"{head} ✗")
             for problem in problems[q.id]:
                 print(f"         {problem}")
         else:
-            print(f"{q.id:<6} {q.category:<14} ok  {' '.join(ev.chunk_id for ev in q.evidence)}")
+            print(f"{head} ok  {' '.join(ev.file or ev.chunk_id for ev in q.evidence)}")
     if not questions:
         print(f"{path}: no questions yet")
+    if golden_set.repo is not None:
+        repo = golden_set.repo
+        counts = [
+            f"{BEHAVIOR} {s} "
+            f"{sum(q.category == BEHAVIOR and q.split == s for q in questions)}/{TARGET_SPLITS[s]}"
+            for s in SPLITS
+        ]
+        for cat, target in (
+            (BEHAVIOR_ANNOTATION, TARGET_BEHAVIOR_ANNOTATION),
+            (UNANSWERABLE, TARGET_UNANSWERABLE_CODE),
+            (INJECTION, TARGET_INJECTION),
+        ):
+            counts.append(f"{cat} {sum(q.category == cat for q in questions)}/≥{target}")
+        print(" · ".join(counts))
+        print(f"repo {repo.url} @ {repo.ref} = {repo.pinned_sha[:12]}")
+        print(f"golden sha256 {file_sha256(path)}")
+        return 1 if problems or not questions else 0
     papers = {ev.book for q in questions for ev in q.evidence if ev.book}
     counts = []
-    for cat in CATEGORIES:
+    for cat in DOC_CATEGORIES:
         n = sum(q.category == cat for q in questions)
         note = " (needs ≥2 indexed papers)" if cat == "multi_paper" and len(papers) < 2 else ""
         target = TARGET_UNANSWERABLE if cat == UNANSWERABLE else TARGET_PER_CATEGORY
@@ -196,6 +244,26 @@ def _golden_labels(sheet: Path) -> int:
         f"labelled {s['labelled']} (grounded {s['grounded']}, not grounded {s['not_grounded']}), "
         f"skipped {s['skipped']} · target 30-50 {target}"
     )
+    return 0
+
+
+def _golden_blind(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.application.evaluation.blind import write_blind_sheet
+
+    run = write_blind_sheet(cfg, args.answers, args.seed)
+    print(f"sheet: {run.sheet_path}")
+    print(f"key:   {run.key_path} (open only after labelling)")
+    print(f"{run.questions} questions · {run.systems} systems")
+    return 0
+
+
+def _golden_unblind(sheet: Path) -> int:
+    from enigram.application.evaluation.blind import unblind
+
+    for mode, n in unblind(sheet).items():
+        judged = n["correct"] + n["wrong"]
+        share = f" ({n['correct'] / judged:.0%})" if judged else ""
+        print(f"{mode:<12} correct {n['correct']}/{judged}{share} · skipped {n['skipped']}")
     return 0
 
 
@@ -254,6 +322,10 @@ def main(argv: list[str] | None = None) -> int:
                 return _golden_check(cfg, args.file)
             if args.golden_command == "answer":
                 return asyncio.run(_golden_answer(cfg, args))
+            if args.golden_command == "blind":
+                return _golden_blind(cfg, args)
+            if args.golden_command == "unblind":
+                return _golden_unblind(args.sheet)
             return _golden_labels(args.sheet)
         if args.command == "eval":
             return asyncio.run(_eval(cfg, args))

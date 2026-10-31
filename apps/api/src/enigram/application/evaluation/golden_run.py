@@ -31,6 +31,7 @@ def _item(q: GoldenQuestion) -> dict[str, Any]:
     return {
         "id": q.id,
         "category": q.category,
+        "split": q.split,
         "question": q.question,
         "ground_truth": q.answer,
         "evidence": [asdict(ev) for ev in q.evidence],
@@ -41,7 +42,8 @@ def load_questions(
     cfg: Config, golden_path: Path, limit: int | None = None
 ) -> list[GoldenQuestion]:
     """Golden questions resolved against the index; refuses a set that still has problems."""
-    questions, problems = check_golden(cfg, golden_path)
+    golden, problems = check_golden(cfg, golden_path)
+    questions = golden.questions
     if problems:
         raise EnigramError("Golden set has problems; run `enigram golden check` first")
     if not questions:

@@ -291,8 +291,17 @@ leaves the document as `deleting`; deleting it again resumes.
 
 ## Golden set
 
-The evaluation questions are written by hand in `eval/golden.yaml` (committed; see the comments
-in it for the format). Aim for 10 questions in each category: `single_hop`, `multi_section`
+There are two hand-written golden sets (committed):
+
+- `eval/golden.yaml`: questions about one TypeScript repository at a pinned commit, with symbols
+  as evidence. Format, lock and labelling protocol are in [`eval/README.md`](eval/README.md).
+  `golden check` clones the pinned repository once into `data/eval/repos/` and checks that it is
+  at `pinned_sha` and that every evidence symbol is declared there; it needs no index. Delete
+  `data/eval/repos` after the pin changes.
+- `eval/golden-docs.yaml`: questions about the indexed documents. Pass
+  `--file eval/golden-docs.yaml` to every `golden` and `eval` command below.
+
+For the document set, aim for 10 questions in each category: `single_hop`, `multi_section`
 (≥2 sections of one paper) and `multi_paper` (≥2 papers, so index at least two papers first).
 Evidence is given as verbatim quotes, which are matched against the indexed text ignoring case,
 spaces and punctuation. Add ~5 `unanswerable` questions too: plausible questions the papers do
@@ -321,6 +330,17 @@ report X."). `golden check` cannot prove the answer is absent, so check those by
    ```bash
    uv run enigram golden labels data/eval/labels-<mode>-<timestamp>.md
    ```
+
+5. To grade answers for correctness without knowing which system wrote them, merge the answer
+   files of several systems into one blind sheet, label it, then open the key:
+
+   ```bash
+   uv run enigram golden blind data/eval/answers-mix-<ts>.json data/eval/answers-naive-<ts>.json
+   uv run enigram golden unblind data/eval/blind-<timestamp>.md
+   ```
+
+   The sheet shows each answer without citations, origin tags or headings, under a shuffled
+   letter; the system names are in `blind-<timestamp>.key.json`.
 
 ## Evaluate
 
