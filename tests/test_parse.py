@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from enigram import parse
+from enigram.adapters import docling_parser
 from enigram.parse import (
     Chunk,
     book_name,
@@ -56,7 +57,7 @@ def test_extract_title_truncates_at_word_boundary():
 
     doc = DoclingDocument(name="paper")
     doc.add_text(label=DocItemLabel.TITLE, text="On Autopilot? " + "Human AI Teaming " * 8)
-    title = parse.extract_title(doc, fallback="paper")
+    title = docling_parser.extract_title(doc, fallback="paper")
     assert len(title) <= parse.MAX_TITLE_CHARS
     assert title.endswith("Teaming…") or title.endswith("Human…") or title.endswith("AI…")
 
@@ -64,7 +65,7 @@ def test_extract_title_truncates_at_word_boundary():
 def test_extract_title_falls_back_to_file_name():
     from docling_core.types.doc import DoclingDocument
 
-    assert parse.extract_title(DoclingDocument(name="paper"), fallback="paper") == "paper"
+    assert docling_parser.extract_title(DoclingDocument(name="paper"), fallback="paper") == "paper"
 
 
 @pytest.mark.parametrize(
@@ -140,7 +141,7 @@ def test_parser_skips_front_back_small_and_duplicate_chunks(cfg, tmp_path, monke
     ]
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF fake")
-    parser = parse.PdfParser(cfg)
+    parser = docling_parser.DoclingParser(cfg)
     parser._chunker = _FakeChunker(raw)
     from docling_core.types.doc import DocItemLabel
 
@@ -186,7 +187,7 @@ def test_chunks_jsonl_roundtrip(tmp_path):
 
 @pytest.mark.docling
 def test_parse_pdf_keeps_headings_and_pages(cfg, book_pdf):
-    parsed = parse.parse_pdf(book_pdf, cfg)
+    parsed = docling_parser.parse_pdf(book_pdf, cfg)
 
     assert parsed.book == "harbor-book"
     assert parsed.title == "Harbor Signals Study"
@@ -206,19 +207,19 @@ def test_parse_pdf_keeps_headings_and_pages(cfg, book_pdf):
 @pytest.mark.docling
 def test_parse_pdf_uses_cache_and_skips_cache_for_page_subset(cfg, book_pdf, monkeypatch):
     calls = []
-    real_build = parse.build_converter
+    real_build = docling_parser.build_converter
 
     def counting_build():
         calls.append(1)
         return real_build()
 
-    monkeypatch.setattr(parse, "build_converter", counting_build)
+    monkeypatch.setattr(docling_parser, "build_converter", counting_build)
 
-    parse.parse_pdf(book_pdf, cfg, pages=(1, 1))
+    docling_parser.parse_pdf(book_pdf, cfg, pages=(1, 1))
     assert not list(cfg.parsed_dir.glob("*.docling.json"))
 
-    parse.parse_pdf(book_pdf, cfg)
-    parse.parse_pdf(book_pdf, cfg)
+    docling_parser.parse_pdf(book_pdf, cfg)
+    docling_parser.parse_pdf(book_pdf, cfg)
     assert len(calls) == 2  # subset + first full run; the second full run hits the cache
 
 
@@ -266,7 +267,7 @@ def test_convert_markdown_keeps_headings(cfg, tmp_path):
     from docling_core.types.doc import DocItemLabel
 
     _, body = parse.split_front_matter(MD)
-    doc = parse.PdfParser(cfg)._convert_markdown(tmp_path / "notes.md", body)
+    doc = docling_parser.DoclingParser(cfg)._convert_markdown(tmp_path / "notes.md", body)
 
     labels = {t.text: t.label for t in doc.texts}
     assert labels["Harbor Signals"] == DocItemLabel.TITLE
@@ -278,7 +279,7 @@ def test_convert_markdown_keeps_headings(cfg, tmp_path):
 def test_parse_markdown_end_to_end(cfg, tmp_path):
     md = tmp_path / "harbor notes.md"
     md.write_text(MD, encoding="utf-8")
-    parsed = parse.parse_pdf(md, cfg)
+    parsed = docling_parser.parse_pdf(md, cfg)
 
     assert parsed.book == "harbor-notes"
     assert parsed.title == "Harbor Notes"

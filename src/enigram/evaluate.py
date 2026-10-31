@@ -17,6 +17,7 @@ from enigram.adapters.lightrag_engine import (
     QUERY_MAX_TOTAL_TOKENS,
     open_engine,
 )
+from enigram.adapters.openai_llm import OpenAIChatModel
 from enigram.claims import read_labelled_claims
 from enigram.config import Config
 from enigram.files import atomic_write_text
@@ -33,6 +34,7 @@ from enigram.judges import (
     score_claims_laya,
 )
 from enigram.parse import file_sha256
+from enigram.ports import ChatModel
 from enigram.query import QUERY_MODES
 
 log = logging.getLogger(__name__)
@@ -63,13 +65,13 @@ class EvalRun:
     verdicts: dict[str, str]  # criterion -> PASS / FAIL / INSUFFICIENT DATA
 
 
-async def _score_abstention(cfg: Config, item: dict[str, Any]) -> None:
+async def _score_abstention(judge: ChatModel, item: dict[str, Any]) -> None:
     item.setdefault("score_errors", {})
     if not item["found"]:  # nothing retrieved, or the answer LLM said the context has no answer
         item["abstained"] = True
         return
     try:
-        item["abstained"] = await judge_abstention(cfg, item["question"], item["answer"])
+        item["abstained"] = await judge_abstention(judge, item["question"], item["answer"])
     except Exception as e:  # noqa: BLE001 - a judge failure is reported, not fatal
         item["abstained"] = None
         item["score_errors"]["abstention"] = f"{type(e).__name__}: {e}"[:300]
@@ -78,7 +80,7 @@ async def _score_abstention(cfg: Config, item: dict[str, Any]) -> None:
         item["score_errors"]["abstention"] = "judge gave no verdict"
 
 
-async def _score_item(cfg: Config, scorer: RagasScorer, item: dict[str, Any]) -> None:
+async def _score_item(judge: ChatModel, scorer: RagasScorer, item: dict[str, Any]) -> None:
     contexts = [c["text"] for c in item["chunks"]]
     evidence = {ev["chunk_id"] for ev in item["evidence"]}
     retrieved = [stats.doc_id(c["chunk_id"]) for c in item["chunks"]]
@@ -86,7 +88,7 @@ async def _score_item(cfg: Config, scorer: RagasScorer, item: dict[str, Any]) ->
         item["question"], item["answer"], contexts, item["ground_truth"]
     )
     try:
-        llm = await judge_claims_llm(cfg, item["claims"], contexts)
+        llm = await judge_claims_llm(judge, item["claims"], contexts)
     except Exception as e:  # noqa: BLE001 - a judge failure is reported, not fatal
         llm = [None] * len(item["claims"])
         errors["claim_faithfulness_llm"] = f"{type(e).__name__}: {e}"[:300]
@@ -410,6 +412,7 @@ async def run_eval(
             }
 
     scorer = RagasScorer(cfg)
+    judge = OpenAIChatModel(cfg.judge)
     for mode, run in runs.items():
         for i, item in enumerate(run["items"], 1):
             if item.get("error"):
@@ -417,8 +420,8 @@ async def run_eval(
             t = time.perf_counter()
             # Ragas and the claim judges grade answers to answerable questions only.
             if item["category"] != UNANSWERABLE:
-                await _score_item(cfg, scorer, item)
-            await _score_abstention(cfg, item)
+                await _score_item(judge, scorer, item)
+            await _score_abstention(judge, item)
             log.info(
                 "[eval] scored %s %s %d/%d (%.1fs)",
                 mode,

@@ -3,6 +3,7 @@ import dataclasses
 import pytest
 
 from enigram import llm
+from enigram.adapters import openai_llm
 from enigram.config import Config
 from enigram.errors import EnigramError
 
@@ -143,8 +144,8 @@ async def test_llm_func_template_mode_disables_thinking(cfg, monkeypatch):
         seen.update(model=model, prompt=prompt, **kwargs)
         return "<think>hidden</think>result"
 
-    monkeypatch.setattr(llm, "openai_complete_if_cache", fake_complete)
-    out = await llm.make_llm_func(cfg)("hello", system_prompt="sys")
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    out = await openai_llm.make_llm_func(cfg)("hello", system_prompt="sys")
 
     assert out == "result"
     assert seen["extra_body"]["chat_template_kwargs"]["enable_thinking"] is False
@@ -159,9 +160,9 @@ async def test_llm_func_suffix_mode_appends_no_think(cfg, monkeypatch):
         seen.update(prompt=prompt, **kwargs)
         return "result"
 
-    monkeypatch.setattr(llm, "openai_complete_if_cache", fake_complete)
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
     suffix_cfg = dataclasses.replace(cfg, thinking_mode="suffix")
-    await llm.make_llm_func(suffix_cfg)("hello")
+    await openai_llm.make_llm_func(suffix_cfg)("hello")
 
     assert seen["prompt"].endswith("/no_think")
     assert "chat_template_kwargs" not in seen["extra_body"]
@@ -174,8 +175,8 @@ async def test_llm_func_caps_output_and_uses_qwen3_sampling(cfg, monkeypatch):
         seen.update(kwargs)
         return "result"
 
-    monkeypatch.setattr(llm, "openai_complete_if_cache", fake_complete)
-    await llm.make_llm_func(cfg)("hello")
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    await openai_llm.make_llm_func(cfg)("hello")
 
     assert seen["max_tokens"] == cfg.llm_max_tokens == 2048
     assert seen["temperature"] == 0.7
@@ -190,8 +191,8 @@ async def test_llm_func_keeps_caller_values(cfg, monkeypatch):
         seen.update(kwargs)
         return "result"
 
-    monkeypatch.setattr(llm, "openai_complete_if_cache", fake_complete)
-    await llm.make_llm_func(cfg)(
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    await openai_llm.make_llm_func(cfg)(
         "hello", max_tokens=10, temperature=0.0, extra_body={"top_k": 1, "custom": True}
     )
 
@@ -209,8 +210,8 @@ async def test_llm_func_deepseek_sends_no_qwen_params(deepseek_cfg, monkeypatch)
         seen.update(model=model, prompt=prompt, **kwargs)
         return "result"
 
-    monkeypatch.setattr(llm, "openai_complete_if_cache", fake_complete)
-    await llm.make_llm_func(deepseek_cfg)("hello")
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    await openai_llm.make_llm_func(deepseek_cfg)("hello")
 
     assert seen["model"] == "deepseek-flash"
     assert seen["prompt"] == "hello"
@@ -230,8 +231,8 @@ async def test_llm_func_deepseek_thinking_on_sends_nothing(deepseek_cfg, clean_e
         seen.update(kwargs)
         return "result"
 
-    monkeypatch.setattr(llm, "openai_complete_if_cache", fake_complete)
-    await llm.make_llm_func(Config.from_env(clean_env))("hello")
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    await openai_llm.make_llm_func(Config.from_env(clean_env))("hello")
     assert not seen.get("extra_body")
 
 
@@ -242,8 +243,8 @@ async def test_embeddings_stay_on_omlx_with_deepseek(deepseek_cfg, monkeypatch):
         seen.update(kwargs)
         return [[0.0]]
 
-    monkeypatch.setattr(llm.openai_embed, "func", fake_embed)
-    await llm.make_embedding_func(deepseek_cfg).func(["x"])
+    monkeypatch.setattr(openai_llm.openai_embed, "func", fake_embed)
+    await openai_llm.make_embedding_func(deepseek_cfg).func(["x"])
 
     assert seen["base_url"] == deepseek_cfg.omlx_base_url
     assert seen["api_key"] == "test-key-not-real"

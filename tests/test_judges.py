@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import pytest
 
 from enigram import judges
+from enigram.adapters import openai_llm
+from enigram.adapters.openai_llm import OpenAIChatModel
 from enigram.config import Config
 from enigram.errors import EnigramError
 
@@ -26,9 +28,11 @@ async def test_llm_judge_parses_verdicts_and_keeps_missing_as_none(cfg, monkeypa
     reply = (
         '<think>x</think>{"verdicts": [{"id": 1, "grounded": true}, {"id": 2, "grounded": false}]}'
     )
-    monkeypatch.setattr(judges, "openai_complete_if_cache", _fake_complete(reply, seen))
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", _fake_complete(reply, seen))
 
-    verdicts = await judges.judge_claims_llm(cfg, ["a b c d", "e f g h", "i j k l"], ["ctx"])
+    verdicts = await judges.judge_claims_llm(
+        OpenAIChatModel(cfg.judge), ["a b c d", "e f g h", "i j k l"], ["ctx"]
+    )
 
     assert verdicts == [True, False, None]
     prompt, kwargs = seen[0]
@@ -39,17 +43,17 @@ async def test_llm_judge_parses_verdicts_and_keeps_missing_as_none(cfg, monkeypa
 
 
 async def test_llm_judge_invalid_json_gives_none(cfg, monkeypatch):
-    monkeypatch.setattr(judges, "openai_complete_if_cache", _fake_complete("All good!", []))
-    assert await judges.judge_claims_llm(cfg, ["a b c d"], ["ctx"]) == [None]
-    assert await judges.judge_claims_llm(cfg, [], ["ctx"]) == []
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", _fake_complete("All good!", []))
+    assert await judges.judge_claims_llm(OpenAIChatModel(cfg.judge), ["a b c d"], ["ctx"]) == [None]
+    assert await judges.judge_claims_llm(OpenAIChatModel(cfg.judge), [], ["ctx"]) == []
 
 
 async def test_llm_judge_uses_deepseek_endpoint(deepseek_cfg, monkeypatch):
     seen = []
     monkeypatch.setattr(
-        judges, "openai_complete_if_cache", _fake_complete('{"verdicts": []}', seen)
+        openai_llm, "openai_complete_if_cache", _fake_complete('{"verdicts": []}', seen)
     )
-    await judges.judge_claims_llm(deepseek_cfg, ["a b c d"], ["ctx"])
+    await judges.judge_claims_llm(OpenAIChatModel(deepseek_cfg.judge), ["a b c d"], ["ctx"])
 
     _, kwargs = seen[0]
     assert kwargs["base_url"] == "https://api.deepseek.com"
@@ -68,8 +72,8 @@ async def test_llm_judge_uses_separate_judge_model(deepseek_cfg, clean_env, monk
         seen.append((model, kwargs))
         return '{"verdicts": []}'
 
-    monkeypatch.setattr(judges, "openai_complete_if_cache", complete)
-    await judges.judge_claims_llm(cfg, ["a b c d"], ["ctx"])
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", complete)
+    await judges.judge_claims_llm(OpenAIChatModel(cfg.judge), ["a b c d"], ["ctx"])
 
     model, kwargs = seen[0]
     assert (cfg.llm_model, model) == ("deepseek-flash", "deepseek-v4-pro")
@@ -104,9 +108,14 @@ def test_judge_on_another_provider_needs_its_own_model(deepseek_cfg, clean_env, 
 )
 async def test_abstention_judge(cfg, monkeypatch, reply, expected):
     seen = []
-    monkeypatch.setattr(judges, "openai_complete_if_cache", _fake_complete(reply, seen))
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", _fake_complete(reply, seen))
 
-    assert await judges.judge_abstention(cfg, "How many?", "The paper does not say.") is expected
+    assert (
+        await judges.judge_abstention(
+            OpenAIChatModel(cfg.judge), "How many?", "The paper does not say."
+        )
+        is expected
+    )
     prompt, kwargs = seen[0]
     assert "How many?" in prompt and "The paper does not say." in prompt
     assert kwargs["response_format"] == {"type": "json_object"}

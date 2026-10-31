@@ -11,9 +11,9 @@ from lightrag.base import DocStatus
 from lightrag.query_validation import QueryValidationError
 
 from enigram import report
+from enigram.adapters.openai_llm import make_embedding_func, make_llm_func
 from enigram.config import LIGHTRAG_CHUNK_TOKEN_SIZE, Config
 from enigram.errors import EnigramError
-from enigram.llm import make_embedding_func, make_llm_func
 from enigram.ports import DeleteOutcome
 from enigram.query import (
     NO_ANSWER_MARKER,

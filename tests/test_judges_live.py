@@ -6,6 +6,7 @@ Skipped unless OMLX_API_KEY is set (omlx) or the Laya checkpoint is present (lay
 import pytest
 
 from enigram import judges
+from enigram.adapters.openai_llm import OpenAIChatModel
 from enigram.config import Config
 
 CONTEXT = (
@@ -24,7 +25,9 @@ async def test_ragas_and_llm_judge_catch_the_inverted_claim():
 
     good, _ = await scorer.score(question, GROUNDED, [CONTEXT], GROUNDED)
     bad, _ = await scorer.score(question, INVERTED, [CONTEXT], GROUNDED)
-    verdicts = await judges.judge_claims_llm(cfg, [GROUNDED, INVERTED], [CONTEXT])
+    verdicts = await judges.judge_claims_llm(
+        OpenAIChatModel(cfg.judge), [GROUNDED, INVERTED], [CONTEXT]
+    )
 
     assert good["faithfulness"] is not None and bad["faithfulness"] is not None
     assert good["faithfulness"] > bad["faithfulness"]

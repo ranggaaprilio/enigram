@@ -19,13 +19,13 @@ from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from enigram.adapters.lightrag_engine import open_engine
+from enigram.adapters.openai_llm import make_embedding_func
 from enigram.adapters.postgres_jobs import open_store
 from enigram.adapters.postgres_memory import PostgresMemoryStore
 from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.index import list_sources, load_manifest
 from enigram.jobs import documents_overview
-from enigram.llm import make_embedding_func
 from enigram.parse import SOURCE_SUFFIXES, book_name
 from enigram.ports import JobRepository
 from enigram.query import QUERY_MODE, answer_question

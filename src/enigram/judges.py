@@ -6,11 +6,10 @@ import math
 import re
 from typing import Any
 
-from lightrag.llm.openai import openai_complete_if_cache
-
+from enigram.adapters.openai_llm import DEEPSEEK_NO_THINKING
 from enigram.claims import split_claims
 from enigram.config import Config
-from enigram.llm import DEEPSEEK_NO_THINKING, _prepare_request, strip_think
+from enigram.ports import ChatModel
 
 log = logging.getLogger(__name__)
 
@@ -105,23 +104,17 @@ def _judge_prompt(claims: list[str], contexts: list[str]) -> str:
 
 
 async def judge_claims_llm(
-    cfg: Config, claims: list[str], contexts: list[str]
+    judge: ChatModel, claims: list[str], contexts: list[str]
 ) -> list[bool | None]:
     """One call per answer; a claim the judge did not return a verdict for stays None."""
     if not claims:
         return []
-    kwargs: dict[str, Any] = {
-        "temperature": JUDGE_TEMPERATURE,
-        "response_format": {"type": "json_object"},
-    }
-    judge = cfg.judge
-    prompt = _prepare_request(judge, _judge_prompt(claims, contexts), kwargs)
-    raw = await openai_complete_if_cache(
-        judge.llm_model, prompt, api_key=judge.llm_api_key, base_url=judge.llm_base_url, **kwargs
+    reply = await judge.complete(
+        _judge_prompt(claims, contexts), temperature=JUDGE_TEMPERATURE, json_mode=True
     )
     verdicts: list[bool | None] = [None] * len(claims)
     try:
-        entries = json.loads(strip_think(raw)).get("verdicts", [])
+        entries = json.loads(reply).get("verdicts", [])
     except (json.JSONDecodeError, AttributeError) as e:
         log.warning("[eval] LLM claim judge returned invalid JSON: %s", e)
         return verdicts
@@ -145,19 +138,13 @@ def _abstention_prompt(question: str, answer: str) -> str:
     )
 
 
-async def judge_abstention(cfg: Config, question: str, answer: str) -> bool | None:
+async def judge_abstention(judge: ChatModel, question: str, answer: str) -> bool | None:
     """Whether the answer declines to answer; None when the judge gave no usable verdict."""
-    judge = cfg.judge
-    kwargs: dict[str, Any] = {
-        "temperature": JUDGE_TEMPERATURE,
-        "response_format": {"type": "json_object"},
-    }
-    prompt = _prepare_request(judge, _abstention_prompt(question, answer), kwargs)
-    raw = await openai_complete_if_cache(
-        judge.llm_model, prompt, api_key=judge.llm_api_key, base_url=judge.llm_base_url, **kwargs
+    reply = await judge.complete(
+        _abstention_prompt(question, answer), temperature=JUDGE_TEMPERATURE, json_mode=True
     )
     try:
-        verdict = json.loads(strip_think(raw)).get("abstained")
+        verdict = json.loads(reply).get("abstained")
     except (json.JSONDecodeError, AttributeError) as e:
         log.warning("[eval] abstention judge returned invalid JSON: %s", e)
         return None

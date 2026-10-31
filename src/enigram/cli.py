@@ -96,7 +96,7 @@ def _setup_logging(level: str) -> None:
 
 
 async def _check(cfg: Config) -> int:
-    from enigram.llm import check_omlx
+    from enigram.adapters.openai_llm import check_omlx
 
     result = await check_omlx(cfg)
     print(f"✓ models served: {', '.join(result.models)}")

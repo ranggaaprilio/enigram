@@ -6,7 +6,8 @@ import json
 import networkx as nx
 import pytest
 
-from enigram import index, llm, report
+from enigram import index, report
+from enigram.adapters import lightrag_engine, openai_llm
 from enigram.config import Config
 
 
@@ -22,7 +23,7 @@ def live_cfg(tmp_path) -> Config:
 @pytest.mark.docling
 async def test_index_end_to_end_and_resume(live_cfg, book_pdf, monkeypatch):
     calls = []
-    real_make = llm.make_llm_func
+    real_make = openai_llm.make_llm_func
 
     def counting_make(cfg):
         func = real_make(cfg)
@@ -33,7 +34,7 @@ async def test_index_end_to_end_and_resume(live_cfg, book_pdf, monkeypatch):
 
         return wrapped
 
-    monkeypatch.setattr(index, "make_llm_func", counting_make)
+    monkeypatch.setattr(lightrag_engine, "make_llm_func", counting_make)
 
     run = await index.run_index(live_cfg, book_pdf.parent)
     entry = run.books["harbor-book"]

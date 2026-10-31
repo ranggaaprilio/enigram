@@ -26,12 +26,12 @@ def _install(monkeypatch, install, rag):
     install(rag)
     monkeypatch.setattr(evaluate, "RagasScorer", FakeScorer)
 
-    async def llm(cfg, claims, contexts):
+    async def llm(judge, claims, contexts):
         return [True] * len(claims)
 
     monkeypatch.setattr(evaluate, "judge_claims_llm", llm)
 
-    async def abstention(cfg, question, answer):
+    async def abstention(judge, question, answer):
         return question == UNANSWERABLE_Q
 
     monkeypatch.setattr(evaluate, "judge_abstention", abstention)
@@ -159,5 +159,5 @@ async def test_abstention_without_context_skips_the_judge(cfg, monkeypatch):
 
     monkeypatch.setattr(evaluate, "judge_abstention", judge)
     item = {"question": "q", "answer": "Sorry, no answer.", "found": False}
-    await evaluate._score_abstention(cfg, item)
+    await evaluate._score_abstention(None, item)
     assert item["abstained"] is True and item["score_errors"] == {}

@@ -8,23 +8,23 @@ from pathlib import Path
 from typing import Any
 
 from enigram import report
+from enigram.adapters.docling_parser import DoclingParser
 from enigram.adapters.lightrag_engine import load_graph, open_engine
+from enigram.adapters.openai_llm import check_omlx
 from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.files import atomic_write_text
-from enigram.llm import check_omlx
 from enigram.parse import (
     PARSER_VERSION,
     SOURCE_SUFFIXES,
     Chunk,
-    PdfParser,
     book_name,
     citation_path,
     file_sha256,
     read_chunks_jsonl,
     write_chunks_jsonl,
 )
-from enigram.ports import KnowledgeEngine
+from enigram.ports import DocumentParser, KnowledgeEngine
 
 log = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ def _chunks_path(cfg: Config, book: str) -> Path:
 def _parse_all(
     cfg: Config, pdfs: list[Path], manifest: dict[str, Any], pages: tuple[int, int] | None
 ) -> None:
-    parser = PdfParser(cfg)
+    parser: DocumentParser = DoclingParser(cfg)
     try:
         for pdf in pdfs:
             book = book_name(pdf)

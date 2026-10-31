@@ -3,11 +3,13 @@
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from enigram.jobs import Job
     from enigram.memory import MemorySearch
+    from enigram.parse import ParsedBook
     from enigram.query import QueryResult
 
 
@@ -116,3 +118,23 @@ class MemoryRepository(Protocol):
     async def add(self, text: str, api_key: str | None) -> tuple[int, datetime]: ...
 
     async def search(self, query: str, api_key: str | None, limit: int = 5) -> "MemorySearch": ...
+
+
+class DocumentParser(Protocol):
+    """Turns one PDF or Markdown file into cited chunks; may hold models between documents."""
+
+    def parse(self, path: Path, pages: tuple[int, int] | None = None) -> "ParsedBook":
+        """`pages` only applies to PDFs."""
+        ...
+
+    def close(self) -> None:
+        """Release models before the long LLM phase."""
+        ...
+
+
+class ChatModel(Protocol):
+    """One prompt in, the reply out (reasoning blocks removed)."""
+
+    async def complete(
+        self, prompt: str, *, temperature: float | None = None, json_mode: bool = False
+    ) -> str: ...

@@ -15,12 +15,12 @@ import sys
 import time
 from uuid import uuid4
 
+from enigram.adapters.openai_llm import make_embedding_func
 from enigram.adapters.postgres_jobs import open_store
 from enigram.adapters.postgres_memory import PostgresMemoryStore
 from enigram.cli import _setup_logging
 from enigram.config import Config
 from enigram.errors import EnigramError
-from enigram.llm import make_embedding_func
 
 TOPICS = (
     "The staging database moved to a new host after the outage",
