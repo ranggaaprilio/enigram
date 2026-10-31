@@ -16,7 +16,6 @@ log = logging.getLogger(__name__)
 
 # The judge must be deterministic; it is pinned in every report.
 JUDGE_TEMPERATURE = 0.0
-RAGAS_METRICS = ("faithfulness", "answer_relevancy", "answer_correctness")
 # Laya's `noul` follows its true/false labels on the English checkpoint (model card #156), so the
 # question is a two-option choice; P("A") is the probability that the claim is grounded.
 LAYA_CHOICE = {

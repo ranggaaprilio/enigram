@@ -17,7 +17,6 @@ CATEGORIES = ("single_hop", "multi_section", "multi_paper", UNANSWERABLE)
 TARGET_PER_CATEGORY = 10  # ~30 questions in total (PRD Phase 4, user decision 2026-10-18)
 TARGET_UNANSWERABLE = 5
 MIN_QUOTE_CHARS = 20  # normalized characters; shorter quotes match by accident
-DEFAULT_GOLDEN_PATH = Path("eval/golden.yaml")
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
