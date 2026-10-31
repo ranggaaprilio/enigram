@@ -44,14 +44,14 @@ def _rag_with_claim() -> FakeRag:
     return FakeRag(response)
 
 
-async def test_run_eval_scores_both_systems_and_writes_report(cfg, golden_env, monkeypatch):
+async def test_run_eval_scores_both_systems_and_writes_report(cfg, deps, golden_env, monkeypatch):
     path, install = golden_env
     _install(monkeypatch, install, _rag_with_claim())
     sheet = cfg.eval_dir / "my-labels.md"
     sheet.parent.mkdir(parents=True, exist_ok=True)
     sheet.write_text(f"- [-] q01-c01 {CLAIM}\n- [x] q09-c01 A label for a removed question.\n")
 
-    run = await evaluate.run_eval(cfg, path, [sheet])
+    run = await evaluate.run_eval(cfg, deps, path, [sheet])
 
     data = json.loads(run.report_path.with_suffix(".json").read_text())
     assert set(data["systems"]) == {"mix", "naive"}
@@ -94,12 +94,14 @@ async def test_run_eval_scores_both_systems_and_writes_report(cfg, golden_env, m
     assert len(list(cfg.eval_dir.glob("labels-*.md"))) == 2
 
 
-async def test_run_eval_isolates_failed_answers_and_reports_trend(cfg, golden_env, monkeypatch):
+async def test_run_eval_isolates_failed_answers_and_reports_trend(
+    cfg, deps, golden_env, monkeypatch
+):
     path, install = golden_env
     _install(monkeypatch, install, FailOnQuestion(Q2))
 
-    first = await evaluate.run_eval(cfg, path, [])
-    second = await evaluate.run_eval(cfg, path, [])
+    first = await evaluate.run_eval(cfg, deps, path, [])
+    second = await evaluate.run_eval(cfg, deps, path, [])
 
     data = json.loads(second.report_path.with_suffix(".json").read_text())
     assert data["systems"]["mix"]["failed"] == 1
@@ -110,7 +112,7 @@ async def test_run_eval_isolates_failed_answers_and_reports_trend(cfg, golden_en
     assert data["trend"]["deltas"]["mix.faithfulness"] == 0.0
 
 
-async def test_run_eval_measures_abstention_both_ways(cfg, golden_env, tmp_path, monkeypatch):
+async def test_run_eval_measures_abstention_both_ways(cfg, deps, golden_env, tmp_path, monkeypatch):
     _, install = golden_env
     _install(monkeypatch, install, _rag_with_claim())
     graded = []
@@ -128,7 +130,7 @@ async def test_run_eval_measures_abstention_both_ways(cfg, golden_env, tmp_path,
         + question_yaml("unanswerable", qid="u01", question=UNANSWERABLE_Q),
     )
 
-    run = await evaluate.run_eval(cfg, path, [])
+    run = await evaluate.run_eval(cfg, deps, path, [])
 
     data = json.loads(run.report_path.with_suffix(".json").read_text())
     mix = data["systems"]["mix"]

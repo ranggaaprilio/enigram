@@ -81,6 +81,14 @@ def deepseek_cfg(cfg, clean_env, monkeypatch) -> Config:
 
 
 @pytest.fixture
+def deps(cfg):
+    """The real adapters for cfg; tests replace single fields with fakes."""
+    from enigram.bootstrap import build_deps
+
+    return build_deps(cfg)
+
+
+@pytest.fixture
 def pg_cfg(cfg, clean_env, monkeypatch) -> Config:
     monkeypatch.setenv("STORAGE_BACKEND", "postgres")
     monkeypatch.setenv("POSTGRES_USER", "enigram")

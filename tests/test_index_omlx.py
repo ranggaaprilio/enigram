@@ -8,6 +8,7 @@ import pytest
 
 from enigram import index, report
 from enigram.adapters import lightrag_engine, openai_llm
+from enigram.bootstrap import build_deps
 from enigram.config import Config
 
 
@@ -36,7 +37,7 @@ async def test_index_end_to_end_and_resume(live_cfg, book_pdf, monkeypatch):
 
     monkeypatch.setattr(lightrag_engine, "make_llm_func", counting_make)
 
-    run = await index.run_index(live_cfg, book_pdf.parent)
+    run = await index.run_index(live_cfg, build_deps(live_cfg), book_pdf.parent)
     entry = run.books["harbor-book"]
     assert entry["status"] == "indexed", entry
     assert entry["docs"]["processed"] == entry["chunks"]
@@ -46,7 +47,7 @@ async def test_index_end_to_end_and_resume(live_cfg, book_pdf, monkeypatch):
 
     first_run_calls = len(calls)
     calls.clear()
-    run = await index.run_index(live_cfg, book_pdf.parent)
+    run = await index.run_index(live_cfg, build_deps(live_cfg), book_pdf.parent)
     assert run.up_to_date == ["harbor-book"]
     assert first_run_calls > 0
     assert len(calls) == 0  # unchanged documents are skipped before any LLM work

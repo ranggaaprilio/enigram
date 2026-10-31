@@ -108,9 +108,10 @@ async def _check(cfg: Config) -> int:
 
 
 async def _index(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.bootstrap import build_deps
     from enigram.index import run_index
 
-    run = await run_index(cfg, args.folder, pages=args.pages, only=args.only)
+    run = await run_index(cfg, build_deps(cfg), args.folder, pages=args.pages, only=args.only)
     for book in run.up_to_date:
         print(f"{book}: up to date (skipped)")
     for book, entry in run.books.items():
@@ -122,10 +123,10 @@ async def _index(cfg: Config, args: argparse.Namespace) -> int:
 
 
 async def _query(cfg: Config, question: str, mode: str) -> int:
-    from enigram.adapters.lightrag_engine import open_engine
+    from enigram.bootstrap import build_deps
     from enigram.query import answer_question
 
-    async with open_engine(cfg) as engine:
+    async with build_deps(cfg).open_engine() as engine:
         result = await answer_question(engine, question, mode)
     print(result.answer)
     if result.sources:
@@ -167,9 +168,10 @@ def _golden_check(cfg: Config, path: Path) -> int:
 
 
 async def _golden_answer(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.bootstrap import build_deps
     from enigram.golden_run import run_golden
 
-    run = await run_golden(cfg, args.file, args.mode, args.limit)
+    run = await run_golden(cfg, build_deps(cfg), args.file, args.mode, args.limit)
     print(f"answers: {run.answers_path}")
     print(f"labels:  {run.labels_path}")
     if run.failed:
@@ -190,9 +192,10 @@ def _golden_labels(sheet: Path) -> int:
 
 
 async def _eval(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.bootstrap import build_deps
     from enigram.evaluate import run_eval
 
-    run = await run_eval(cfg, args.file, args.labels, args.limit)
+    run = await run_eval(cfg, build_deps(cfg), args.file, args.labels, args.limit)
     for criterion, verdict in run.verdicts.items():
         print(f"{criterion}: {verdict}")
     print(f"report: {run.report_path}")
@@ -249,10 +252,10 @@ def main(argv: list[str] | None = None) -> int:
             return _golden_labels(args.sheet)
         if args.command == "eval":
             return asyncio.run(_eval(cfg, args))
-        from enigram.adapters.lightrag_engine import load_graph
+        from enigram.bootstrap import build_deps
         from enigram.report import build_report
 
-        graph = asyncio.run(load_graph(cfg))
+        graph = asyncio.run(build_deps(cfg).load_graph())
         print(f"report: {build_report(cfg, graph, review_file=args.review)}")
         return 0
     except EnigramError as e:

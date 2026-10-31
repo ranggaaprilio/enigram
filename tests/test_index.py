@@ -5,6 +5,7 @@ import pytest
 from enigram import index
 from enigram.adapters import lightrag_engine
 from enigram.adapters.lightrag_engine import LightRagEngine
+from enigram.bootstrap import build_deps
 from enigram.errors import EnigramError
 from enigram.files import atomic_write_text
 from enigram.parse import Chunk, file_sha256
@@ -61,7 +62,7 @@ def test_select_books_rejects_name_collision(cfg, tmp_path):
         index.select_books(cfg, [a, b], {"books": {}})
 
 
-async def test_run_index_returns_early_without_omlx_when_up_to_date(cfg, tmp_path, monkeypatch):
+async def test_run_index_returns_early_without_omlx_when_up_to_date(cfg, deps, tmp_path):
     folder = tmp_path / "papers"
     folder.mkdir()
     pdf = folder / "p.pdf"
@@ -70,11 +71,11 @@ async def test_run_index_returns_early_without_omlx_when_up_to_date(cfg, tmp_pat
     index.guard_chunk_settings(cfg, manifest)
     index.save_manifest(cfg, manifest)
 
-    async def no_omlx(cfg):
-        raise AssertionError("check_omlx must not run when nothing changed")
+    async def no_omlx():
+        raise AssertionError("check_llm must not run when nothing changed")
 
-    monkeypatch.setattr(index, "check_omlx", no_omlx)
-    run = await index.run_index(cfg, folder)
+    deps.check_llm = no_omlx
+    run = await index.run_index(cfg, deps, folder)
 
     assert run.up_to_date == ["p"]
     assert run.books == {}
@@ -248,7 +249,7 @@ async def test_run_index_rejects_storage_switch_before_skipping_up_to_date(pg_cf
     doc.write_text("# P\n")
     index.save_manifest(pg_cfg, {"books": {"p": {"status": "indexed", "sha256": file_sha256(doc)}}})
     with pytest.raises(EnigramError, match="describes an index in"):
-        await index.run_index(pg_cfg, folder)
+        await index.run_index(pg_cfg, build_deps(pg_cfg), folder)
 
 
 async def test_insert_book_inserts_all_when_doc_status_returns_empty(cfg):

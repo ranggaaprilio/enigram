@@ -1,5 +1,6 @@
 """Ports: what enigram needs from the outside world, independent of the library behind it."""
 
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    import networkx as nx
+
     from enigram.jobs import Job
     from enigram.memory import MemorySearch
     from enigram.parse import ParsedBook
@@ -138,3 +141,17 @@ class ChatModel(Protocol):
     async def complete(
         self, prompt: str, *, temperature: float | None = None, json_mode: bool = False
     ) -> str: ...
+
+
+@dataclass
+class Deps:
+    """The driven side, as factories: each use case opens what it needs when it needs it (no
+    parser when nothing changed, no index on a fresh deployment). Built by bootstrap.build_deps;
+    tests swap single fields."""
+
+    # open_engine(require_index=True): an async context manager yielding a KnowledgeEngine.
+    open_engine: Callable[..., AbstractAsyncContextManager[KnowledgeEngine]]
+    load_graph: Callable[[], Awaitable["nx.Graph"]]  # the entity graph, for the index report
+    new_parser: Callable[[], DocumentParser]
+    check_llm: Callable[[], Awaitable[Any]]  # fails fast on a misconfigured LLM endpoint
+    judge: Callable[[], ChatModel]  # the evaluation judge model

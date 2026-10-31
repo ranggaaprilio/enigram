@@ -131,7 +131,7 @@ def test_clone_explains_a_credentials_prompt(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def fake_sync(cfg, monkeypatch):
+def fake_sync(cfg, deps, monkeypatch):
     """Repository content to clone, a run_index that marks books indexed, recorded deletions."""
 
     class FakeSync:
@@ -146,7 +146,7 @@ def fake_sync(cfg, monkeypatch):
     def fake_clone(url, ref, dest):
         _tree(dest, fake.tree)
 
-    async def fake_run_index(cfg, folder, pages=None, only=None):
+    async def fake_run_index(cfg, deps, folder, pages=None, only=None):
         fake.indexed.append(only)
         manifest = index.load_manifest(cfg)
         run = IndexRun()
@@ -165,7 +165,7 @@ def fake_sync(cfg, monkeypatch):
         return 0
 
     @asynccontextmanager
-    async def fake_open_engine(cfg):
+    async def fake_open_engine():
         fake.opened += 1
         yield SimpleNamespace(clear_query_cache=fake_clear)
 
@@ -178,15 +178,15 @@ def fake_sync(cfg, monkeypatch):
 
     monkeypatch.setattr(repos, "clone", fake_clone)
     monkeypatch.setattr(repos, "run_index", fake_run_index)
-    monkeypatch.setattr(repos, "open_engine", fake_open_engine)
+    deps.open_engine = fake_open_engine
     monkeypatch.setattr(repos, "delete_document", fake_delete)
     return fake
 
 
-async def test_index_repo_indexes_and_tags_every_markdown_file(cfg, fake_sync):
+async def test_index_repo_indexes_and_tags_every_markdown_file(cfg, deps, fake_sync):
     fake_sync.tree = {"README.md": "# Readme", "docs/guide.md": "# Guide"}
 
-    result = await repos.index_repo(cfg, URL, "main")
+    result = await repos.index_repo(cfg, deps, URL, "main")
 
     names = ["org-handbook--README", "org-handbook--docs--guide"]
     assert fake_sync.indexed == [names]
@@ -197,12 +197,12 @@ async def test_index_repo_indexes_and_tags_every_markdown_file(cfg, fake_sync):
     assert (cfg.books_dir / "org-handbook--README.md").read_text() == "# Readme"
 
 
-async def test_index_repo_resync_reindexes_changed_and_deletes_removed(cfg, fake_sync):
+async def test_index_repo_resync_reindexes_changed_and_deletes_removed(cfg, deps, fake_sync):
     fake_sync.tree = {"README.md": "# Readme", "a.md": "# A", "b.md": "# B"}
-    await repos.index_repo(cfg, URL)
+    await repos.index_repo(cfg, deps, URL)
 
     fake_sync.tree = {"README.md": "# Readme", "a.md": "# A, revised"}
-    result = await repos.index_repo(cfg, URL)
+    result = await repos.index_repo(cfg, deps, URL)
 
     assert fake_sync.deleted == ["org-handbook--b", "org-handbook--a"]
     assert (result["deleted"], result["reindexed"]) == (["org-handbook--b"], ["org-handbook--a"])
@@ -212,23 +212,23 @@ async def test_index_repo_resync_reindexes_changed_and_deletes_removed(cfg, fake
     assert "org-handbook--b" not in index.load_manifest(cfg)["books"]
 
 
-async def test_index_repo_never_overwrites_an_uploaded_document(cfg, fake_sync):
+async def test_index_repo_never_overwrites_an_uploaded_document(cfg, deps, fake_sync):
     index.save_manifest(cfg, {"books": {"org-handbook--README": {"status": "indexed"}}})
     fake_sync.tree = {"README.md": "# Readme"}
 
     with pytest.raises(EnigramError, match="Documents not from"):
-        await repos.index_repo(cfg, URL)
+        await repos.index_repo(cfg, deps, URL)
 
     assert (fake_sync.deleted, fake_sync.indexed) == ([], [])
 
 
-async def test_index_repo_without_markdown(cfg, fake_sync):
+async def test_index_repo_without_markdown(cfg, deps, fake_sync):
     fake_sync.tree = {"main.py": "print()"}
 
     with pytest.raises(EnigramError, match="No Markdown files"):
-        await repos.index_repo(cfg, URL)
+        await repos.index_repo(cfg, deps, URL)
 
 
-async def test_index_repo_checks_the_url_again(cfg, fake_sync):
+async def test_index_repo_checks_the_url_again(cfg, deps, fake_sync):
     with pytest.raises(EnigramError, match="not in REPO_HOSTS"):
-        await repos.index_repo(cfg, "https://intranet.local/org/handbook")
+        await repos.index_repo(cfg, deps, "https://intranet.local/org/handbook")

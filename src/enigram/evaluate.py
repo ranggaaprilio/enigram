@@ -15,9 +15,7 @@ from enigram.adapters.lightrag_engine import (
     QUERY_MAX_ENTITY_TOKENS,
     QUERY_MAX_RELATION_TOKENS,
     QUERY_MAX_TOTAL_TOKENS,
-    open_engine,
 )
-from enigram.adapters.openai_llm import OpenAIChatModel
 from enigram.claims import read_labelled_claims
 from enigram.config import Config
 from enigram.files import atomic_write_text
@@ -34,7 +32,7 @@ from enigram.judges import (
     score_claims_laya,
 )
 from enigram.parse import file_sha256
-from enigram.ports import ChatModel
+from enigram.ports import ChatModel, Deps
 from enigram.query import QUERY_MODES
 
 log = logging.getLogger(__name__)
@@ -391,7 +389,11 @@ def _metadata(
 
 
 async def run_eval(
-    cfg: Config, golden_path: Path, label_files: list[Path], limit: int | None = None
+    cfg: Config,
+    deps: Deps,
+    golden_path: Path,
+    label_files: list[Path],
+    limit: int | None = None,
 ) -> EvalRun:
     start = time.perf_counter()
     questions = load_questions(cfg, golden_path, limit)
@@ -399,7 +401,7 @@ async def run_eval(
 
     runs: dict[str, dict[str, Any]] = {}
     # One LightRAG for both systems: a second one in this process would share its global state.
-    async with open_engine(cfg) as engine:
+    async with deps.open_engine() as engine:
         for mode in QUERY_MODES:
             log.info("[eval] answering %d questions with %s", len(questions), mode)
             items, failed = await answer_golden(engine, questions, mode)
@@ -412,7 +414,7 @@ async def run_eval(
             }
 
     scorer = RagasScorer(cfg)
-    judge = OpenAIChatModel(cfg.judge)
+    judge = deps.judge()
     for mode, run in runs.items():
         for i, item in enumerate(run["items"], 1):
             if item.get("error"):

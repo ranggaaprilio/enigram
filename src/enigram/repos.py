@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from enigram.adapters.lightrag_engine import open_engine
 from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.index import delete_document, load_manifest, run_index, save_manifest
 from enigram.parse import MARKDOWN_SUFFIXES, book_name, file_sha256
+from enigram.ports import Deps
 
 log = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ def clone(url: str, ref: str | None, dest: Path) -> None:
         raise EnigramError(f"git clone failed: {lines[-1] if lines else done.returncode}")
 
 
-async def index_repo(cfg: Config, url: str, ref: str | None = None) -> dict[str, Any]:
+async def index_repo(cfg: Config, deps: Deps, url: str, ref: str | None = None) -> dict[str, Any]:
     """Index (or re-sync) a repository's Markdown: changed files are deleted and indexed again,
     files gone from the repository are deleted, uploaded documents are never overwritten."""
     repo = check_repo_url(url, cfg.repo_hosts)
@@ -148,8 +148,8 @@ async def index_repo(cfg: Config, url: str, ref: str | None = None) -> dict[str,
             b for b in files if b in ours and books[b].get("sha256") != file_sha256(files[b])
         )
         if removed or changed:
-            # Only on a re-sync: a fresh deployment has no index for open_engine to open.
-            async with open_engine(cfg) as engine:
+            # Only on a re-sync: a fresh deployment has no index to open.
+            async with deps.open_engine() as engine:
                 for book in [*removed, *changed]:
                     await delete_document(cfg, engine, book)
                 await engine.clear_query_cache()
@@ -160,7 +160,7 @@ async def index_repo(cfg: Config, url: str, ref: str | None = None) -> dict[str,
         root = root.resolve()
         rel_paths = {book: path.relative_to(root).as_posix() for book, path in files.items()}
 
-    run = await run_index(cfg, cfg.books_dir, only=sorted(files))
+    run = await run_index(cfg, deps, cfg.books_dir, only=sorted(files))
 
     # After run_index, which rewrites the entries it indexes.
     manifest = load_manifest(cfg)

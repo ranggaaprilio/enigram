@@ -7,14 +7,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from enigram.adapters.lightrag_engine import open_engine
 from enigram.claims import split_claims, write_label_sheet
 from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.files import atomic_write_text
 from enigram.golden import GoldenQuestion, check_golden
 from enigram.parse import file_sha256
-from enigram.ports import KnowledgeEngine
+from enigram.ports import Deps, KnowledgeEngine
 from enigram.query import QUERY_MODES, answer_question
 
 log = logging.getLogger(__name__)
@@ -106,13 +105,13 @@ def write_golden_run(
 
 
 async def run_golden(
-    cfg: Config, golden_path: Path, mode: str, limit: int | None = None
+    cfg: Config, deps: Deps, golden_path: Path, mode: str, limit: int | None = None
 ) -> GoldenRun:
     if mode not in QUERY_MODES:
         raise EnigramError(f"mode must be one of {QUERY_MODES}, got {mode!r}")
     questions = load_questions(cfg, golden_path, limit)
     # One LightRAG for the whole run: a second one in this process would share its global state.
-    async with open_engine(cfg) as engine:
+    async with deps.open_engine() as engine:
         items, failed = await answer_golden(engine, questions, mode)
     answers_path, labels_path = write_golden_run(cfg, golden_path, mode, items)
     return GoldenRun(answers_path, labels_path, answered=len(items) - failed, failed=failed)

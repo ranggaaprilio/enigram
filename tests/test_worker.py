@@ -102,7 +102,7 @@ def fake_index(monkeypatch):
             self.error = None
             self.calls = []
 
-        async def __call__(self, cfg, folder, pages=None, only=None):
+        async def __call__(self, cfg, deps, folder, pages=None, only=None):
             self.calls.append((folder, only))
             if self.error:
                 raise self.error
@@ -113,11 +113,11 @@ def fake_index(monkeypatch):
     return fake
 
 
-async def test_process_next_indexes_the_book_and_records_its_entry(cfg, store, fake_index):
+async def test_process_next_indexes_the_book_and_records_its_entry(cfg, store, deps, fake_index):
     fake_index.run = IndexRun(books={"p": {"status": "indexed", "chunks": 3}})
     await store.enqueue("index", {"book": "p", "file": "p.pdf"})
 
-    job = await worker.process_next(cfg, store)
+    job = await worker.process_next(cfg, store, deps)
 
     done = await store.get_job(job.id)
     assert done.status == "done"
@@ -126,48 +126,48 @@ async def test_process_next_indexes_the_book_and_records_its_entry(cfg, store, f
     assert fake_index.calls == [(cfg.books_dir, ["p"])]
 
 
-async def test_process_next_up_to_date_book_is_done(cfg, store, fake_index):
+async def test_process_next_up_to_date_book_is_done(cfg, store, deps, fake_index):
     fake_index.run = IndexRun(up_to_date=["p"])
     job = await store.enqueue("index", {"book": "p"})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     assert (await store.get_job(job.id)).result == {"status": "indexed", "up_to_date": True}
 
 
-async def test_process_next_failed_entry_fails_the_job(cfg, store, fake_index):
+async def test_process_next_failed_entry_fails_the_job(cfg, store, deps, fake_index):
     error = "insert: 2 documents not processed"
     fake_index.run = IndexRun(books={"p": {"status": "failed", "error": error}})
     job = await store.enqueue("index", {"book": "p"})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     failed = await store.get_job(job.id)
     assert (failed.status, failed.error) == ("failed", error)
 
 
-async def test_process_next_keeps_guard_error_and_continues(cfg, store, fake_index):
+async def test_process_next_keeps_guard_error_and_continues(cfg, store, deps, fake_index):
     fake_index.error = EnigramError("Chunk settings changed {...}")
     first = await store.enqueue("index", {"book": "p"})
     second = await store.enqueue("index", {"book": "q"})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
     fake_index.error = None
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     assert (await store.get_job(first.id)).error == "Chunk settings changed {...}"
     assert (await store.get_job(second.id)).status == "done"
 
 
-async def test_process_next_empty_queue_returns_none(cfg, store, fake_index):
-    assert await worker.process_next(cfg, store) is None
+async def test_process_next_empty_queue_returns_none(cfg, store, deps, fake_index):
+    assert await worker.process_next(cfg, store, deps) is None
     assert fake_index.calls == []
 
 
-async def test_process_next_rejects_unknown_kind(cfg, store, fake_index):
+async def test_process_next_rejects_unknown_kind(cfg, store, deps, fake_index):
     job = await store.enqueue("edit", {"entity": "X"})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     failed = await store.get_job(job.id)
     assert failed.status == "failed"
@@ -187,7 +187,7 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, monkey
     async def fake_open_store(cfg):
         return store
 
-    async def stop(cfg, store):
+    async def stop(cfg, store, deps):
         raise _Stop
 
     monkeypatch.setattr(worker, "open_store", fake_open_store)
@@ -200,7 +200,7 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, monkey
 
 
 @pytest.fixture
-def fake_graph(monkeypatch):
+def fake_graph(deps, monkeypatch):
     """Replaces open_engine and apply_graph_job; the fake is its own engine. Read `.calls`, set
     `.error`."""
 
@@ -211,7 +211,7 @@ def fake_graph(monkeypatch):
             self.engine = self
 
         @asynccontextmanager
-        async def open_engine(self, cfg):
+        async def open_engine(self):
             yield self.engine
 
         async def apply(self, engine, kind, payload):
@@ -225,16 +225,16 @@ def fake_graph(monkeypatch):
             return 4
 
     fake = FakeGraph()
-    monkeypatch.setattr(worker, "open_engine", fake.open_engine)
+    deps.open_engine = fake.open_engine
     monkeypatch.setattr(worker, "apply_graph_job", fake.apply)
     return fake
 
 
-async def test_graph_job_applies_the_edit_and_clears_cached_answers(cfg, store, fake_graph):
+async def test_graph_job_applies_the_edit_and_clears_cached_answers(cfg, store, deps, fake_graph):
     payload = {"name": "Mutation Score", "description": "new", "api_key": "web"}
     job = await store.enqueue("edit_entity", payload)
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     done = await store.get_job(job.id)
     assert done.status == "done"
@@ -247,18 +247,18 @@ async def test_graph_job_applies_the_edit_and_clears_cached_answers(cfg, store, 
     assert fake_graph.calls == [(engine, "edit_entity", payload), (engine, "clear")]
 
 
-async def test_graph_job_failure_fails_the_job_and_keeps_the_worker(cfg, store, fake_graph):
+async def test_graph_job_failure_fails_the_job_and_keeps_the_worker(cfg, store, deps, fake_graph):
     fake_graph.error = EnigramError("No entity 'Ghost'")
     job = await store.enqueue("delete_entity", {"name": "Ghost"})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     failed = await store.get_job(job.id)
     assert (failed.status, failed.error) == ("failed", "No entity 'Ghost'")
 
 
 async def test_delete_job_deletes_the_document_and_clears_cached_answers(
-    cfg, store, fake_graph, monkeypatch
+    cfg, store, deps, fake_graph, monkeypatch
 ):
     calls = []
 
@@ -269,7 +269,7 @@ async def test_delete_job_deletes_the_document_and_clears_cached_answers(
     monkeypatch.setattr(worker, "delete_document", fake_delete)
     job = await store.enqueue("delete_document", {"book": "paper", "api_key": None})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     done = await store.get_job(job.id)
     assert done.status == "done"
@@ -277,14 +277,14 @@ async def test_delete_job_deletes_the_document_and_clears_cached_answers(
     assert calls == [(fake_graph.engine, "paper")]
 
 
-async def test_delete_job_failure_fails_the_job(cfg, store, fake_graph, monkeypatch):
+async def test_delete_job_failure_fails_the_job(cfg, store, deps, fake_graph, monkeypatch):
     async def fake_delete(cfg, engine, book):
         raise EnigramError("paper-c00001: pipeline busy")
 
     monkeypatch.setattr(worker, "delete_document", fake_delete)
     job = await store.enqueue("delete_document", {"book": "paper"})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     failed = await store.get_job(job.id)
     assert (failed.status, failed.error) == ("failed", "paper-c00001: pipeline busy")
@@ -297,31 +297,33 @@ async def test_delete_job_failure_fails_the_job(cfg, store, fake_graph, monkeypa
         ({"failed": ["org-a"], "files": 2}, "failed", "1 documents failed: org-a"),
     ],
 )
-async def test_repo_job_indexes_the_repository(cfg, store, monkeypatch, result, status, error):
+async def test_repo_job_indexes_the_repository(
+    cfg, store, deps, monkeypatch, result, status, error
+):
     calls = []
 
-    async def fake_index_repo(cfg, url, ref=None):
+    async def fake_index_repo(cfg, deps, url, ref=None):
         calls.append((url, ref))
         return result
 
     monkeypatch.setattr(worker, "index_repo", fake_index_repo)
     job = await store.enqueue("index_repo", {"url": "https://github.com/org/h", "ref": "main"})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     finished = await store.get_job(job.id)
     assert (finished.status, finished.error, finished.result) == (status, error, result)
     assert calls == [("https://github.com/org/h", "main")]
 
 
-async def test_repo_job_exception_fails_the_job(cfg, store, monkeypatch):
-    async def fake_index_repo(cfg, url, ref=None):
+async def test_repo_job_exception_fails_the_job(cfg, store, deps, monkeypatch):
+    async def fake_index_repo(cfg, deps, url, ref=None):
         raise EnigramError("git clone failed: repository not found")
 
     monkeypatch.setattr(worker, "index_repo", fake_index_repo)
     job = await store.enqueue("index_repo", {"url": "https://github.com/org/gone"})
 
-    await worker.process_next(cfg, store)
+    await worker.process_next(cfg, store, deps)
 
     failed = await store.get_job(job.id)
     assert (failed.status, failed.error) == ("failed", "git clone failed: repository not found")

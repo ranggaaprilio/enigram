@@ -21,13 +21,13 @@ class FailOnQuestion(FakeRag):
         return success_response()
 
 
-async def test_run_golden_writes_answers_and_label_sheet(cfg, golden_env):
+async def test_run_golden_writes_answers_and_label_sheet(cfg, deps, golden_env):
     path, install = golden_env
     response = success_response()
     response["llm_response"]["content"] = "Captain Mira Okafor designed the protocol [1]."
     rag = install(FakeRag(response))
 
-    run = await run_golden(cfg, path, "naive")
+    run = await run_golden(cfg, deps, path, "naive")
 
     data = json.loads(run.answers_path.read_text())
     assert data["mode"] == "naive" and len(data["golden_sha256"]) == 64
@@ -42,11 +42,11 @@ async def test_run_golden_writes_answers_and_label_sheet(cfg, golden_env):
     assert rag.initialized == rag.finalized == 1
 
 
-async def test_run_golden_records_failed_question_and_continues(cfg, golden_env):
+async def test_run_golden_records_failed_question_and_continues(cfg, deps, golden_env):
     path, install = golden_env
     install(FailOnQuestion(Q2))
 
-    run = await run_golden(cfg, path, "mix")
+    run = await run_golden(cfg, deps, path, "mix")
 
     items = json.loads(run.answers_path.read_text())["items"]
     assert items[0]["error"] is None
@@ -55,22 +55,22 @@ async def test_run_golden_records_failed_question_and_continues(cfg, golden_env)
     assert "_Query failed:" in run.labels_path.read_text()
 
 
-async def test_run_golden_refuses_a_golden_set_with_problems(cfg, golden_env):
+async def test_run_golden_refuses_a_golden_set_with_problems(cfg, deps, golden_env):
     path, install = golden_env
     rag = install(FakeRag())
     write_golden(path, "questions:\n" + question_yaml("multi_paper", INTRO, METHOD))
 
     with pytest.raises(EnigramError, match="golden check"):
-        await run_golden(cfg, path, "mix")
+        await run_golden(cfg, deps, path, "mix")
     assert rag.params == []
 
 
-async def test_run_golden_limit_and_empty_set(cfg, golden_env):
+async def test_run_golden_limit_and_empty_set(cfg, deps, golden_env):
     path, install = golden_env
     install(FakeRag())
-    run = await run_golden(cfg, path, "mix", limit=1)
+    run = await run_golden(cfg, deps, path, "mix", limit=1)
     assert len(json.loads(run.answers_path.read_text())["items"]) == 1
 
     write_golden(path, "questions: []\n")
     with pytest.raises(EnigramError, match="no questions yet"):
-        await run_golden(cfg, path, "mix")
+        await run_golden(cfg, deps, path, "mix")

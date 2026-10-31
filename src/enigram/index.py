@@ -8,9 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from enigram import report
-from enigram.adapters.docling_parser import DoclingParser
-from enigram.adapters.lightrag_engine import load_graph, open_engine
-from enigram.adapters.openai_llm import check_omlx
 from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.files import atomic_write_text
@@ -24,7 +21,7 @@ from enigram.parse import (
     read_chunks_jsonl,
     write_chunks_jsonl,
 )
-from enigram.ports import DocumentParser, KnowledgeEngine
+from enigram.ports import Deps, KnowledgeEngine
 
 log = logging.getLogger(__name__)
 
@@ -166,9 +163,13 @@ def _chunks_path(cfg: Config, book: str) -> Path:
 
 
 def _parse_all(
-    cfg: Config, pdfs: list[Path], manifest: dict[str, Any], pages: tuple[int, int] | None
+    cfg: Config,
+    deps: Deps,
+    pdfs: list[Path],
+    manifest: dict[str, Any],
+    pages: tuple[int, int] | None,
 ) -> None:
-    parser: DocumentParser = DoclingParser(cfg)
+    parser = deps.new_parser()
     try:
         for pdf in pdfs:
             book = book_name(pdf)
@@ -313,9 +314,9 @@ async def _insert_book(engine: KnowledgeEngine, cfg: Config, book: str) -> dict[
     return counts
 
 
-async def _insert_all(cfg: Config, manifest: dict[str, Any], books: list[str]) -> None:
+async def _insert_all(cfg: Config, deps: Deps, manifest: dict[str, Any], books: list[str]) -> None:
     # require_index=False: the first run has no index yet.
-    async with open_engine(cfg, require_index=False) as engine:
+    async with deps.open_engine(require_index=False) as engine:
         for book in books:
             entry = manifest["books"][book]
             if entry.get("status") != "parsed":
@@ -337,6 +338,7 @@ async def _insert_all(cfg: Config, manifest: dict[str, Any], books: list[str]) -
 
 async def run_index(
     cfg: Config,
+    deps: Deps,
     folder: Path,
     pages: tuple[int, int] | None = None,
     only: list[str] | None = None,
@@ -357,11 +359,11 @@ async def run_index(
         return IndexRun(up_to_date=up_to_date)
 
     guard_llm_model(cfg, manifest)
-    await check_omlx(cfg)
-    _parse_all(cfg, todo, manifest, pages)
+    await deps.check_llm()
+    _parse_all(cfg, deps, todo, manifest, pages)
     books = [book_name(p) for p in todo]
-    await _insert_all(cfg, manifest, books)
+    await _insert_all(cfg, deps, manifest, books)
 
     run = IndexRun(books={b: manifest["books"][b] for b in books}, up_to_date=up_to_date)
-    run.report_path = report.build_report(cfg, await load_graph(cfg))
+    run.report_path = report.build_report(cfg, await deps.load_graph())
     return run
