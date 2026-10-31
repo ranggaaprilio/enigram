@@ -15,12 +15,12 @@ import sys
 import time
 from uuid import uuid4
 
+from enigram.adapters.postgres_jobs import open_store
+from enigram.adapters.postgres_memory import PostgresMemoryStore
 from enigram.cli import _setup_logging
 from enigram.config import Config
 from enigram.errors import EnigramError
-from enigram.jobs import open_store
 from enigram.llm import make_embedding_func
-from enigram.memory import MemoryStore
 
 TOPICS = (
     "The staging database moved to a new host after the outage",
@@ -50,7 +50,7 @@ def _row(name: str, secs: list[float]) -> str:
 async def measure(cfg: Config, notes: int, searches: int) -> None:
     store = await open_store(cfg)
     workspace = f"memlat_{uuid4().hex[:8]}"
-    memory = MemoryStore(store.pool, workspace, make_embedding_func(cfg), cfg.embed_dim)
+    memory = PostgresMemoryStore(store.pool, workspace, make_embedding_func(cfg), cfg.embed_dim)
     try:
         await memory.ensure_schema()
         add = []

@@ -15,17 +15,17 @@ from pydantic import Field
 from enigram.adapters.lightrag_engine import open_engine
 from enigram.config import Config
 from enigram.errors import EnigramError
-from enigram.jobs import JobStore, documents_overview
-from enigram.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX, MemoryStore
-from enigram.ports import KnowledgeEngine
+from enigram.jobs import documents_overview
+from enigram.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX
+from enigram.ports import JobRepository, KnowledgeEngine, MemoryRepository
 from enigram.query import QUERY_MODE, ContextChunk, Source, answer_question
 
 
 @dataclass
 class AppContext:
     engine: KnowledgeEngine
-    store: JobStore | None = None  # set over HTTP: queries are logged, jobs show in documents
-    memory: MemoryStore | None = None  # set over HTTP: memories belong to an API key
+    store: JobRepository | None = None  # set over HTTP: queries are logged, jobs show in documents
+    memory: MemoryRepository | None = None  # set over HTTP: memories belong to an API key
 
 
 @dataclass
@@ -120,7 +120,7 @@ def create_server(
         docs = await documents_overview(cfg, ctx.request_context.lifespan_context.store)
         return [DocumentInfo(d["book"], d["title"], d["status"], d["pages"]) for d in docs]
 
-    def memory_of(ctx: Context[AppContext]) -> MemoryStore:
+    def memory_of(ctx: Context[AppContext]) -> MemoryRepository:
         memory = ctx.request_context.lifespan_context.memory
         if memory is None:
             raise ToolError("Memory needs the HTTP server (enigram api); stdio has no store")

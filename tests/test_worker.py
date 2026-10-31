@@ -11,9 +11,9 @@ from enigram.jobs import ACTIVE, Job
 
 
 class FakeJobStore:
-    """In-memory JobStore with the same methods."""
+    """In-memory JobRepository."""
 
-    pool = None  # the API hands it to MemoryStore, which tests replace with FakeMemoryStore
+    pool = None  # the API hands it to PostgresMemoryStore, which tests replace with FakeMemoryStore
 
     def __init__(self):
         self.jobs: list[Job] = []

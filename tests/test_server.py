@@ -14,7 +14,7 @@ from enigram.server import AppContext, create_server
 
 
 class FakeMemoryStore:
-    """In-memory MemoryStore: a note scores 1 when it contains the query, else 0."""
+    """In-memory MemoryRepository: a note scores 1 when it contains the query, else 0."""
 
     def __init__(self, pool=None, workspace="default", embed=None, dim=1024):
         self.notes: list[tuple[str | None, Memory]] = []  # (key name, memory)

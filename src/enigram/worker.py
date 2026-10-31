@@ -5,10 +5,12 @@ import asyncio
 import logging
 
 from enigram.adapters.lightrag_engine import open_engine
+from enigram.adapters.postgres_jobs import open_store
 from enigram.config import Config
 from enigram.graph import GRAPH_JOB_KINDS, apply_graph_job
 from enigram.index import delete_document, run_index
-from enigram.jobs import Job, JobStore, open_store
+from enigram.jobs import Job
+from enigram.ports import JobRepository
 from enigram.repos import index_repo
 
 log = logging.getLogger(__name__)
@@ -16,7 +18,7 @@ log = logging.getLogger(__name__)
 POLL_SECS = 2.0
 
 
-async def _run_graph_job(cfg: Config, store: JobStore, job: Job) -> Job:
+async def _run_graph_job(cfg: Config, store: JobRepository, job: Job) -> Job:
     log.info("[worker] job %d: %s", job.id, job.kind)
     try:
         async with open_engine(cfg) as engine:
@@ -32,7 +34,7 @@ async def _run_graph_job(cfg: Config, store: JobStore, job: Job) -> Job:
     return job
 
 
-async def _run_delete_job(cfg: Config, store: JobStore, job: Job) -> Job:
+async def _run_delete_job(cfg: Config, store: JobRepository, job: Job) -> Job:
     book = job.payload["book"]
     log.info("[worker] job %d: deleting %s", job.id, book)
     try:
@@ -48,7 +50,7 @@ async def _run_delete_job(cfg: Config, store: JobStore, job: Job) -> Job:
     return job
 
 
-async def _run_repo_job(cfg: Config, store: JobStore, job: Job) -> Job:
+async def _run_repo_job(cfg: Config, store: JobRepository, job: Job) -> Job:
     url = job.payload["url"]
     log.info("[worker] job %d: indexing repository %s", job.id, url)
     try:
@@ -65,7 +67,7 @@ async def _run_repo_job(cfg: Config, store: JobStore, job: Job) -> Job:
     return job
 
 
-async def process_next(cfg: Config, store: JobStore) -> Job | None:
+async def process_next(cfg: Config, store: JobRepository) -> Job | None:
     """Claim and run one job; None when the queue is empty."""
     job = await store.claim()
     if job is None:

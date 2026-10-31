@@ -1,9 +1,13 @@
 """Ports: what enigram needs from the outside world, independent of the library behind it."""
 
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from enigram.jobs import Job
+    from enigram.memory import MemorySearch
     from enigram.query import QueryResult
 
 
@@ -54,3 +58,61 @@ class KnowledgeEngine(Protocol):
     async def delete_entity(self, name: str) -> DeleteOutcome: ...
 
     async def delete_relation(self, source: str, target: str) -> DeleteOutcome: ...
+
+
+class JobRepository(Protocol):
+    """The job queue shared by the API and the index worker, plus the query log."""
+
+    async def close(self) -> None: ...
+
+    async def enqueue(self, kind: str, payload: dict[str, Any]) -> "Job": ...
+
+    async def claim(self) -> "Job | None":
+        """The oldest queued job, now running; two claimers never get the same job."""
+        ...
+
+    async def finish(
+        self,
+        job_id: int,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None: ...
+
+    async def requeue_running(self) -> int:
+        """Jobs a stopped worker left running; only safe while holding worker_lock."""
+        ...
+
+    async def get_job(self, job_id: int) -> "Job | None": ...
+
+    async def active_jobs(self) -> "list[Job]": ...
+
+    def worker_lock(self) -> AbstractAsyncContextManager[None]:
+        """One worker per workspace."""
+        ...
+
+    async def log_query(
+        self,
+        source: str,
+        question: str,
+        mode: str,
+        result: "QueryResult | None" = None,
+        error: str | None = None,
+        api_key: str | None = None,
+    ) -> int: ...
+
+    async def get_query(self, query_id: int) -> dict[str, Any] | None: ...
+
+    async def list_queries(self, limit: int = 50) -> list[dict[str, Any]]: ...
+
+    async def search_graph(
+        self, phrase: str, limit: int = 50
+    ) -> dict[str, list[dict[str, Any]]]: ...
+
+
+class MemoryRepository(Protocol):
+    """Short agent notes, scoped to one API key name."""
+
+    async def add(self, text: str, api_key: str | None) -> tuple[int, datetime]: ...
+
+    async def search(self, query: str, api_key: str | None, limit: int = 5) -> "MemorySearch": ...

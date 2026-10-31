@@ -19,13 +19,15 @@ from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from enigram.adapters.lightrag_engine import open_engine
+from enigram.adapters.postgres_jobs import open_store
+from enigram.adapters.postgres_memory import PostgresMemoryStore
 from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.index import list_sources, load_manifest
-from enigram.jobs import JobStore, documents_overview, open_store
+from enigram.jobs import documents_overview
 from enigram.llm import make_embedding_func
-from enigram.memory import MemoryStore
 from enigram.parse import SOURCE_SUFFIXES, book_name
+from enigram.ports import JobRepository
 from enigram.query import QUERY_MODE, answer_question
 from enigram.repos import check_ref, check_repo_url
 from enigram.server import AppContext, create_server
@@ -184,7 +186,9 @@ def create_app(cfg: Config) -> FastAPI:
             log.warning("[api] ENIGRAM_API_KEYS is not set: every route is open")
         store = await open_store(cfg)
         # Shares the store's pool, which store.close() closes.
-        memory = MemoryStore(store.pool, cfg.workspace, make_embedding_func(cfg), cfg.embed_dim)
+        memory = PostgresMemoryStore(
+            store.pool, cfg.workspace, make_embedding_func(cfg), cfg.embed_dim
+        )
         await memory.ensure_schema()
         app.state.memory = memory
         try:
@@ -201,7 +205,7 @@ def create_app(cfg: Config) -> FastAPI:
     if cfg.api_keys:
         app.add_middleware(ApiKeyMiddleware, keys=cfg.api_keys)
 
-    def store_of(request: Request) -> JobStore:
+    def store_of(request: Request) -> JobRepository:
         return request.app.state.store
 
     @app.get("/health")

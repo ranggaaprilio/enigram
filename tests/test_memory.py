@@ -5,8 +5,9 @@ import asyncpg
 import numpy as np
 import pytest
 
+from enigram.adapters.postgres_memory import PostgresMemoryStore
 from enigram.errors import EnigramError
-from enigram.memory import MEMORY_MAX_CHARS, MemoryStore
+from enigram.memory import MEMORY_MAX_CHARS
 
 pytestmark = pytest.mark.postgres
 
@@ -35,7 +36,7 @@ async def pool():
 @pytest.fixture
 async def memory(pool):
     """A store in its own workspace, so rows never mix with real memories."""
-    memory = MemoryStore(pool, f"test_{uuid4().hex[:8]}", fake_embed, DIM)
+    memory = PostgresMemoryStore(pool, f"test_{uuid4().hex[:8]}", fake_embed, DIM)
     await memory.ensure_schema()
     yield memory
     await pool.execute("DELETE FROM enigram_memories WHERE workspace = $1", memory.workspace)
@@ -70,7 +71,7 @@ async def test_memories_belong_to_one_key(memory):
 
 async def test_memories_belong_to_one_workspace(memory, pool):
     await memory.add("staging database", "laptop-a")
-    other = MemoryStore(pool, f"{memory.workspace}_other", fake_embed, DIM)
+    other = PostgresMemoryStore(pool, f"{memory.workspace}_other", fake_embed, DIM)
 
     assert (await other.search("staging", "laptop-a")).memories == []
 
@@ -104,7 +105,7 @@ async def test_embedding_failure_is_an_enigram_error(pool):
     async def down(texts):
         raise ConnectionError("connection refused")
 
-    memory = MemoryStore(pool, "unused", down, DIM)
+    memory = PostgresMemoryStore(pool, "unused", down, DIM)
 
     with pytest.raises(EnigramError, match="Embedding failed: connection refused"):
         await memory.add("staging database", "laptop-a")
@@ -114,7 +115,7 @@ async def test_wrong_embedding_shape_is_an_enigram_error(pool):
     async def short(texts):
         return np.zeros((1, 3))
 
-    memory = MemoryStore(pool, "unused", short, DIM)
+    memory = PostgresMemoryStore(pool, "unused", short, DIM)
 
     with pytest.raises(EnigramError, match=r"shape \(1, 3\), expected \(1, 1024\)"):
         await memory.search("staging", "laptop-a")

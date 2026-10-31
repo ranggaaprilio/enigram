@@ -18,14 +18,14 @@ WEB_KEY = "w" * 32
 
 @pytest.fixture(autouse=True)
 def fake_memory(monkeypatch):
-    """The lifespan's MemoryStore, without a database; the instance the app built."""
+    """The lifespan's PostgresMemoryStore, without a database; the instance the app built."""
     built = []
 
     def make(*args):
         built.append(FakeMemoryStore(*args))
         return built[-1]
 
-    monkeypatch.setattr(api, "MemoryStore", make)
+    monkeypatch.setattr(api, "PostgresMemoryStore", make)
     return built
 
 

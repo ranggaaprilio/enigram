@@ -8,8 +8,8 @@ import pytest
 from test_query import success_response
 
 from enigram.adapters.lightrag_engine import to_result
+from enigram.adapters.postgres_jobs import PostgresJobStore
 from enigram.errors import EnigramError
-from enigram.jobs import JobStore
 
 pytestmark = pytest.mark.postgres
 
@@ -24,7 +24,7 @@ async def pool():
 @pytest.fixture
 async def store(pool):
     """A store in its own workspace, so rows never mix with a developer's real queue."""
-    store = JobStore(pool, f"test_{uuid4().hex[:8]}")
+    store = PostgresJobStore(pool, f"test_{uuid4().hex[:8]}")
     await store.ensure_schema()
     yield store
     for table in ("enigram_jobs", "enigram_queries"):
@@ -72,7 +72,7 @@ async def test_finish_and_requeue(store):
 
 async def test_workspaces_do_not_see_each_other(store, pool):
     job = await store.enqueue("index", {"book": "a"})
-    other = JobStore(pool, f"{store.workspace}_other")
+    other = PostgresJobStore(pool, f"{store.workspace}_other")
 
     assert await other.claim() is None
     assert await other.get_job(job.id) is None
@@ -80,7 +80,7 @@ async def test_workspaces_do_not_see_each_other(store, pool):
 
 
 async def test_worker_lock_is_exclusive_per_workspace(store, pool):
-    rival = JobStore(pool, store.workspace)
+    rival = PostgresJobStore(pool, store.workspace)
     async with store.worker_lock():
         with pytest.raises(EnigramError, match="Another worker"):
             async with rival.worker_lock():
@@ -107,7 +107,7 @@ async def test_query_log_round_trip(store):
 
 async def test_list_queries_newest_first_per_workspace(store, pool):
     ids = [await store.log_query("api", f"Q{i}?", "mix", error="x") for i in range(3)]
-    other = JobStore(pool, f"test_{uuid4().hex[:8]}")
+    other = PostgresJobStore(pool, f"test_{uuid4().hex[:8]}")
 
     rows = await store.list_queries(2)
 
@@ -169,6 +169,6 @@ async def test_search_graph_treats_wildcards_literally_and_limits(store, graph_r
 
 
 async def test_search_graph_is_scoped_to_the_workspace(store, pool, graph_rows):
-    other = JobStore(pool, f"{store.workspace}_other")
+    other = PostgresJobStore(pool, f"{store.workspace}_other")
 
     assert await other.search_graph("60%") == {"entities": [], "relations": []}
