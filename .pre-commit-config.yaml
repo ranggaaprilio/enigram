@@ -24,7 +24,7 @@ repos:
       - id: conventional-pre-commit
         stages: [commit-msg]
 
-  # Local hooks so ruff and tsc run the versions pinned in uv.lock and web/package-lock.json.
+  # Local hooks so ruff and tsc run the versions pinned in uv.lock and apps/web/package-lock.json.
   - repo: local
     hooks:
       - id: ruff-check
@@ -39,7 +39,7 @@ repos:
         types_or: [python, pyi]
       - id: web-typecheck
         name: tsc (web)
-        entry: npm --prefix web run typecheck
+        entry: npm --prefix apps/web run typecheck
         language: system
-        files: ^web/.*\.(ts|tsx)$
+        files: ^apps/web/.*\.(ts|tsx)$
         pass_filenames: false

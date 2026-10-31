@@ -12,6 +12,17 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "enigram",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "pre-commit", specifier = ">=4.7.0" },
+    { name = "ruff", specifier = ">=0.17.1" },
+]
+
 [[package]]
 name = "accelerate"
 version = "1.15.0"
@@ -671,7 +682,7 @@ wheels = [
 [[package]]
 name = "enigram"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "apps/api" }
 dependencies = [
     { name = "asyncpg" },
     { name = "docling" },
@@ -698,11 +709,9 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "reportlab" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -732,11 +741,9 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pre-commit", specifier = ">=4.7.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "reportlab", specifier = ">=5.0.1" },
-    { name = "ruff", specifier = ">=0.17.1" },
 ]
 
 [[package]]

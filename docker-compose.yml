@@ -6,7 +6,9 @@
 # (http://localhost:3000).
 
 x-enigram: &enigram
-  build: .
+  build:
+    context: . # the uv workspace root
+    dockerfile: apps/api/Dockerfile
   image: enigram:local # one image for both services
   env_file: .env
   environment:
@@ -59,7 +61,7 @@ services:
     command: ["enigram", "worker"]
 
   web:
-    build: ./web
+    build: ./apps/web
     image: enigram-web:local
     environment:
       ENIGRAM_WEB_KEY: ${ENIGRAM_WEB_KEY:-} # nginx sends it to the API on every /api call

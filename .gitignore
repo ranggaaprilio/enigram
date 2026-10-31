@@ -5,6 +5,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .DS_Store
-web/node_modules/
-web/dist/
+apps/web/node_modules/
+apps/web/dist/
 .claude/PRPs

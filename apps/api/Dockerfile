@@ -1,4 +1,5 @@
-# One image for `enigram api` and `enigram worker` (see docker-compose.yml).
+# One image for `enigram api` and `enigram worker` (see docker-compose.yml). Built from the
+# repository root, the uv workspace: `docker build -f apps/api/Dockerfile .`
 FROM python:3.12-slim
 
 # Docling's PDF backends need libgl1/libglib. Docling renders each page for its layout model, and
@@ -17,9 +18,10 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 # Dependencies first, so code changes do not reinstall them.
-COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --no-install-project
-COPY src ./src
-RUN uv sync --frozen --no-dev
+COPY pyproject.toml uv.lock ./
+COPY apps/api/pyproject.toml apps/api/README.md ./apps/api/
+RUN uv sync --frozen --no-dev --package enigram --no-install-workspace
+COPY apps/api/src ./apps/api/src
+RUN uv sync --frozen --no-dev --package enigram
 
 ENV PATH="/app/.venv/bin:$PATH"

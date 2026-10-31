@@ -21,9 +21,22 @@ If you contribute on behalf of your employer, make sure your employer allows it 
   them or say why it does not.
 - Check the open issues and pull requests to avoid duplicate work.
 
+## Repository Layout
+
+A monorepo with two apps; run every command from the repository root.
+
+```
+apps/api/        Python backend: API, worker, CLI, MCP server (package `enigram`)
+apps/web/        React UI (own package.json and lockfile)
+pyproject.toml   uv workspace root: shared ruff/pytest config, one uv.lock and .venv
+Makefile         shortcuts for both apps (`make` lists them)
+eval/            hand-written golden questions
+data/            runtime data (gitignored); .env sits next to it
+```
+
 ## Development Setup
 
-Prerequisites: [uv](https://docs.astral.sh/uv/), Node 22.22 or newer (`web/.node-version`),
+Prerequisites: [uv](https://docs.astral.sh/uv/), Node 22.22 or newer (`.node-version`),
 Docker (for Postgres), and a chat + embedding model reachable over an OpenAI-compatible API
 (see the README for oMLX and DeepSeek).
 
@@ -32,17 +45,21 @@ uv sync
 cp .env.example .env            # fill in the model settings
 docker compose up -d postgres
 uv run enigram check
-cd web && npm install
+npm --prefix apps/web install
 uv run pre-commit install       # git hooks: ruff, tsc, commit-message lint
 ```
+
+`make install` runs `uv sync`, the npm install and the hook install in one go.
 
 ## Checks That Must Pass
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
 uv run pytest -m "not omlx and not docling"   # fast unit tests
-cd web && npm test && npm run build
+npm --prefix apps/web test && npm --prefix apps/web run build
 ```
+
+The same as `make lint test web-build`.
 
 Run the slower integration tests when your change touches parsing or the LLM path:
 `uv run pytest` (needs the Docling models and, for the `omlx` tests, a running model server).

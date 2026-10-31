@@ -8,5 +8,6 @@ __pycache__/
 .ruff_cache/
 eval/
 jev/
-tests/
-web/
+apps/api/tests/
+apps/api/scripts/
+apps/web/

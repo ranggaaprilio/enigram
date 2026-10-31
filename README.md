@@ -151,7 +151,7 @@ error, and there is no delete yet.
 Measure the latency against your Postgres and embedding model (scratch rows, removed after):
 
 ```bash
-uv run python scripts/memory_latency.py --notes 200 --searches 50
+uv run python apps/api/scripts/memory_latency.py --notes 200 --searches 50
 ```
 
 ## Run as a service
@@ -218,7 +218,7 @@ Tailscale).
 
 ### Web UI
 
-`web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
+`apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
 API. It has three pages:
 
 - **Documents**: drop PDF or Markdown files to upload them; the table follows each job until it
@@ -236,14 +236,14 @@ borrow that key (DNS rebinding, cross-site form posts). To work on the UI, run t
 and (with `ENIGRAM_WEB_KEY` exported when the API has keys):
 
 ```bash
-cd web
+cd apps/web
 npm install
 npm run dev     # http://localhost:5173, proxies /api to ENIGRAM_API_URL (default 127.0.0.1:8080)
 npm test
-npm run build   # type-check and build into web/dist
+npm run build   # type-check and build into apps/web/dist
 ```
 
-The UI needs Node 22.22 or newer (`web/.node-version`).
+The UI needs Node 22.22 or newer (`.node-version`).
 
 ### Index a Git repository
 
@@ -368,6 +368,9 @@ to a graph built by another model until you delete `data/rag_storage` and
 (`data/rag_storage/**/kv_store_llm_response_cache.json`).
 
 ## Development
+
+The backend is in `apps/api/`, the UI in `apps/web/`; run commands from the repository root (see
+CONTRIBUTING.md for the layout, and `make` for shortcuts).
 
 ```bash
 uv run ruff check . && uv run ruff format --check .

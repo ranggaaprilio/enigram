@@ -1,66 +1,21 @@
-[project]
-name = "enigram"
-version = "0.1.0"
-description = "GraphRAG indexing of written documents for agents, with evaluation"
-readme = "README.md"
-authors = [
-    { name = "ranggaaprilio", email = "ranggaaprillio@gmail.com" }
-]
-requires-python = ">=3.12,<3.14"
-dependencies = [
-    "asyncpg>=0.30",
-    "docling>=2.140.0,<3",
-    "fastapi>=0.162.0",
-    "httpx>=0.28.1",
-    "langchain-community<0.4",
-    "laya==0.4.11",
-    "lightrag-hku>=1.5.7,<1.6",
-    "mcp>=2.3,<3",
-    "networkx>=3.7",
-    "openai>=2,<4",
-    "pgvector>=0.4",
-    "python-dotenv>=1.2.4",
-    "python-multipart>=0.0.32",
-    "pyyaml>=6",
-    "ragas==0.4.3",
-    # Not imported directly: listed so [tool.uv.sources] can pick their index (uv only applies
-    # sources to direct dependencies).
-    "torch>=2.14.1",
-    "torchvision>=0.29.1",
-    "transformers>=5.20.1",
-    "uvicorn>=0.54.0",
-]
+# Workspace root, with no package of its own: each app under apps/ with a pyproject.toml is a
+# member. One uv.lock and one .venv (here) cover them all, so `uv run enigram ...` works from the
+# repository root, where .env, data/ and eval/ live.
+[tool.uv.workspace]
+members = ["apps/api"]
 
-[project.scripts]
-enigram = "enigram.adapters.driving.cli:main"
-
-[build-system]
-requires = ["uv_build>=0.11.16,<0.12.0"]
-build-backend = "uv_build"
-
+# Repository-wide tools; each member lists its own test dependencies.
 [dependency-groups]
 dev = [
     "pre-commit>=4.7.0",
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
-    "reportlab>=5.0.1",
     "ruff>=0.17.1",
 ]
 
-# On Linux (the Docker image) PyPI's torch pulls the CUDA libraries: several GB that an image
-# without a GPU never uses. macOS keeps PyPI's torch, which runs on MPS.
-[tool.uv.sources]
-torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
-torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
+# Here, not in apps/api, so a bare `uv run pytest` at the root finds it (pytest also finds it from
+# inside apps/api, searching upwards).
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["apps/api/tests"]
 markers = [
     "docling: needs Docling layout models (slow, downloads once)",
     "omlx: needs a running OMLX server and OMLX_API_KEY",
@@ -68,8 +23,11 @@ markers = [
     "postgres: needs a Postgres reachable at ENIGRAM_TEST_PG_DSN",
 ]
 
+# Ruff reads this for every Python file in the repository (members define no [tool.ruff]).
 [tool.ruff]
 line-length = 100
+# First-party packages for import sorting: one source root per member.
+src = [".", "apps/api/src"]
 extend-exclude = [".claude"]
 
 [tool.ruff.lint]
