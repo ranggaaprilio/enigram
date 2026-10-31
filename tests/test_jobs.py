@@ -1,0 +1,174 @@
+import asyncio
+import json
+import os
+from uuid import uuid4
+
+import asyncpg
+import pytest
+from test_query import success_response
+
+from enigram.errors import EnigramError
+from enigram.jobs import JobStore
+from enigram.query import to_result
+
+pytestmark = pytest.mark.postgres
+
+
+@pytest.fixture
+async def pool():
+    pool = await asyncpg.create_pool(os.environ["ENIGRAM_TEST_PG_DSN"])
+    yield pool
+    await pool.close()
+
+
+@pytest.fixture
+async def store(pool):
+    """A store in its own workspace, so rows never mix with a developer's real queue."""
+    store = JobStore(pool, f"test_{uuid4().hex[:8]}")
+    await store.ensure_schema()
+    yield store
+    for table in ("enigram_jobs", "enigram_queries"):
+        await pool.execute(f"DELETE FROM {table} WHERE workspace = $1", store.workspace)
+
+
+async def test_claim_is_fifo_and_marks_running(store):
+    first = await store.enqueue("index", {"book": "a"})
+    second = await store.enqueue("index", {"book": "b"})
+
+    claimed = [await store.claim(), await store.claim(), await store.claim()]
+
+    assert [j.id if j else None for j in claimed] == [first.id, second.id, None]
+    assert claimed[0].status == "running" and claimed[0].started_at is not None
+    assert claimed[0].payload == {"book": "a"}
+
+
+async def test_concurrent_claims_get_different_jobs(store):
+    await store.enqueue("index", {"book": "a"})
+    await store.enqueue("index", {"book": "b"})
+
+    a, b = await asyncio.gather(store.claim(), store.claim())
+
+    assert {a.id, b.id} == {j.id for j in await store.active_jobs()}
+    assert a.id != b.id
+
+
+async def test_finish_and_requeue(store):
+    done = await store.enqueue("index", {"book": "a"})
+    running = await store.enqueue("index", {"book": "b"})
+    await store.claim()
+    await store.claim()
+
+    await store.finish(done.id, "done", result={"chunks": 3})
+    assert await store.requeue_running() == 1
+
+    finished = await store.get_job(done.id)
+    assert (finished.status, finished.result, finished.finished_at is not None) == (
+        "done",
+        {"chunks": 3},
+        True,
+    )
+    assert [(j.id, j.status) for j in await store.active_jobs()] == [(running.id, "queued")]
+
+
+async def test_workspaces_do_not_see_each_other(store, pool):
+    job = await store.enqueue("index", {"book": "a"})
+    other = JobStore(pool, f"{store.workspace}_other")
+
+    assert await other.claim() is None
+    assert await other.get_job(job.id) is None
+    assert await other.active_jobs() == []
+
+
+async def test_worker_lock_is_exclusive_per_workspace(store, pool):
+    rival = JobStore(pool, store.workspace)
+    async with store.worker_lock():
+        with pytest.raises(EnigramError, match="Another worker"):
+            async with rival.worker_lock():
+                pass
+    async with rival.worker_lock():  # released when the first one exits
+        pass
+
+
+async def test_query_log_round_trip(store):
+    result = to_result("Who designed it?", success_response(), 1.5)
+
+    ok_id = await store.log_query(
+        "api", result.question, result.mode, result=result, api_key="laptop-a"
+    )
+    err_id = await store.log_query("api", "Q?", "naive", error="Connection error.")
+
+    ok, err = await store.get_query(ok_id), await store.get_query(err_id)
+    assert (ok["found"], ok["source"]) == (True, "api")
+    assert ok["result"]["sources"][0]["title"] == "Harbor Signals Study"
+    assert (err["found"], err["result"], err["error"]) == (None, None, "Connection error.")
+    assert (ok["api_key"], err["api_key"]) == ("laptop-a", None)
+    assert (await store.list_queries())[1]["api_key"] == "laptop-a"
+
+
+async def test_list_queries_newest_first_per_workspace(store, pool):
+    ids = [await store.log_query("api", f"Q{i}?", "mix", error="x") for i in range(3)]
+    other = JobStore(pool, f"test_{uuid4().hex[:8]}")
+
+    rows = await store.list_queries(2)
+
+    assert [r["id"] for r in rows] == ids[:0:-1]
+    assert "result" not in rows[0] and rows[0]["question"] == "Q2?"
+    assert await other.list_queries() == []
+
+
+@pytest.fixture
+async def graph_rows(store, pool):
+    """Nodes and an edge in the store's workspace, in LightRAG's own tables (if they exist)."""
+    if not await pool.fetchval("SELECT to_regclass('lightrag_graph_nodes') IS NOT NULL"):
+        pytest.skip("LightRAG graph tables not created yet (index once with Postgres)")
+    nodes = {
+        "Mutation Score": {"entity_type": "concept", "description": "below 60% blocks a release"},
+        "Kestrel": {"entity_type": "organization", "description": "uses 100_percent coverage"},
+        "Other": {"entity_type": "concept", "description": "nothing here"},
+    }
+    for name, props in nodes.items():
+        await pool.execute(
+            "INSERT INTO lightrag_graph_nodes (workspace, id, properties) "
+            "VALUES ($1, $2, $3::jsonb)",
+            store.workspace,
+            name,
+            json.dumps(props),
+        )
+    await pool.execute(
+        "INSERT INTO lightrag_graph_edges (workspace, src_id, tgt_id, properties) "
+        "VALUES ($1, 'Kestrel', 'Mutation Score', $2::jsonb)",
+        store.workspace,
+        json.dumps({"description": "Kestrel gates on 60%", "keywords": "release gate"}),
+    )
+    yield
+    await pool.execute("DELETE FROM lightrag_graph_nodes WHERE workspace = $1", store.workspace)
+
+
+async def test_search_graph_matches_names_and_descriptions_any_case(store, graph_rows):
+    found = await store.search_graph("60%")
+
+    assert [e["name"] for e in found["entities"]] == ["Mutation Score"]
+    assert found["entities"][0]["type"] == "concept"
+    assert found["relations"] == [
+        {
+            "source": "Kestrel",
+            "target": "Mutation Score",
+            "keywords": "release gate",
+            "description": "Kestrel gates on 60%",
+        }
+    ]
+    assert [e["name"] for e in (await store.search_graph("kestrel"))["entities"]] == ["Kestrel"]
+
+
+async def test_search_graph_treats_wildcards_literally_and_limits(store, graph_rows):
+    assert [e["name"] for e in (await store.search_graph("0_p"))["entities"]] == ["Kestrel"]
+    assert (await store.search_graph("%"))["entities"] == [
+        {"name": "Mutation Score", "type": "concept", "description": "below 60% blocks a release"}
+    ]
+    assert len((await store.search_graph("e", limit=1))["entities"]) == 1
+
+
+async def test_search_graph_is_scoped_to_the_workspace(store, pool, graph_rows):
+    other = JobStore(pool, f"{store.workspace}_other")
+
+    assert await other.search_graph("60%") == {"entities": [], "relations": []}

@@ -1,0 +1,74 @@
+# Local PostgreSQL with pgvector for STORAGE_BACKEND=postgres. Production uses a managed
+# Postgres with the pgvector extension instead (RDS, Cloud SQL, Azure, ...).
+#
+# `docker compose up -d postgres` runs only the database (for the CLI on the host);
+# `docker compose up -d --build` also runs the HTTP API, the index worker and the web UI
+# (http://localhost:3000).
+
+x-enigram: &enigram
+  build: .
+  image: enigram:local # one image for both services
+  env_file: .env
+  environment:
+    # These override .env, which points at the host.
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    DATA_DIR: /app/data
+    # Models stay outside compose: oMLX on the host (or LLM_PROVIDER=deepseek).
+    OMLX_BASE_URL: ${COMPOSE_OMLX_BASE_URL:-http://host.docker.internal:8000/v1}
+    # The host's absolute path, mounted at the same path below, so an index built on the host
+    # keeps matching its recorded chunk settings. A Hugging Face model id works too.
+    TOKENIZER_PATH: ${COMPOSE_TOKENIZER_PATH:-${HOME}/.omlx/models/mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ}
+  extra_hosts:
+    - "host.docker.internal:host-gateway" # Linux; Docker Desktop already has it
+  volumes:
+    - ./data:/app/data
+    - ${HOME}/.omlx/models:${HOME}/.omlx/models:ro
+    - model-cache:/root/.cache # Docling layout models and Hugging Face downloads
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-enigram}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DATABASE:-enigram}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+
+  api:
+    <<: *enigram
+    command: ["enigram", "api", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      # API_BIND=0.0.0.0 publishes it on the LAN (for MCP over HTTP); set ENIGRAM_API_KEYS first.
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8080}:8080"
+
+  worker:
+    <<: *enigram
+    # Exactly one per workspace: a second one exits ("Another worker is already indexing").
+    command: ["enigram", "worker"]
+
+  web:
+    build: ./web
+    image: enigram-web:local
+    environment:
+      ENIGRAM_WEB_KEY: ${ENIGRAM_WEB_KEY:-} # nginx sends it to the API on every /api call
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:80" # no login in the UI: localhost only
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  model-cache:

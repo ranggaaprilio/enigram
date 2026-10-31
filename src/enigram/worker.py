@@ -1,0 +1,118 @@
+"""Index worker: runs queued upload, repository, graph-edit and delete jobs one at a time, so
+only one process writes the index."""
+
+import asyncio
+import logging
+
+from enigram.config import Config
+from enigram.graph import GRAPH_JOB_KINDS, apply_graph_job, clear_query_cache
+from enigram.index import delete_document, run_index
+from enigram.jobs import Job, JobStore, open_store
+from enigram.query import open_rag
+from enigram.repos import index_repo
+
+log = logging.getLogger(__name__)
+
+POLL_SECS = 2.0
+
+
+async def _run_graph_job(cfg: Config, store: JobStore, job: Job) -> Job:
+    log.info("[worker] job %d: %s", job.id, job.kind)
+    try:
+        async with open_rag(cfg) as rag:
+            result = await apply_graph_job(rag, job.kind, job.payload)
+            # The CLI and stdio MCP cache answers by question; drop them so they see the edit.
+            result["query_cache_rows_cleared"] = await clear_query_cache(rag)
+    except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
+        log.exception("[worker] job %d failed", job.id)
+        await store.finish(job.id, "failed", error=str(e))
+        return job
+    await store.finish(job.id, "done", result=result)
+    log.info("[worker] job %d: done", job.id)
+    return job
+
+
+async def _run_delete_job(cfg: Config, store: JobStore, job: Job) -> Job:
+    book = job.payload["book"]
+    log.info("[worker] job %d: deleting %s", job.id, book)
+    try:
+        async with open_rag(cfg) as rag:
+            result = await delete_document(cfg, rag, book)
+            result["query_cache_rows_cleared"] = await clear_query_cache(rag)
+    except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
+        log.exception("[worker] job %d failed", job.id)
+        await store.finish(job.id, "failed", error=str(e))
+        return job
+    await store.finish(job.id, "done", result=result)
+    log.info("[worker] job %d: done", job.id)
+    return job
+
+
+async def _run_repo_job(cfg: Config, store: JobStore, job: Job) -> Job:
+    url = job.payload["url"]
+    log.info("[worker] job %d: indexing repository %s", job.id, url)
+    try:
+        result = await index_repo(cfg, url, job.payload.get("ref"))
+    except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
+        log.exception("[worker] job %d failed", job.id)
+        await store.finish(job.id, "failed", error=str(e))
+        return job
+    failed = result["failed"]
+    status = "failed" if failed else "done"
+    error = f"{len(failed)} documents failed: {', '.join(failed[:5])}" if failed else None
+    await store.finish(job.id, status, result=result, error=error)
+    log.info("[worker] job %d: %s", job.id, status)
+    return job
+
+
+async def process_next(cfg: Config, store: JobStore) -> Job | None:
+    """Claim and run one job; None when the queue is empty."""
+    job = await store.claim()
+    if job is None:
+        return None
+    if job.kind == "index_repo":
+        return await _run_repo_job(cfg, store, job)
+    if job.kind == "delete_document":
+        return await _run_delete_job(cfg, store, job)
+    if job.kind in GRAPH_JOB_KINDS:
+        return await _run_graph_job(cfg, store, job)
+    if job.kind != "index":
+        await store.finish(job.id, "failed", error=f"unknown job kind {job.kind!r}")
+        return job
+
+    book = job.payload["book"]
+    log.info("[worker] job %d: indexing %s", job.id, book)
+    try:
+        run = await run_index(cfg, cfg.books_dir, only=[book])
+    except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
+        log.exception("[worker] job %d failed", job.id)
+        await store.finish(job.id, "failed", error=str(e))
+        return job
+
+    entry = run.books.get(book)
+    if entry is None:  # already indexed and unchanged
+        status = "done"
+        await store.finish(job.id, status, result={"status": "indexed", "up_to_date": True})
+    else:
+        status = "failed" if entry.get("status") == "failed" else "done"
+        report = str(run.report_path) if run.report_path else None
+        await store.finish(
+            job.id, status, result={**entry, "report": report}, error=entry.get("error")
+        )
+    log.info("[worker] job %d: %s", job.id, status)
+    return job
+
+
+async def run_worker(cfg: Config) -> None:
+    store = await open_store(cfg)
+    try:
+        async with store.worker_lock():
+            # Safe under the lock: no other worker can be running these.
+            if requeued := await store.requeue_running():
+                log.info("[worker] requeued %d interrupted job(s)", requeued)
+            log.info("[worker] waiting for jobs in workspace %r", cfg.workspace)
+            while True:
+                if await process_next(cfg, store) is None:
+                    await asyncio.sleep(POLL_SECS)
+    finally:
+        await store.close()

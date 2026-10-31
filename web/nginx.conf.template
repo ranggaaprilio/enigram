@@ -1,0 +1,35 @@
+# nginx adds the UI's API key to every /api call, so only localhost may use it: any other Host
+# (a DNS-rebinding page) is dropped, and a foreign Origin (a cross-site form post) is refused.
+server {
+    listen 80 default_server;
+    return 444;
+}
+
+server {
+    listen 80;
+    server_name localhost 127.0.0.1;
+    root /usr/share/nginx/html;
+
+    location /api/ {
+        # Browsers send Origin on cross-site posts; same-origin calls and curl send none or ours.
+        if ($http_origin !~* "^(|http://(localhost|127\.0\.0\.1)(:[0-9]+)?)$") {
+            return 403;
+        }
+        # A recreated api container gets a new IP: a variable makes nginx resolve `api` again
+        # (every 10 s) instead of once at start. The resolver is the container's own DNS server,
+        # filled in from /etc/resolv.conf (NGINX_ENTRYPOINT_LOCAL_RESOLVERS in the Dockerfile).
+        resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
+        set $api_upstream api:8080;
+        rewrite ^/api/(.*)$ /$1 break;  # strip /api; the query string is kept
+        proxy_pass http://$api_upstream;
+        # The browser has no login: nginx holds the UI's API key and overrides any header sent.
+        proxy_set_header Authorization "Bearer ${ENIGRAM_WEB_KEY}";
+        # Queries on a local LLM take 30-60 s; uploads are whole PDFs.
+        proxy_read_timeout 300s;
+        client_max_body_size 200m;
+    }
+
+    location / {
+        try_files $uri /index.html;  # client-side routes such as /trace/12
+    }
+}
