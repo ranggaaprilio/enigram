@@ -6,7 +6,7 @@ import logging
 
 from enigram.application.graph_edits import GRAPH_JOB_KINDS, apply_graph_job
 from enigram.application.indexing import delete_document, run_index
-from enigram.application.ports import Deps, JobRepository
+from enigram.application.ports import CodeGraphRepository, Deps, JobRepository
 from enigram.application.repo_sync import index_repo
 from enigram.bootstrap import build_deps
 from enigram.config import Config
@@ -49,11 +49,17 @@ async def _run_delete_job(cfg: Config, store: JobRepository, deps: Deps, job: Jo
     return job
 
 
-async def _run_repo_job(cfg: Config, store: JobRepository, deps: Deps, job: Job) -> Job:
+async def _run_repo_job(
+    cfg: Config,
+    store: JobRepository,
+    deps: Deps,
+    job: Job,
+    graph: CodeGraphRepository | None,
+) -> Job:
     url = job.payload["url"]
     log.info("[worker] job %d: indexing repository %s", job.id, url)
     try:
-        result = await index_repo(cfg, deps, url, job.payload.get("ref"))
+        result = await index_repo(cfg, deps, url, job.payload.get("ref"), graph=graph)
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
         await store.finish(job.id, "failed", error=str(e))
@@ -66,13 +72,16 @@ async def _run_repo_job(cfg: Config, store: JobRepository, deps: Deps, job: Job)
     return job
 
 
-async def process_next(cfg: Config, store: JobRepository, deps: Deps) -> Job | None:
-    """Claim and run one job; None when the queue is empty."""
+async def process_next(
+    cfg: Config, store: JobRepository, deps: Deps, graph: CodeGraphRepository | None = None
+) -> Job | None:
+    """Claim and run one job; None when the queue is empty. `graph` is the code graph that
+    repository jobs fill."""
     job = await store.claim()
     if job is None:
         return None
     if job.kind == "index_repo":
-        return await _run_repo_job(cfg, store, deps, job)
+        return await _run_repo_job(cfg, store, deps, job, graph)
     if job.kind == "delete_document":
         return await _run_delete_job(cfg, store, deps, job)
     if job.kind in GRAPH_JOB_KINDS:
@@ -108,13 +117,14 @@ async def run_worker(cfg: Config) -> None:
     deps = build_deps(cfg)
     store = await deps.open_store()
     try:
+        graph = await deps.new_code_graph(store)
         async with store.worker_lock():
             # Safe under the lock: no other worker can be running these.
             if requeued := await store.requeue_running():
                 log.info("[worker] requeued %d interrupted job(s)", requeued)
             log.info("[worker] waiting for jobs in workspace %r", cfg.workspace)
             while True:
-                if await process_next(cfg, store, deps) is None:
+                if await process_next(cfg, store, deps, graph) is None:
                     await asyncio.sleep(POLL_SECS)
     finally:
         await store.close()

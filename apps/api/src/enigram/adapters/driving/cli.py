@@ -51,6 +51,25 @@ def _build_parser() -> argparse.ArgumentParser:
         default="mix",
         help="mix = GraphRAG (graph + vector, default); naive = vector-only baseline",
     )
+    query.add_argument(
+        "--scope",
+        choices=("docs", "code"),
+        default="docs",
+        help="docs = the LightRAG index (default); code = the indexed TypeScript repository "
+        "(ignores --mode)",
+    )
+    query.add_argument("--repo", help="repository URL when more than one is indexed")
+
+    repo = sub.add_parser(
+        "repo", help="index one repository (Markdown and TypeScript code graph) without the API"
+    )
+    repo.add_argument("url", help="https URL of a public repository")
+    repo.add_argument("--ref", help="branch or tag (default: the default branch)")
+    repo.add_argument(
+        "--limit",
+        type=int,
+        help="summarise only the first N entry points (quick trial)",
+    )
 
     sub.add_parser("mcp", help="run the MCP server on stdio (for Claude Code)")
 
@@ -148,12 +167,53 @@ async def _index(cfg: Config, args: argparse.Namespace) -> int:
     return 1 if run.any_failed else 0
 
 
-async def _query(cfg: Config, question: str, mode: str) -> int:
+def _pick_repo(repos: list[dict], url: str | None) -> dict:
+    if url:
+        picked = [r for r in repos if r["url"] == url]
+        if not picked:
+            raise EnigramError(f"{url} is not indexed; run `enigram repo {url}`")
+        return picked[0]
+    if not repos:
+        raise EnigramError("No repository indexed; run `enigram repo <url>`")
+    if len(repos) > 1:
+        raise EnigramError("Several repositories are indexed; pass --repo <url>")
+    return repos[0]
+
+
+async def _query_code(cfg: Config, question: str, url: str | None) -> int:
+    from enigram.application.code_query import answer_code_question
+    from enigram.bootstrap import build_deps
+
+    deps = build_deps(cfg)
+    store = await deps.open_store()
+    try:
+        graph = await deps.new_code_graph(store)
+        repo = _pick_repo(await graph.list_repos(), url)
+        result = await answer_code_question(
+            cfg, deps.generator(), graph, repo["id"], repo["indexed_sha"], question
+        )
+    finally:
+        await store.close()
+    print(result.answer)
+    if result.sources:
+        print("\nSources:")
+        for s in result.sources:
+            print(f"  [{s.ref}] {s.citation} ({s.title})")
+    print(
+        f"({result.mode}, {result.query_secs:.1f}s, "
+        f"{result.tokens_in} in / {result.tokens_out} out tokens)"
+    )
+    return 0 if result.found else 1
+
+
+async def _query(cfg: Config, args: argparse.Namespace) -> int:
+    if args.scope == "code":
+        return await _query_code(cfg, args.question, args.repo)
     from enigram.application.querying import answer_question
     from enigram.bootstrap import build_deps
 
     async with build_deps(cfg).open_engine() as engine:
-        result = await answer_question(engine, question, mode)
+        result = await answer_question(engine, args.question, args.mode)
     print(result.answer)
     if result.sources:
         print("\nSources:")
@@ -161,6 +221,35 @@ async def _query(cfg: Config, question: str, mode: str) -> int:
             print(f"  [{s.ref}] {s.citation.rsplit(' | #', 1)[0]}")
     print(f"({result.mode}, {result.query_secs:.1f}s)")
     return 0 if result.found else 1
+
+
+async def _repo(cfg: Config, args: argparse.Namespace) -> int:
+    import json
+    from datetime import datetime
+
+    from enigram.application.files import atomic_write_text
+    from enigram.application.repo_sync import index_repo
+    from enigram.bootstrap import build_deps
+
+    deps = build_deps(cfg)
+    store = await deps.open_store()
+    try:
+        graph = await deps.new_code_graph(store)
+        result = await index_repo(cfg, deps, args.url, args.ref, graph=graph, limit=args.limit)
+    finally:
+        await store.close()
+    for key, value in result["code"].items():
+        if key != "diagnostics_sample":
+            print(f"code.{key}: {json.dumps(value, default=str)}")
+    print(
+        f"markdown: {result['files']} files, {len(result['indexed'])} indexed, "
+        f"{len(result['failed'])} failed, {result['unchanged']} unchanged"
+    )
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = cfg.reports_dir / f"repo-index-{stamp}.json"
+    atomic_write_text(path, json.dumps(result, indent=2, default=str))
+    print(f"result: {path}")
+    return 1 if result["failed"] else 0
 
 
 def _golden_check(cfg: Config, path: Path) -> int:
@@ -294,7 +383,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "index":
             return asyncio.run(_index(cfg, args))
         if args.command == "query":
-            return asyncio.run(_query(cfg, args.question, args.mode))
+            return asyncio.run(_query(cfg, args))
+        if args.command == "repo":
+            return asyncio.run(_repo(cfg, args))
         if args.command == "mcp":
             from enigram.adapters.driving.mcp_server import create_server
 

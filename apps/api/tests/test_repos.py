@@ -141,8 +141,13 @@ def fake_sync(cfg, deps, monkeypatch):
             self.indexed: list[list[str]] = []
             self.deleted: list[str] = []
             self.opened = 0
+            self.code: list[tuple] = []  # index_code calls: (graph, url, ref, limit, tsconfig seen)
 
     fake = FakeSync()
+
+    async def fake_index_code(cfg, deps, graph, root, url, ref, *, limit=None):
+        fake.code.append((graph, url, ref, limit, (root / "tsconfig.json").exists()))
+        return {"symbols": 3, "summaries": {"flows": 1}}
 
     def fake_clone(url, ref, dest):
         _tree(dest, fake.tree)
@@ -179,6 +184,7 @@ def fake_sync(cfg, deps, monkeypatch):
 
     monkeypatch.setattr(repos, "clone", fake_clone)
     monkeypatch.setattr(repos, "run_index", fake_run_index)
+    monkeypatch.setattr(repos, "index_code", fake_index_code)
     deps.open_engine = fake_open_engine
     monkeypatch.setattr(repos, "delete_document", fake_delete)
     return fake
@@ -226,8 +232,46 @@ async def test_index_repo_never_overwrites_an_uploaded_document(cfg, deps, fake_
 async def test_index_repo_without_markdown(cfg, deps, fake_sync):
     fake_sync.tree = {"main.py": "print()"}
 
-    with pytest.raises(EnigramError, match="No Markdown files"):
+    with pytest.raises(EnigramError, match="No Markdown or TypeScript"):
         await repos.index_repo(cfg, deps, URL)
+
+
+async def test_index_repo_markdown_only_skips_the_code_graph(cfg, deps, fake_sync):
+    fake_sync.tree = {"README.md": "# Readme"}
+
+    result = await repos.index_repo(cfg, deps, URL)
+
+    assert result["code"] == {"skipped": "no tsconfig.json at the repository root"}
+    assert fake_sync.code == []
+
+
+async def test_index_repo_typescript_only_indexes_code(cfg, deps, fake_sync):
+    fake_sync.tree = {"tsconfig.json": "{}", "src/main.ts": "bootstrap();"}
+    graph = object()
+
+    result = await repos.index_repo(cfg, deps, URL, "eval-v1", graph=graph, limit=2)
+
+    assert fake_sync.code == [(graph, URL, "eval-v1", 2, True)]  # inside the clone
+    assert result["code"] == {"symbols": 3, "summaries": {"flows": 1}}
+    assert (result["files"], result["indexed"], result["report"]) == (0, [], None)
+    assert fake_sync.indexed == []  # no Markdown: run_index never runs
+
+
+async def test_index_repo_indexes_markdown_and_code_from_one_clone(cfg, deps, fake_sync):
+    fake_sync.tree = {"tsconfig.json": "{}", "README.md": "# Readme"}
+
+    result = await repos.index_repo(cfg, deps, URL, graph=object())
+
+    assert len(fake_sync.code) == 1 and result["code"]["symbols"] == 3
+    assert result["indexed"] == ["org-handbook--README"]
+
+
+async def test_index_repo_typescript_needs_postgres(cfg, deps, fake_sync):
+    fake_sync.tree = {"tsconfig.json": "{}", "README.md": "# Readme"}
+
+    with pytest.raises(EnigramError, match="STORAGE_BACKEND=postgres"):
+        await repos.index_repo(cfg, deps, URL)
+    assert fake_sync.indexed == []
 
 
 async def test_index_repo_checks_the_url_again(cfg, deps, fake_sync):

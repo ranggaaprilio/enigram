@@ -1,6 +1,7 @@
 """Answers with citations: what a query returns, whatever engine produced it."""
 
 from dataclasses import dataclass, field
+from typing import Any
 
 # LightRAG "hybrid" is graph-only (local + global); "mix" adds vector search over chunks,
 # which is the graph + vector retrieval the PRD asks for.
@@ -18,7 +19,9 @@ QUERY_MODES = ("mix", "naive")
 class Source:
     ref: int  # the [n] used in the answer's References section
     title: str
-    section: str  # "A > B", "-" when the chunk had no heading, "" if the citation was truncated
+    # "A > B", "-" when the chunk had no heading, "" if the citation was truncated; for code
+    # answers the origin kind of the source: "flow" (a flow summary) or "code" (source text).
+    section: str
     pages: str  # "3-4", "" if unknown
     citation: str  # the raw LightRAG file_path, always present
 
@@ -56,7 +59,13 @@ class QueryResult:
     # False when retrieval found nothing or the answer LLM said the context has no answer.
     found: bool = True
     query_secs: float = 0.0
-    mode: str = QUERY_MODE  # "mix" (GraphRAG) or "naive" (vector baseline)
+    # "mix" (GraphRAG), "naive" (vector baseline), "code" (code graph) or "agent+repo" (the
+    # grep-the-clone baseline).
+    mode: str = QUERY_MODE
+    # Tokens of the direct model calls that produced the answer (LightRAG calls are not counted).
+    tokens_in: int = 0
+    tokens_out: int = 0
+    extra: dict[str, Any] = field(default_factory=dict)  # JSON-serialisable system details
 
 
 def parse_citation(ref: int, citation: str) -> Source:

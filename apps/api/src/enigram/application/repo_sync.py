@@ -1,5 +1,6 @@
-"""Index the Markdown files of a public Git repository: shallow clone, copy into books_dir as
-<repo>--<path>.md, then the normal index pipeline. Re-running re-syncs the repository."""
+"""Index a public Git repository: shallow clone; its Markdown files are copied into books_dir as
+<repo>--<path>.md and go through the normal index pipeline, and a TypeScript repository
+(tsconfig.json at the root) also gets a code graph. Re-running re-syncs the repository."""
 
 import asyncio
 import logging
@@ -12,9 +13,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from enigram.application.code_index import index_code, is_ts_repo
 from enigram.application.files import file_sha256
 from enigram.application.indexing import delete_document, load_manifest, run_index, save_manifest
-from enigram.application.ports import Deps
+from enigram.application.ports import CodeGraphRepository, Deps
 from enigram.config import Config
 from enigram.domain.chunk import MARKDOWN_SUFFIXES, book_name
 from enigram.domain.errors import EnigramError
@@ -124,62 +126,87 @@ def clone(url: str, ref: str | None, dest: Path) -> None:
         raise EnigramError(f"git clone failed: {lines[-1] if lines else done.returncode}")
 
 
-async def index_repo(cfg: Config, deps: Deps, url: str, ref: str | None = None) -> dict[str, Any]:
-    """Index (or re-sync) a repository's Markdown: changed files are deleted and indexed again,
-    files gone from the repository are deleted, uploaded documents are never overwritten."""
+async def index_repo(
+    cfg: Config,
+    deps: Deps,
+    url: str,
+    ref: str | None = None,
+    *,
+    graph: CodeGraphRepository | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Index (or re-sync) a repository from one clone. Markdown: changed files are deleted and
+    indexed again, files gone from the repository are deleted, uploaded documents are never
+    overwritten. TypeScript: the code graph and flow summaries (`limit`: only the first N entry
+    points), which need the Postgres `graph`."""
     repo = check_repo_url(url, cfg.repo_hosts)
     ref = check_ref(ref)
+    removed: list[str] = []
+    changed: list[str] = []
+    rel_paths: dict[str, str] = {}
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         log.info("[repo] cloning %s%s", url, f" ({ref})" if ref else "")
         await asyncio.to_thread(clone, url, ref, root)
         files = collect_markdown(root, repo)
-        if not files:
-            raise EnigramError(f"No Markdown files in {url}")
+        if is_ts_repo(root):
+            if graph is None:
+                raise EnigramError(
+                    "Indexing a TypeScript repository needs STORAGE_BACKEND=postgres"
+                )
+            code = await index_code(cfg, deps, graph, root, url, ref, limit=limit)
+        else:
+            code = {"skipped": "no tsconfig.json at the repository root"}
+            if not files:
+                raise EnigramError(f"No Markdown or TypeScript (tsconfig.json) in {url}")
 
-        books = load_manifest(cfg)["books"]
-        foreign = [b for b in files if b in books and books[b].get("repo") != url]
-        if foreign:
-            raise EnigramError(
-                f"Documents not from {url} already use these names: {', '.join(foreign[:5])}"
+        if files:
+            books = load_manifest(cfg)["books"]
+            foreign = [b for b in files if b in books and books[b].get("repo") != url]
+            if foreign:
+                raise EnigramError(
+                    f"Documents not from {url} already use these names: {', '.join(foreign[:5])}"
+                )
+            ours = {b for b, entry in books.items() if entry.get("repo") == url}
+            removed = sorted(ours - files.keys())
+            changed = sorted(
+                b for b in files if b in ours and books[b].get("sha256") != file_sha256(files[b])
             )
-        ours = {b for b, entry in books.items() if entry.get("repo") == url}
-        removed = sorted(ours - files.keys())
-        changed = sorted(
-            b for b in files if b in ours and books[b].get("sha256") != file_sha256(files[b])
-        )
-        if removed or changed:
-            # Only on a re-sync: a fresh deployment has no index to open.
-            async with deps.open_engine() as engine:
-                for book in [*removed, *changed]:
-                    await delete_document(cfg, engine, book)
-                await engine.clear_query_cache()
+            if removed or changed:
+                # Only on a re-sync: a fresh deployment has no index to open.
+                async with deps.open_engine() as engine:
+                    for book in [*removed, *changed]:
+                        await delete_document(cfg, engine, book)
+                    await engine.clear_query_cache()
 
-        cfg.books_dir.mkdir(parents=True, exist_ok=True)
-        for book, path in files.items():
-            shutil.copyfile(path, cfg.books_dir / f"{book}.md")
-        root = root.resolve()
-        rel_paths = {book: path.relative_to(root).as_posix() for book, path in files.items()}
+            cfg.books_dir.mkdir(parents=True, exist_ok=True)
+            for book, path in files.items():
+                shutil.copyfile(path, cfg.books_dir / f"{book}.md")
+            root = root.resolve()
+            rel_paths = {book: path.relative_to(root).as_posix() for book, path in files.items()}
 
-    run = await run_index(cfg, deps, cfg.books_dir, only=sorted(files))
+    statuses: dict[str, Any] = {}
+    run = None
+    if files:
+        run = await run_index(cfg, deps, cfg.books_dir, only=sorted(files))
+        # After run_index, which rewrites the entries it indexes.
+        manifest = load_manifest(cfg)
+        for book, rel in rel_paths.items():
+            if entry := manifest["books"].get(book):
+                entry.update(repo=url, repo_path=rel, repo_ref=ref)
+        save_manifest(cfg, manifest)
+        statuses = {b: e.get("status") for b, e in run.books.items()}
 
-    # After run_index, which rewrites the entries it indexes.
-    manifest = load_manifest(cfg)
-    for book, rel in rel_paths.items():
-        if entry := manifest["books"].get(book):
-            entry.update(repo=url, repo_path=rel, repo_ref=ref)
-    save_manifest(cfg, manifest)
-
-    statuses = {b: e.get("status") for b, e in run.books.items()}
-    log.info("[repo] %s: %d files, %d indexed", url, len(files), len(statuses))
+    log.info("[repo] %s: %d Markdown files, %d indexed", url, len(files), len(statuses))
     return {
         "repo": url,
         "ref": ref,
         "files": len(files),
         "indexed": sorted(b for b, s in statuses.items() if s == "indexed"),
         "failed": sorted(b for b, s in statuses.items() if s == "failed"),
-        "unchanged": len(run.up_to_date),
+        "unchanged": len(run.up_to_date) if run else 0,
         "deleted": removed,
         "reindexed": changed,
-        "report": str(run.report_path) if run.report_path else None,
+        "report": str(run.report_path) if run and run.report_path else None,
+        "code": code,
     }
