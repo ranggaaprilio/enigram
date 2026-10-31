@@ -5,10 +5,10 @@ Skipped unless OMLX_API_KEY is set (omlx) or the Laya checkpoint is present (lay
 
 import pytest
 
-from enigram import judges
-from enigram.adapters.laya_scorer import LayaScorer
-from enigram.adapters.openai_llm import OpenAIChatModel
-from enigram.adapters.ragas_scorer import RagasScorer
+from enigram.adapters.driven.laya_scorer import LayaScorer
+from enigram.adapters.driven.openai_llm import OpenAIChatModel
+from enigram.adapters.driven.ragas_scorer import RagasScorer
+from enigram.application.evaluation import judges
 from enigram.config import Config
 
 CONTEXT = (

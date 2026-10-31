@@ -6,10 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from enigram import index, repos
-from enigram.errors import EnigramError
-from enigram.index import IndexRun
-from enigram.parse import file_sha256
+from enigram.application import indexing as index
+from enigram.application import repo_sync as repos
+from enigram.application.files import file_sha256
+from enigram.application.indexing import IndexRun
+from enigram.domain.errors import EnigramError
 
 HOSTS = ("github.com", "gitlab.com")
 URL = "https://github.com/org/handbook"

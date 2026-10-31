@@ -15,12 +15,12 @@ import sys
 import time
 from uuid import uuid4
 
-from enigram.adapters.openai_llm import make_embedding_func
-from enigram.adapters.postgres_jobs import open_store
-from enigram.adapters.postgres_memory import PostgresMemoryStore
-from enigram.cli import _setup_logging
+from enigram.adapters.driven.openai_llm import make_embedding_func
+from enigram.adapters.driven.postgres_jobs import open_store
+from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
+from enigram.adapters.driving.cli import _setup_logging
 from enigram.config import Config
-from enigram.errors import EnigramError
+from enigram.domain.errors import EnigramError
 
 TOPICS = (
     "The staging database moved to a new host after the outage",
@@ -90,7 +90,7 @@ def main() -> int:
     try:
         cfg = Config.from_env()
         _setup_logging(cfg.log_level)
-        for name in ("enigram.memory", "httpx", "httpx2"):  # one line per call
+        for name in ("enigram.adapters.driven.postgres_memory", "httpx", "httpx2"):  # per call
             logging.getLogger(name).setLevel(logging.WARNING)
         if cfg.storage != "postgres":
             raise EnigramError("Memories live in Postgres: set STORAGE_BACKEND=postgres")

@@ -13,8 +13,8 @@ from lightrag.llm.openai import openai_complete_if_cache, openai_embed
 from lightrag.utils import EmbeddingFunc, wrap_embedding_func_with_attrs
 
 from enigram.config import Config
-from enigram.errors import OmlxUnavailableError
-from enigram.llm import repair_relation_lines, strip_think
+from enigram.domain.errors import OmlxUnavailableError
+from enigram.domain.llm_output import repair_relation_lines, strip_think
 
 log = logging.getLogger(__name__)
 

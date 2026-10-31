@@ -1,30 +1,14 @@
-"""Jobs the API queues for the index worker, and the document list that includes them."""
+"""The document list: what the manifest says, overridden by queued or running jobs."""
 
-from dataclasses import asdict, dataclass
-from datetime import datetime
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
+from enigram.application.indexing import list_sources, load_manifest
 from enigram.config import Config
-from enigram.index import list_sources, load_manifest
-from enigram.parse import book_name
+from enigram.domain.chunk import book_name
 
 if TYPE_CHECKING:
-    from enigram.ports import JobRepository
-
-ACTIVE = ("queued", "running")  # then done | failed
-
-
-@dataclass(frozen=True)
-class Job:
-    id: int
-    kind: str  # "index"
-    payload: dict[str, Any]  # {"book": ..., "file": ...}
-    status: str
-    result: dict[str, Any] | None
-    error: str | None
-    created_at: datetime
-    started_at: datetime | None
-    finished_at: datetime | None
+    from enigram.application.ports import JobRepository
 
 
 async def documents_overview(cfg: Config, store: "JobRepository | None") -> list[dict[str, Any]]:

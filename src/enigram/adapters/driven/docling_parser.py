@@ -9,13 +9,13 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from enigram.application.files import file_sha256
 from enigram.config import Config
-from enigram.parse import (
+from enigram.domain.chunk import (
     MIN_CHUNK_TOKENS,
     Chunk,
     ParsedBook,
     book_name,
-    file_sha256,
     is_backmatter,
     is_front_matter,
     is_markdown,

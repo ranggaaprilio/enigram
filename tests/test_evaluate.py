@@ -5,8 +5,8 @@ from test_golden_run import FailOnQuestion
 from test_judges import FakeLaya
 from test_query import FakeRag, success_response
 
-from enigram import evaluate
-from enigram.adapters.laya_scorer import LayaScorer
+from enigram.adapters.driven.laya_scorer import LayaScorer
+from enigram.application.evaluation import evaluate
 
 CLAIM = "Captain Mira Okafor designed the protocol [1]."
 UNANSWERABLE_Q = "How many lighthouses does the harbor have?"

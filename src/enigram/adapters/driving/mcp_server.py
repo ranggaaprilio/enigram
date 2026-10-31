@@ -1,5 +1,5 @@
 """MCP server exposing the knowledge base to agents over stdio, or over HTTP when mounted by the
-API (`api.py`), which supplies its own knowledge engine and job store."""
+API (`http_api.py`), which supplies its own knowledge engine and job store."""
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -12,13 +12,14 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from enigram.adapters.lightrag_engine import open_engine
+from enigram.adapters.driven.lightrag_engine import open_engine
+from enigram.application.documents import documents_overview
+from enigram.application.ports import JobRepository, KnowledgeEngine, MemoryRepository
+from enigram.application.querying import answer_question
 from enigram.config import Config
-from enigram.errors import EnigramError
-from enigram.jobs import documents_overview
-from enigram.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX
-from enigram.ports import JobRepository, KnowledgeEngine, MemoryRepository
-from enigram.query import QUERY_MODE, ContextChunk, Source, answer_question
+from enigram.domain.answer import QUERY_MODE, ContextChunk, Source
+from enigram.domain.errors import EnigramError
+from enigram.domain.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX
 
 
 @dataclass

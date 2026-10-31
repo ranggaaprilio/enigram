@@ -4,8 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from enigram.errors import EnigramError
-from enigram.files import atomic_write_text
+from enigram.application.files import atomic_write_text
+from enigram.domain.errors import EnigramError
 
 MIN_CLAIM_WORDS = 4
 _LABEL_LINE = re.compile(r"^- \[(?P<mark>[ xX-])\] (?P<claim_id>[\w.-]+-c\d{2,})\b")

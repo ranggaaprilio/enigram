@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from enigram.adapters.lightrag_engine import LightRagEngine
-from enigram.errors import EnigramError
-from enigram.graph import apply_graph_job
+from enigram.adapters.driven.lightrag_engine import LightRagEngine
+from enigram.application.graph_edits import apply_graph_job
+from enigram.domain.errors import EnigramError
 
 
 class FakeGraphRag:

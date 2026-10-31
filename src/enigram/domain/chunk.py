@@ -1,14 +1,10 @@
 """Documents as chunks: what is kept, how chunks are cited and stored. The converter itself is
-a DocumentParser adapter (adapters/docling_parser.py)."""
+a DocumentParser adapter (adapters/driven/docling_parser.py); reading and writing chunk
+files is in application/files.py."""
 
-import dataclasses
-import hashlib
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-
-from enigram.files import atomic_write_text
 
 # Bump whenever chunk selection or ordering changes: chunk ids are positional, so an index built
 # by another parser version no longer matches the chunks on disk.
@@ -66,14 +62,6 @@ class ParsedBook:
 
 def book_name(path: Path) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", path.stem).strip("-") or "book"
-
-
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _citation_safe(text: str) -> str:
@@ -136,18 +124,3 @@ def citation_path(chunk: Chunk) -> str:
     pages = f"p.{chunk.page_start}-{chunk.page_end}" if chunk.page_start else "-"
     citation = f"{chunk.title} | {headings} | {pages}"
     return citation[: MAX_CITATION_CHARS - len(suffix)] + suffix
-
-
-def write_chunks_jsonl(path: Path, chunks: list[Chunk]) -> None:
-    lines = [json.dumps(dataclasses.asdict(c), ensure_ascii=False) + "\n" for c in chunks]
-    atomic_write_text(path, "".join(lines))
-
-
-def read_chunks_jsonl(path: Path) -> list[Chunk]:
-    chunks = []
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            row = json.loads(line)
-            row["headings"] = tuple(row["headings"])
-            chunks.append(Chunk(**row))
-    return chunks

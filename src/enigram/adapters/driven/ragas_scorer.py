@@ -3,10 +3,10 @@
 import math
 from typing import Any
 
-from enigram.adapters.openai_llm import DEEPSEEK_NO_THINKING
-from enigram.claims import split_claims
+from enigram.adapters.driven.openai_llm import DEEPSEEK_NO_THINKING
+from enigram.application.evaluation.claims import split_claims
+from enigram.application.evaluation.judges import JUDGE_TEMPERATURE
 from enigram.config import Config
-from enigram.judges import JUDGE_TEMPERATURE
 
 
 def _no_think() -> dict[str, Any]:

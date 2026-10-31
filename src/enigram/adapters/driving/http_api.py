@@ -18,19 +18,20 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from enigram.adapters.lightrag_engine import open_engine
-from enigram.adapters.openai_llm import make_embedding_func
-from enigram.adapters.postgres_jobs import open_store
-from enigram.adapters.postgres_memory import PostgresMemoryStore
+from enigram.adapters.driven.lightrag_engine import open_engine
+from enigram.adapters.driven.openai_llm import make_embedding_func
+from enigram.adapters.driven.postgres_jobs import open_store
+from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
+from enigram.adapters.driving.mcp_server import AppContext, create_server
+from enigram.application.documents import documents_overview
+from enigram.application.indexing import list_sources, load_manifest
+from enigram.application.ports import JobRepository
+from enigram.application.querying import answer_question
+from enigram.application.repo_sync import check_ref, check_repo_url
 from enigram.config import Config
-from enigram.errors import EnigramError
-from enigram.index import list_sources, load_manifest
-from enigram.jobs import documents_overview
-from enigram.parse import SOURCE_SUFFIXES, book_name
-from enigram.ports import JobRepository
-from enigram.query import QUERY_MODE, answer_question
-from enigram.repos import check_ref, check_repo_url
-from enigram.server import AppContext, create_server
+from enigram.domain.answer import QUERY_MODE
+from enigram.domain.chunk import SOURCE_SUFFIXES, book_name
+from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
 
@@ -334,7 +335,7 @@ def create_app(cfg: Config) -> FastAPI:
             raise HTTPException(404, f"No query {query_id}")
         return row
 
-    # Graph edits are jobs: only the worker writes the index (see worker.py).
+    # Graph edits are jobs: only the worker writes the index (see adapters/driving/worker.py).
     async def enqueue_graph(request: Request, kind: str, payload: dict[str, Any]) -> Any:
         # The key's name records who edited.
         job = await store_of(request).enqueue(kind, {**payload, "api_key": _key_name(request)})

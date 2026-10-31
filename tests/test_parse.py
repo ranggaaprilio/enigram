@@ -2,16 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from enigram import parse
-from enigram.adapters import docling_parser
-from enigram.parse import (
-    Chunk,
-    book_name,
-    citation_path,
-    is_backmatter,
-    read_chunks_jsonl,
-    write_chunks_jsonl,
-)
+from enigram.adapters.driven import docling_parser
+from enigram.application.files import read_chunks_jsonl, write_chunks_jsonl
+from enigram.domain import chunk as parse
+from enigram.domain.chunk import Chunk, book_name, citation_path, is_backmatter
 
 
 def _chunk(**overrides) -> Chunk:
@@ -39,7 +33,7 @@ def test_citation_path_without_headings():
 
 
 def test_citation_path_without_pages_for_markdown():
-    from enigram.query import parse_citation
+    from enigram.domain.answer import parse_citation
 
     citation = citation_path(_chunk(page_start=0, page_end=0))
     assert citation == "book | Ch 1 | - | #00000"

@@ -2,10 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from enigram import golden
-from enigram.errors import EnigramError
-from enigram.index import save_manifest
-from enigram.parse import Chunk, write_chunks_jsonl
+from enigram.application.evaluation import golden
+from enigram.application.files import write_chunks_jsonl
+from enigram.application.indexing import save_manifest
+from enigram.domain.chunk import Chunk
+from enigram.domain.errors import EnigramError
 
 INTRO = "LLM-powered coding agents are widely adopted across software development tasks."
 METHOD = "We collected pull requests from the AIDev dataset and labelled their review comments."

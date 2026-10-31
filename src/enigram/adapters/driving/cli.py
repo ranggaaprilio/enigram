@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from enigram.config import Config
-from enigram.errors import EnigramError
+from enigram.domain.errors import EnigramError
 
 
 def _page_range(value: str) -> tuple[int, int]:
@@ -96,7 +96,7 @@ def _setup_logging(level: str) -> None:
 
 
 async def _check(cfg: Config) -> int:
-    from enigram.adapters.openai_llm import check_omlx
+    from enigram.adapters.driven.openai_llm import check_omlx
 
     result = await check_omlx(cfg)
     print(f"✓ models served: {', '.join(result.models)}")
@@ -108,8 +108,8 @@ async def _check(cfg: Config) -> int:
 
 
 async def _index(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.application.indexing import run_index
     from enigram.bootstrap import build_deps
-    from enigram.index import run_index
 
     run = await run_index(cfg, build_deps(cfg), args.folder, pages=args.pages, only=args.only)
     for book in run.up_to_date:
@@ -123,8 +123,8 @@ async def _index(cfg: Config, args: argparse.Namespace) -> int:
 
 
 async def _query(cfg: Config, question: str, mode: str) -> int:
+    from enigram.application.querying import answer_question
     from enigram.bootstrap import build_deps
-    from enigram.query import answer_question
 
     async with build_deps(cfg).open_engine() as engine:
         result = await answer_question(engine, question, mode)
@@ -138,7 +138,7 @@ async def _query(cfg: Config, question: str, mode: str) -> int:
 
 
 def _golden_check(cfg: Config, path: Path) -> int:
-    from enigram.golden import (
+    from enigram.application.evaluation.golden import (
         CATEGORIES,
         TARGET_PER_CATEGORY,
         TARGET_UNANSWERABLE,
@@ -168,8 +168,8 @@ def _golden_check(cfg: Config, path: Path) -> int:
 
 
 async def _golden_answer(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.application.evaluation.golden_run import run_golden
     from enigram.bootstrap import build_deps
-    from enigram.golden_run import run_golden
 
     run = await run_golden(cfg, build_deps(cfg), args.file, args.mode, args.limit)
     print(f"answers: {run.answers_path}")
@@ -180,7 +180,7 @@ async def _golden_answer(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _golden_labels(sheet: Path) -> int:
-    from enigram.claims import count_claims, label_summary, read_labels
+    from enigram.application.evaluation.claims import count_claims, label_summary, read_labels
 
     s = label_summary(read_labels(sheet), count_claims(sheet))
     target = "✓" if s["labelled"] >= 30 else "✗"
@@ -192,8 +192,8 @@ def _golden_labels(sheet: Path) -> int:
 
 
 async def _eval(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.application.evaluation.evaluate import run_eval
     from enigram.bootstrap import build_deps
-    from enigram.evaluate import run_eval
 
     run = await run_eval(cfg, build_deps(cfg), args.file, args.labels, args.limit)
     for criterion, verdict in run.verdicts.items():
@@ -219,8 +219,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "query":
             return asyncio.run(_query(cfg, args.question, args.mode))
         if args.command == "mcp":
-            from enigram.report import find_graph_file
-            from enigram.server import create_server
+            from enigram.adapters.driving.mcp_server import create_server
+            from enigram.application.report import find_graph_file
 
             # Fail with a readable error before the host only sees a server that died.
             # (Postgres has no file to look for; open_engine checks it when the server starts.)
@@ -231,13 +231,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "api":
             import uvicorn
 
-            from enigram.api import create_app
+            from enigram.adapters.driving.http_api import create_app
 
             # log_config=None keeps _setup_logging instead of uvicorn's own config.
             uvicorn.run(create_app(cfg), host=args.host, port=args.port, log_config=None)
             return 0
         if args.command == "worker":
-            from enigram.worker import run_worker
+            from enigram.adapters.driving.worker import run_worker
 
             try:
                 asyncio.run(run_worker(cfg))
@@ -252,8 +252,8 @@ def main(argv: list[str] | None = None) -> int:
             return _golden_labels(args.sheet)
         if args.command == "eval":
             return asyncio.run(_eval(cfg, args))
+        from enigram.application.report import build_report
         from enigram.bootstrap import build_deps
-        from enigram.report import build_report
 
         graph = asyncio.run(build_deps(cfg).load_graph())
         print(f"report: {build_report(cfg, graph, review_file=args.review)}")

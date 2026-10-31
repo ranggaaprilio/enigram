@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from enigram.application.files import file_sha256
+from enigram.application.indexing import delete_document, load_manifest, run_index, save_manifest
+from enigram.application.ports import Deps
 from enigram.config import Config
-from enigram.errors import EnigramError
-from enigram.index import delete_document, load_manifest, run_index, save_manifest
-from enigram.parse import MARKDOWN_SUFFIXES, book_name, file_sha256
-from enigram.ports import Deps
+from enigram.domain.chunk import MARKDOWN_SUFFIXES, book_name
+from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
 

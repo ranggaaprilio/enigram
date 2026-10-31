@@ -1,14 +1,14 @@
 """Spike: does editing an entity change the next answer to the same question? (web PRD Phase 2)
 
-For each case: ask, append a marked fact to the top entity's description with `aedit_entity`, ask
+For each case: ask, append a marked fact to the top entity's description with `edit_entity`, ask
 again (served from the answer cache?), clear the query-answer cache, ask a third time, and check
 whether the marker reached the answer. Every description is restored and the query cache cleared
 at the end, so the index is left as it was found.
 
-Only `cache_type='query'` rows are deleted (`enigram.graph.clear_query_cache`), never the whole
+Only `cache_type='query'` rows are deleted (`KnowledgeEngine.clear_query_cache`), never the whole
 LLM cache.
 
-Questions are asked with `enigram.query.PRECEDENCE` (graph descriptions win over chunks), as
+Questions are asked with `querying.PRECEDENCE` (graph descriptions win over chunks), as
 every query is; `--no-precedence` asks without it, to compare.
 
 Needs STORAGE_BACKEND=postgres and no running worker. Usage:
@@ -25,15 +25,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from lightrag import LightRAG
-
-from enigram.cli import _setup_logging
+from enigram.adapters.driving.cli import _setup_logging
+from enigram.application.evaluation.golden import load_golden
+from enigram.application.files import atomic_write_text
+from enigram.application.ports import KnowledgeEngine
+from enigram.application.querying import PRECEDENCE, answer_question
+from enigram.bootstrap import build_deps
 from enigram.config import Config
-from enigram.errors import EnigramError
-from enigram.files import atomic_write_text
-from enigram.golden import load_golden
-from enigram.graph import clear_query_cache
-from enigram.query import PRECEDENCE, answer_question, open_rag
+from enigram.domain.errors import EnigramError
 
 log = logging.getLogger("spike_edit")
 
@@ -77,22 +76,25 @@ CASES = (
 
 
 async def run_case(
-    rag: LightRAG, case: Case, question: str, backup: dict[str, str], user_prompt: str | None
+    engine: KnowledgeEngine,
+    case: Case,
+    question: str,
+    backup: dict[str, str],
+    user_prompt: str | None,
 ) -> dict:
     async def ask():
-        return await answer_question(rag, question, user_prompt=user_prompt)
+        return await answer_question(engine, question, user_prompt=user_prompt)
 
     before = await ask()
     if not before.entities:
         raise EnigramError(f"{case.golden_id}: no entities in the trace to edit")
     entity = before.entities[0].name
-    info = await rag.get_entity_info(entity)
-    original = info["graph_data"]["description"]
+    original = (await engine.get_entity(entity))["description"]
     backup.setdefault(entity, original)  # first sighting is the real original
-    await rag.aedit_entity(entity, {"description": f"{original}\n{case.fact}"})
+    await engine.edit_entity(entity, {"description": f"{original}\n{case.fact}"})
 
     stale = await ask()  # same key: expected to be a cache hit
-    cleared = await clear_query_cache(rag)
+    cleared = await engine.clear_query_cache()
     after = await ask()
 
     def marked(text: str) -> bool:
@@ -125,22 +127,22 @@ async def run_spike(cfg: Config, golden_path: Path, precedence: bool = True) -> 
     backup_path = cfg.eval_dir / f"spike-edit-backup-{stamp}.json"
     results: list[dict[str, Any]] = []
     backup: dict[str, str] = {}
-    async with open_rag(cfg) as rag:
+    async with build_deps(cfg).open_engine() as engine:
         try:
             for case in CASES:
                 log.info("[spike] %s", case.golden_id)
                 try:
                     user_prompt = PRECEDENCE if precedence else None
                     question = questions[case.golden_id]
-                    results.append(await run_case(rag, case, question, backup, user_prompt))
+                    results.append(await run_case(engine, case, question, backup, user_prompt))
                 finally:
                     # Written after every case so a crash still leaves the originals on disk.
                     atomic_write_text(backup_path, json.dumps(backup, indent=2, ensure_ascii=False))
         finally:
             for entity, description in backup.items():
-                await rag.aedit_entity(entity, {"description": description})
+                await engine.edit_entity(entity, {"description": description})
             # Answers cached while an edit was live would outlive the restore.
-            restored_cleared = await clear_query_cache(rag)
+            restored_cleared = await engine.clear_query_cache()
             log.info("[spike] restored %d entities", len(backup))
 
     out = cfg.eval_dir / f"spike-edit-{stamp}.json"

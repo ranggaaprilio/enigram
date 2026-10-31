@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from enigram import stats
+from enigram.domain import stats
 
 
 def test_doc_id_strips_lightrag_chunk_suffix():

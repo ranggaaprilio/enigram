@@ -5,9 +5,9 @@ import asyncpg
 import numpy as np
 import pytest
 
-from enigram.adapters.postgres_memory import PostgresMemoryStore
-from enigram.errors import EnigramError
-from enigram.memory import MEMORY_MAX_CHARS
+from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
+from enigram.domain.errors import EnigramError
+from enigram.domain.memory import MEMORY_MAX_CHARS
 
 pytestmark = pytest.mark.postgres
 

@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from enigram.errors import EnigramError
-from enigram.ports import DeleteOutcome, KnowledgeEngine
+from enigram.application.ports import DeleteOutcome, KnowledgeEngine
+from enigram.domain.errors import EnigramError
 
 GRAPH_JOB_KINDS = (
     "edit_entity",

@@ -4,9 +4,9 @@ import pytest
 from test_golden import INTRO, METHOD, Q2, question_yaml, write_golden
 from test_query import FakeRag, success_response
 
-from enigram.claims import split_claims
-from enigram.errors import EnigramError
-from enigram.golden_run import run_golden
+from enigram.application.evaluation.claims import split_claims
+from enigram.application.evaluation.golden_run import run_golden
+from enigram.domain.errors import EnigramError
 
 
 class FailOnQuestion(FakeRag):

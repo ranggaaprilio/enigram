@@ -3,13 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from enigram import judges
-from enigram.adapters import openai_llm
-from enigram.adapters.laya_scorer import LayaScorer
-from enigram.adapters.openai_llm import OpenAIChatModel
-from enigram.adapters.ragas_scorer import RagasScorer
+from enigram.adapters.driven import openai_llm
+from enigram.adapters.driven.laya_scorer import LayaScorer
+from enigram.adapters.driven.openai_llm import OpenAIChatModel
+from enigram.adapters.driven.ragas_scorer import RagasScorer
+from enigram.application.evaluation import judges
 from enigram.config import Config
-from enigram.errors import EnigramError
+from enigram.domain.errors import EnigramError
 
 CHUNKS = [
     {"ref": 1, "chunk_id": "p-c00000-chunk-000", "text": "Intro text."},

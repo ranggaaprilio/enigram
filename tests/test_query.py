@@ -1,10 +1,12 @@
 import pytest
 from lightrag.query_validation import RAGQueryTooShortError
 
-from enigram import cli, query
-from enigram.adapters import lightrag_engine
-from enigram.errors import EnigramError
-from enigram.parse import Chunk, citation_path
+from enigram.adapters.driven import lightrag_engine
+from enigram.adapters.driving import cli
+from enigram.application import querying
+from enigram.domain import answer
+from enigram.domain.chunk import Chunk, citation_path
+from enigram.domain.errors import EnigramError
 
 CITE_1 = "Harbor Signals Study | Chapter 1 Harbor Signals | p.1-2 | #00000"
 CITE_2 = "Harbor Signals Study | Chapter 2 The Storm Archive | p.3-3 | #00002"
@@ -89,14 +91,14 @@ class FakeRag:
     ],
 )
 def test_parse_citation(citation, title, section, pages):
-    source = query.parse_citation(3, citation)
+    source = answer.parse_citation(3, citation)
     assert (source.ref, source.title, source.section, source.pages) == (3, title, section, pages)
     assert source.citation == citation
 
 
 def test_parse_citation_inverts_citation_path():
     chunk = Chunk("p-c00012", "p", "AI ¦ DLC", ("Intro", "Scope"), 3, 4, "text", 30)
-    source = query.parse_citation(1, citation_path(chunk))
+    source = answer.parse_citation(1, citation_path(chunk))
     assert (source.title, source.section, source.pages) == ("AI ¦ DLC", "Intro > Scope", "3-4")
 
 
@@ -108,14 +110,16 @@ def test_to_result_maps_success():
         (1, "Chapter 1 Harbor Signals"),
         (2, "Chapter 2 The Storm Archive"),
     ]
-    assert result.chunks[1] == query.ContextChunk(
+    assert result.chunks[1] == answer.ContextChunk(
         2, "harbor-book-c00002-chunk-000", "The Storm Archive records every vessel."
     )
     assert result.entities == [
-        query.ContextEntity("Lighthouse Protocol", "Method", "Coordinates ships.")
+        answer.ContextEntity("Lighthouse Protocol", "Method", "Coordinates ships.")
     ]
     assert result.relations == [
-        query.ContextRelation("Mira Okafor", "Lighthouse Protocol", "designed", "Mira designed it.")
+        answer.ContextRelation(
+            "Mira Okafor", "Lighthouse Protocol", "designed", "Mira designed it."
+        )
     ]
     assert result.found and result.query_secs == 1.5
 
@@ -168,7 +172,7 @@ def test_to_result_failure_raises():
 
 async def test_answer_question_uses_mix_mode_and_budget():
     rag = FakeRag()
-    result = await query.answer_question(
+    result = await querying.answer_question(
         lightrag_engine.LightRagEngine(rag), "Who designed the protocol?"
     )
 
@@ -184,20 +188,22 @@ async def test_answer_question_uses_mix_mode_and_budget():
 
 async def test_answer_question_sends_the_precedence_instruction():
     rag = FakeRag()
-    await query.answer_question(lightrag_engine.LightRagEngine(rag), "Who designed the protocol?")
-    await query.answer_question(
+    await querying.answer_question(
+        lightrag_engine.LightRagEngine(rag), "Who designed the protocol?"
+    )
+    await querying.answer_question(
         lightrag_engine.LightRagEngine(rag), "Who designed the protocol?", user_prompt=None
     )
 
     assert [p.user_prompt for p in rag.params] == [
-        f"{query.PRECEDENCE} {query.NO_ANSWER_RULE}",
-        query.NO_ANSWER_RULE,
+        f"{querying.PRECEDENCE} {querying.NO_ANSWER_RULE}",
+        querying.NO_ANSWER_RULE,
     ]
 
 
 async def test_answer_question_runs_naive_baseline():
     rag = FakeRag()
-    result = await query.answer_question(
+    result = await querying.answer_question(
         lightrag_engine.LightRagEngine(rag), "Who designed the protocol?", "naive"
     )
 
@@ -210,7 +216,7 @@ async def test_answer_question_runs_naive_baseline():
 async def test_answer_question_rejects_unknown_mode():
     rag = FakeRag()
     with pytest.raises(EnigramError, match="mode must be one of"):
-        await query.answer_question(
+        await querying.answer_question(
             lightrag_engine.LightRagEngine(rag), "Who designed the protocol?", "hybrid"
         )
     assert rag.params == []
@@ -230,14 +236,14 @@ def test_cli_modes_match_query_modes():
     golden_commands = commands["golden"]._subparsers._group_actions[0].choices
     for subparser in (commands["query"], golden_commands["answer"]):
         (mode,) = [a for a in subparser._actions if a.dest == "mode"]
-        assert tuple(mode.choices) == query.QUERY_MODES
-        assert mode.default == query.QUERY_MODE
+        assert tuple(mode.choices) == answer.QUERY_MODES
+        assert mode.default == answer.QUERY_MODE
 
 
 async def test_answer_question_rejects_too_short_question():
     rag = FakeRag(error=RAGQueryTooShortError("RAG query is too short."))
     with pytest.raises(EnigramError, match="too short"):
-        await query.answer_question(lightrag_engine.LightRagEngine(rag), "a")
+        await querying.answer_question(lightrag_engine.LightRagEngine(rag), "a")
 
 
 async def test_open_engine_without_index_raises(cfg):

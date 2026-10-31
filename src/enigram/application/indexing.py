@@ -7,21 +7,17 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from enigram import report
-from enigram.config import Config
-from enigram.errors import EnigramError
-from enigram.files import atomic_write_text
-from enigram.parse import (
-    PARSER_VERSION,
-    SOURCE_SUFFIXES,
-    Chunk,
-    book_name,
-    citation_path,
+from enigram.application import report
+from enigram.application.files import (
+    atomic_write_text,
     file_sha256,
     read_chunks_jsonl,
     write_chunks_jsonl,
 )
-from enigram.ports import Deps, KnowledgeEngine
+from enigram.application.ports import Deps, KnowledgeEngine
+from enigram.config import Config
+from enigram.domain.chunk import PARSER_VERSION, SOURCE_SUFFIXES, Chunk, book_name, citation_path
+from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
 

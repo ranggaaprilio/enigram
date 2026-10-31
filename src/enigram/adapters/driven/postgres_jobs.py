@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING, Any
 import asyncpg
 
 from enigram.config import Config
-from enigram.errors import EnigramError
-from enigram.jobs import ACTIVE, Job
+from enigram.domain.errors import EnigramError
+from enigram.domain.job import ACTIVE, Job
 
 if TYPE_CHECKING:
-    from enigram.query import QueryResult
+    from enigram.domain.answer import QueryResult
 
 # CREATE ... IF NOT EXISTS is the whole migration story. `kind` + `payload` leave room for the
 # graph edit jobs of a later phase without an ALTER.

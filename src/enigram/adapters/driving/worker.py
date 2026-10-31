@@ -4,14 +4,14 @@ only one process writes the index."""
 import asyncio
 import logging
 
-from enigram.adapters.postgres_jobs import open_store
+from enigram.adapters.driven.postgres_jobs import open_store
+from enigram.application.graph_edits import GRAPH_JOB_KINDS, apply_graph_job
+from enigram.application.indexing import delete_document, run_index
+from enigram.application.ports import Deps, JobRepository
+from enigram.application.repo_sync import index_repo
 from enigram.bootstrap import build_deps
 from enigram.config import Config
-from enigram.graph import GRAPH_JOB_KINDS, apply_graph_job
-from enigram.index import delete_document, run_index
-from enigram.jobs import Job
-from enigram.ports import Deps, JobRepository
-from enigram.repos import index_repo
+from enigram.domain.job import Job
 
 log = logging.getLogger(__name__)
 

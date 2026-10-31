@@ -9,8 +9,8 @@ from datetime import datetime
 import asyncpg
 import numpy as np
 
-from enigram.errors import EnigramError
-from enigram.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX, Memory, MemorySearch
+from enigram.domain.errors import EnigramError
+from enigram.domain.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX, Memory, MemorySearch
 
 log = logging.getLogger(__name__)
 

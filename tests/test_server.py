@@ -7,10 +7,10 @@ from mcp import Client
 from test_query import FakeRag
 from test_worker import FakeJobStore
 
-from enigram.adapters import lightrag_engine
-from enigram.errors import EnigramError
-from enigram.memory import Memory, MemorySearch
-from enigram.server import AppContext, create_server
+from enigram.adapters.driven import lightrag_engine
+from enigram.adapters.driving.mcp_server import AppContext, create_server
+from enigram.domain.errors import EnigramError
+from enigram.domain.memory import Memory, MemorySearch
 
 
 class FakeMemoryStore:

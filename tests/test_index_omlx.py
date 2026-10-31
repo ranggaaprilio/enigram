@@ -6,8 +6,9 @@ import json
 import networkx as nx
 import pytest
 
-from enigram import index, report
-from enigram.adapters import lightrag_engine, openai_llm
+from enigram.adapters.driven import lightrag_engine, openai_llm
+from enigram.application import indexing as index
+from enigram.application import report
 from enigram.bootstrap import build_deps
 from enigram.config import Config
 

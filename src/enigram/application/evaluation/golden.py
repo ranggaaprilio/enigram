@@ -7,10 +7,11 @@ from typing import Any
 
 import yaml
 
+from enigram.application.files import read_chunks_jsonl
+from enigram.application.indexing import load_manifest
 from enigram.config import Config
-from enigram.errors import EnigramError
-from enigram.index import load_manifest
-from enigram.parse import Chunk, read_chunks_jsonl
+from enigram.domain.chunk import Chunk
+from enigram.domain.errors import EnigramError
 
 UNANSWERABLE = "unanswerable"  # the papers do not hold the answer; the system should say so
 CATEGORIES = ("single_hop", "multi_section", "multi_paper", UNANSWERABLE)

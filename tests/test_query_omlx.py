@@ -4,11 +4,11 @@ import dataclasses
 
 import pytest
 
-from enigram import index
-from enigram.adapters.lightrag_engine import open_engine
+from enigram.adapters.driven.lightrag_engine import open_engine
+from enigram.application import indexing as index
+from enigram.application.querying import answer_question
 from enigram.bootstrap import build_deps
 from enigram.config import Config
-from enigram.query import answer_question
 
 
 @pytest.fixture

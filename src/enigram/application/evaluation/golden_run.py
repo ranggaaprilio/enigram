@@ -7,14 +7,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from enigram.claims import split_claims, write_label_sheet
+from enigram.application.evaluation.claims import split_claims, write_label_sheet
+from enigram.application.evaluation.golden import GoldenQuestion, check_golden
+from enigram.application.files import atomic_write_text, file_sha256
+from enigram.application.ports import Deps, KnowledgeEngine
+from enigram.application.querying import answer_question
 from enigram.config import Config
-from enigram.errors import EnigramError
-from enigram.files import atomic_write_text
-from enigram.golden import GoldenQuestion, check_golden
-from enigram.parse import file_sha256
-from enigram.ports import Deps, KnowledgeEngine
-from enigram.query import QUERY_MODES, answer_question
+from enigram.domain.answer import QUERY_MODES
+from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
 

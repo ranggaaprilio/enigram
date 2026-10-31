@@ -10,22 +10,25 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from enigram import stats
-from enigram.claims import read_labelled_claims
-from enigram.config import Config
-from enigram.files import atomic_write_text
-from enigram.golden import CATEGORIES, UNANSWERABLE
-from enigram.golden_run import answer_golden, load_questions, write_golden_run
-from enigram.index import load_manifest
-from enigram.judges import (
+from enigram.application.evaluation.claims import read_labelled_claims
+from enigram.application.evaluation.golden import CATEGORIES, UNANSWERABLE
+from enigram.application.evaluation.golden_run import (
+    answer_golden,
+    load_questions,
+    write_golden_run,
+)
+from enigram.application.evaluation.judges import (
     JUDGE_TEMPERATURE,
     claim_premises,
     judge_abstention,
     judge_claims_llm,
 )
-from enigram.parse import file_sha256
-from enigram.ports import AnswerScorer, ChatModel, ClaimScorer, Deps
-from enigram.query import QUERY_MODES
+from enigram.application.files import atomic_write_text, file_sha256
+from enigram.application.indexing import load_manifest
+from enigram.application.ports import AnswerScorer, ChatModel, ClaimScorer, Deps
+from enigram.config import Config
+from enigram.domain import stats
+from enigram.domain.answer import QUERY_MODES
 
 log = logging.getLogger(__name__)
 

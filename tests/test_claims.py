@@ -1,7 +1,7 @@
 import pytest
 
-from enigram import claims
-from enigram.errors import EnigramError
+from enigram.application.evaluation import claims
+from enigram.domain.errors import EnigramError
 
 ANSWER = """### Overview
 

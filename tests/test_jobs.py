@@ -7,9 +7,9 @@ import asyncpg
 import pytest
 from test_query import success_response
 
-from enigram.adapters.lightrag_engine import to_result
-from enigram.adapters.postgres_jobs import PostgresJobStore
-from enigram.errors import EnigramError
+from enigram.adapters.driven.lightrag_engine import to_result
+from enigram.adapters.driven.postgres_jobs import PostgresJobStore
+from enigram.domain.errors import EnigramError
 
 pytestmark = pytest.mark.postgres
 

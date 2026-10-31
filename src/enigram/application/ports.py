@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     import networkx as nx
 
-    from enigram.jobs import Job
-    from enigram.memory import MemorySearch
-    from enigram.parse import ParsedBook
-    from enigram.query import QueryResult
+    from enigram.domain.answer import QueryResult
+    from enigram.domain.chunk import ParsedBook
+    from enigram.domain.job import Job
+    from enigram.domain.memory import MemorySearch
 
 
 @dataclass(frozen=True)

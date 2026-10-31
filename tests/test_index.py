@@ -2,13 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from enigram import index
-from enigram.adapters import lightrag_engine
-from enigram.adapters.lightrag_engine import LightRagEngine
+from enigram.adapters.driven import lightrag_engine
+from enigram.adapters.driven.lightrag_engine import LightRagEngine
+from enigram.application import indexing as index
+from enigram.application.files import atomic_write_text, file_sha256
 from enigram.bootstrap import build_deps
-from enigram.errors import EnigramError
-from enigram.files import atomic_write_text
-from enigram.parse import Chunk, file_sha256
+from enigram.domain.chunk import Chunk
+from enigram.domain.errors import EnigramError
 
 
 def _chunk(i: int) -> Chunk:

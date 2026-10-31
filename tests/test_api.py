@@ -6,10 +6,11 @@ from test_query import FakeRag
 from test_server import FakeMemoryStore
 from test_worker import FakeJobStore
 
-from enigram import api, index
-from enigram.adapters import lightrag_engine
+from enigram.adapters.driven import lightrag_engine
+from enigram.adapters.driving import http_api as api
+from enigram.application import indexing as index
 from enigram.config import Config
-from enigram.errors import EnigramError
+from enigram.domain.errors import EnigramError
 
 PDF = b"%PDF-1.4 fake paper"
 LAPTOP_KEY = "l" * 32

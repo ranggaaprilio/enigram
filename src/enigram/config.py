@@ -4,7 +4,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from enigram.errors import EnigramError
+from enigram.domain.errors import EnigramError
 
 # LightRAG re-chunks anything longer than this. Docling chunks are capped at
 # CHUNK_MAX_TOKENS (Qwen tokenizer) and LightRAG counts with tiktoken, so the

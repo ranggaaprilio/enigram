@@ -4,10 +4,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from enigram import worker
-from enigram.errors import EnigramError
-from enigram.index import IndexRun
-from enigram.jobs import ACTIVE, Job
+from enigram.adapters.driving import worker
+from enigram.application.indexing import IndexRun
+from enigram.domain.errors import EnigramError
+from enigram.domain.job import ACTIVE, Job
 
 
 class FakeJobStore:

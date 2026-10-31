@@ -12,7 +12,7 @@ import networkx as nx
 from lightrag.constants import GRAPH_FIELD_SEP
 
 from enigram.config import Config
-from enigram.errors import EnigramError
+from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
 

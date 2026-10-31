@@ -3,9 +3,10 @@ import json
 import networkx as nx
 import pytest
 
-from enigram import index, report
-from enigram.adapters.lightrag_engine import load_graph
-from enigram.errors import EnigramError
+from enigram.adapters.driven.lightrag_engine import load_graph
+from enigram.application import indexing as index
+from enigram.application import report
+from enigram.domain.errors import EnigramError
 
 
 def _graph() -> nx.Graph:

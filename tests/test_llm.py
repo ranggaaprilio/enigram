@@ -2,10 +2,10 @@ import dataclasses
 
 import pytest
 
-from enigram import llm
-from enigram.adapters import openai_llm
+from enigram.adapters.driven import openai_llm
 from enigram.config import Config
-from enigram.errors import EnigramError
+from enigram.domain import llm_output as llm
+from enigram.domain.errors import EnigramError
 
 
 def test_config_missing_key_raises(clean_env):

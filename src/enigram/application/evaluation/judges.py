@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any
 
-from enigram.ports import ChatModel
+from enigram.application.ports import ChatModel
 
 log = logging.getLogger(__name__)
 

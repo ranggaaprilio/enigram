@@ -10,12 +10,11 @@ from lightrag import LightRAG, QueryParam
 from lightrag.base import DocStatus
 from lightrag.query_validation import QueryValidationError
 
-from enigram import report
-from enigram.adapters.openai_llm import make_embedding_func, make_llm_func
+from enigram.adapters.driven.openai_llm import make_embedding_func, make_llm_func
+from enigram.application import report
+from enigram.application.ports import DeleteOutcome
 from enigram.config import LIGHTRAG_CHUNK_TOKEN_SIZE, Config
-from enigram.errors import EnigramError
-from enigram.ports import DeleteOutcome
-from enigram.query import (
+from enigram.domain.answer import (
     NO_ANSWER_MARKER,
     QUERY_MODE,
     ContextChunk,
@@ -24,6 +23,7 @@ from enigram.query import (
     QueryResult,
     parse_citation,
 )
+from enigram.domain.errors import EnigramError
 
 # PGTableGraphStorage keeps the graph in plain tables, so no Apache AGE extension is needed
 # (managed Postgres such as RDS or Cloud SQL does not offer AGE). The vectors need pgvector.

@@ -150,7 +150,7 @@ def golden_env(cfg, tmp_path, monkeypatch):
     that installs a fake LightRAG."""
     from test_golden import INTRO, METHOD, Q1, Q2, question_yaml, write_golden, write_index
 
-    from enigram.adapters import lightrag_engine
+    from enigram.adapters.driven import lightrag_engine
 
     write_index(cfg)
     cfg.rag_dir.mkdir(parents=True)
