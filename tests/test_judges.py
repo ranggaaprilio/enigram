@@ -5,7 +5,9 @@ import pytest
 
 from enigram import judges
 from enigram.adapters import openai_llm
+from enigram.adapters.laya_scorer import LayaScorer
 from enigram.adapters.openai_llm import OpenAIChatModel
+from enigram.adapters.ragas_scorer import RagasScorer
 from enigram.config import Config
 from enigram.errors import EnigramError
 
@@ -144,7 +146,7 @@ def test_laya_scores_max_probability_over_premises():
     agent = FakeLaya()
     claims = [("claim one is here", ["Intro text.", CHUNKS[1]["text"]]), ("claim two", ["x"])]
 
-    results = judges.score_claims_laya(agent, claims)
+    results = LayaScorer(agent).score_claims(claims)
 
     assert results == [
         {"p_grounded": 0.9, "truncated": True},
@@ -166,7 +168,7 @@ async def test_ragas_scorer_isolates_failed_and_nan_metrics():
     async def nan(**kwargs):
         return SimpleNamespace(value=math.nan)
 
-    scorer = object.__new__(judges.RagasScorer)
+    scorer = object.__new__(RagasScorer)
     scorer.faithfulness = SimpleNamespace(ascore=ok)
     scorer.answer_relevancy = SimpleNamespace(ascore=boom)
     scorer.answer_correctness = SimpleNamespace(ascore=nan)

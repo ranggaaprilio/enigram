@@ -6,6 +6,7 @@ from test_judges import FakeLaya
 from test_query import FakeRag, success_response
 
 from enigram import evaluate
+from enigram.adapters.laya_scorer import LayaScorer
 
 CLAIM = "Captain Mira Okafor designed the protocol [1]."
 UNANSWERABLE_Q = "How many lighthouses does the harbor have?"
@@ -22,9 +23,9 @@ class FakeScorer:
         )
 
 
-def _install(monkeypatch, install, rag):
+def _install(monkeypatch, install, rag, deps):
     install(rag)
-    monkeypatch.setattr(evaluate, "RagasScorer", FakeScorer)
+    deps.answer_scorer = FakeScorer
 
     async def llm(judge, claims, contexts):
         return [True] * len(claims)
@@ -35,7 +36,7 @@ def _install(monkeypatch, install, rag):
         return question == UNANSWERABLE_Q
 
     monkeypatch.setattr(evaluate, "judge_abstention", abstention)
-    monkeypatch.setattr(evaluate, "load_laya", lambda cfg: FakeLaya())
+    deps.claim_scorer = lambda: LayaScorer(FakeLaya())
 
 
 def _rag_with_claim() -> FakeRag:
@@ -46,7 +47,7 @@ def _rag_with_claim() -> FakeRag:
 
 async def test_run_eval_scores_both_systems_and_writes_report(cfg, deps, golden_env, monkeypatch):
     path, install = golden_env
-    _install(monkeypatch, install, _rag_with_claim())
+    _install(monkeypatch, install, _rag_with_claim(), deps)
     sheet = cfg.eval_dir / "my-labels.md"
     sheet.parent.mkdir(parents=True, exist_ok=True)
     sheet.write_text(f"- [-] q01-c01 {CLAIM}\n- [x] q09-c01 A label for a removed question.\n")
@@ -98,7 +99,7 @@ async def test_run_eval_isolates_failed_answers_and_reports_trend(
     cfg, deps, golden_env, monkeypatch
 ):
     path, install = golden_env
-    _install(monkeypatch, install, FailOnQuestion(Q2))
+    _install(monkeypatch, install, FailOnQuestion(Q2), deps)
 
     first = await evaluate.run_eval(cfg, deps, path, [])
     second = await evaluate.run_eval(cfg, deps, path, [])
@@ -114,7 +115,7 @@ async def test_run_eval_isolates_failed_answers_and_reports_trend(
 
 async def test_run_eval_measures_abstention_both_ways(cfg, deps, golden_env, tmp_path, monkeypatch):
     _, install = golden_env
-    _install(monkeypatch, install, _rag_with_claim())
+    _install(monkeypatch, install, _rag_with_claim(), deps)
     graded = []
 
     class CountingScorer(FakeScorer):
@@ -122,7 +123,7 @@ async def test_run_eval_measures_abstention_both_ways(cfg, deps, golden_env, tmp
             graded.append(question)
             return await super().score(question, answer, contexts, reference)
 
-    monkeypatch.setattr(evaluate, "RagasScorer", CountingScorer)
+    deps.answer_scorer = CountingScorer
     path = write_golden(
         tmp_path / "golden-u.yaml",
         "questions:\n"

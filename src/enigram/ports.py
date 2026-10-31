@@ -143,6 +143,24 @@ class ChatModel(Protocol):
     ) -> str: ...
 
 
+class AnswerScorer(Protocol):
+    """Reference-based answer metrics (faithfulness, relevancy, correctness)."""
+
+    async def score(
+        self, question: str, answer: str, contexts: list[str], reference: str
+    ) -> tuple[dict[str, float | None], dict[str, str]]:
+        """Scores per metric (None when it failed) and the reason per failure."""
+        ...
+
+
+class ClaimScorer(Protocol):
+    """A second, non-LLM opinion on whether each claim is grounded."""
+
+    def score_claims(self, claims: list[tuple[str, list[str]]]) -> list[dict[str, Any]]:
+        """Per (claim, premises): {"p_grounded": float | None, "truncated": bool}."""
+        ...
+
+
 @dataclass
 class Deps:
     """The driven side, as factories: each use case opens what it needs when it needs it (no
@@ -155,3 +173,6 @@ class Deps:
     new_parser: Callable[[], DocumentParser]
     check_llm: Callable[[], Awaitable[Any]]  # fails fast on a misconfigured LLM endpoint
     judge: Callable[[], ChatModel]  # the evaluation judge model
+    answer_scorer: Callable[[], AnswerScorer]
+    claim_scorer: Callable[[], ClaimScorer]  # loads a local model: only built when needed
+    query_budget: dict[str, int]  # the engine's retrieval token caps, recorded in eval reports

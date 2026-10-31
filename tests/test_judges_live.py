@@ -6,7 +6,9 @@ Skipped unless OMLX_API_KEY is set (omlx) or the Laya checkpoint is present (lay
 import pytest
 
 from enigram import judges
+from enigram.adapters.laya_scorer import LayaScorer
 from enigram.adapters.openai_llm import OpenAIChatModel
+from enigram.adapters.ragas_scorer import RagasScorer
 from enigram.config import Config
 
 CONTEXT = (
@@ -20,7 +22,7 @@ INVERTED = "Only 86.9% of repositories have guidelines for AI agent usage."
 @pytest.mark.omlx
 async def test_ragas_and_llm_judge_catch_the_inverted_claim():
     cfg = Config.from_env()
-    scorer = judges.RagasScorer(cfg)
+    scorer = RagasScorer(cfg)
     question = "What share of the studied projects lack guidelines for AI agent usage?"
 
     good, _ = await scorer.score(question, GROUNDED, [CONTEXT], GROUNDED)
@@ -37,8 +39,8 @@ async def test_ragas_and_llm_judge_catch_the_inverted_claim():
 
 @pytest.mark.laya
 def test_laya_returns_grounded_probabilities():
-    agent = judges.load_laya(Config.from_env())
-    results = judges.score_claims_laya(agent, [(GROUNDED, [CONTEXT]), (INVERTED, [CONTEXT])])
+    scorer = LayaScorer.load(Config.from_env())
+    results = scorer.score_claims([(GROUNDED, [CONTEXT]), (INVERTED, [CONTEXT])])
     for result in results:
         assert 0.0 <= result["p_grounded"] <= 1.0
         assert isinstance(result["truncated"], bool)

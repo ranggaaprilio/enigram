@@ -11,11 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from enigram import stats
-from enigram.adapters.lightrag_engine import (
-    QUERY_MAX_ENTITY_TOKENS,
-    QUERY_MAX_RELATION_TOKENS,
-    QUERY_MAX_TOTAL_TOKENS,
-)
 from enigram.claims import read_labelled_claims
 from enigram.config import Config
 from enigram.files import atomic_write_text
@@ -24,15 +19,12 @@ from enigram.golden_run import answer_golden, load_questions, write_golden_run
 from enigram.index import load_manifest
 from enigram.judges import (
     JUDGE_TEMPERATURE,
-    RagasScorer,
     claim_premises,
     judge_abstention,
     judge_claims_llm,
-    load_laya,
-    score_claims_laya,
 )
 from enigram.parse import file_sha256
-from enigram.ports import ChatModel, Deps
+from enigram.ports import AnswerScorer, ChatModel, ClaimScorer, Deps
 from enigram.query import QUERY_MODES
 
 log = logging.getLogger(__name__)
@@ -78,7 +70,7 @@ async def _score_abstention(judge: ChatModel, item: dict[str, Any]) -> None:
         item["score_errors"]["abstention"] = "judge gave no verdict"
 
 
-async def _score_item(judge: ChatModel, scorer: RagasScorer, item: dict[str, Any]) -> None:
+async def _score_item(judge: ChatModel, scorer: AnswerScorer, item: dict[str, Any]) -> None:
     contexts = [c["text"] for c in item["chunks"]]
     evidence = {ev["chunk_id"] for ev in item["evidence"]}
     retrieved = [stats.doc_id(c["chunk_id"]) for c in item["chunks"]]
@@ -106,11 +98,11 @@ async def _score_item(judge: ChatModel, scorer: RagasScorer, item: dict[str, Any
     ]
 
 
-def _score_laya(agent: Any, item: dict[str, Any]) -> None:
+def _score_laya(scorer: ClaimScorer, item: dict[str, Any]) -> None:
     judgments = item["claim_judgments"]
     try:
-        results = score_claims_laya(
-            agent, [(j["claim"], claim_premises(j["claim"], item["chunks"])) for j in judgments]
+        results = scorer.score_claims(
+            [(j["claim"], claim_premises(j["claim"], item["chunks"])) for j in judgments]
         )
     except Exception as e:  # noqa: BLE001 - a judge failure is reported, not fatal
         item["score_errors"]["laya"] = f"{type(e).__name__}: {e}"[:300]
@@ -346,7 +338,12 @@ def _git_commit() -> str | None:
 
 
 def _metadata(
-    cfg: Config, golden_path: Path, label_files: list[Path], questions: list, secs: float
+    cfg: Config,
+    golden_path: Path,
+    label_files: list[Path],
+    questions: list,
+    secs: float,
+    query_budget: dict[str, int],
 ) -> dict[str, Any]:
     weights = cfg.laya_path / "model.safetensors"
     books = [b for b, e in load_manifest(cfg)["books"].items() if e.get("status") == "indexed"]
@@ -380,11 +377,7 @@ def _metadata(
         },
         "label_files": [str(p) for p in label_files],
         "indexed_papers": books,
-        "query_budget": {
-            "max_entity_tokens": QUERY_MAX_ENTITY_TOKENS,
-            "max_relation_tokens": QUERY_MAX_RELATION_TOKENS,
-            "max_total_tokens": QUERY_MAX_TOTAL_TOKENS,
-        },
+        "query_budget": dict(query_budget),
     }
 
 
@@ -413,7 +406,7 @@ async def run_eval(
                 "labels": str(labels),
             }
 
-    scorer = RagasScorer(cfg)
+    scorer = deps.answer_scorer()
     judge = deps.judge()
     for mode, run in runs.items():
         for i, item in enumerate(run["items"], 1):
@@ -437,9 +430,9 @@ async def run_eval(
     scored = [item for run in runs.values() for item in run["items"] if "claim_judgments" in item]
     if scored:
         log.info("[eval] Laya: %d claims", sum(len(i["claim_judgments"]) for i in scored))
-        agent = load_laya(cfg)
+        laya = deps.claim_scorer()
         for item in scored:
-            _score_laya(agent, item)
+            _score_laya(laya, item)
     for item in scored:
         for j in item["claim_judgments"]:
             j["human"] = human.get((item["id"], j["claim"]))
@@ -452,7 +445,9 @@ async def run_eval(
             if cat != UNANSWERABLE and any(i["category"] == cat for i in run["items"])
         }
         run["abstention"] = _abstention(run["items"])
-    metadata = _metadata(cfg, golden_path, label_files, questions, time.perf_counter() - start)
+    metadata = _metadata(
+        cfg, golden_path, label_files, questions, time.perf_counter() - start, deps.query_budget
+    )
     agreement = _agreement(_judgments(runs), len(human))
     data = {
         "metadata": metadata,
