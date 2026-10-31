@@ -7,15 +7,12 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-import networkx as nx
-from lightrag import LightRAG
-from lightrag.base import DocStatus
-
 from enigram import report
-from enigram.config import LIGHTRAG_CHUNK_TOKEN_SIZE, Config
+from enigram.adapters.lightrag_engine import load_graph, open_engine
+from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.files import atomic_write_text
-from enigram.llm import check_omlx, make_embedding_func, make_llm_func
+from enigram.llm import check_omlx
 from enigram.parse import (
     PARSER_VERSION,
     SOURCE_SUFFIXES,
@@ -27,43 +24,11 @@ from enigram.parse import (
     read_chunks_jsonl,
     write_chunks_jsonl,
 )
+from enigram.ports import KnowledgeEngine
 
 log = logging.getLogger(__name__)
 
 INSERT_BATCH_SIZE = 50
-
-# PGTableGraphStorage keeps the graph in plain tables, so no Apache AGE extension is needed
-# (managed Postgres such as RDS or Cloud SQL does not offer AGE). The vectors need pgvector.
-STORAGE_CLASSES: dict[str, dict[str, str]] = {
-    "file": {},
-    "postgres": {
-        "kv_storage": "PGKVStorage",
-        "vector_storage": "PGVectorStorage",
-        "graph_storage": "PGTableGraphStorage",
-        "doc_status_storage": "PGDocStatusStorage",
-    },
-}
-
-# Replaces LightRAG's generic type list (Creature, NaturalObject, ...). Besides the types, the
-# rules cut the noise and duplicate names Qwen3-8B produced on papers, which also shortens output.
-PAPER_ENTITY_GUIDANCE = """Classify each entity using one of the following types. \
-If no type fits, use `Other`.
-
-- Concept: research topics, ideas, phenomena, problems
-- Method: research methods, techniques, algorithms, analyses, workflows
-- Dataset: named datasets, corpora, benchmarks, data samples
-- Metric: measures, statistics, evaluation criteria and their reported values
-- Tool: software, AI systems, models, platforms, libraries
-- Finding: results, conclusions, observed effects
-- Organization: companies, projects, communities discussed in the content
-- Artifact: documents or files under study (e.g. READMEs, guidelines, pull requests)
-
-Rules:
-- Do not extract the paper's own authors, their emails or affiliations, the publication venue, \
-copyright or DOI information.
-- Give each entity one canonical, human-readable name with normal spacing (write \
-`AIDev Dataset`, not `AIDevDataset`) and reuse exactly that name every time it appears.
-- Do not extract generic words such as `Research`, `Study`, `Paper` or `Results` as entities."""
 
 
 @dataclass
@@ -238,14 +203,14 @@ def plan_inserts(
 ) -> tuple[list[Chunk], list[str]]:
     """Chunks to (re-)insert and doc ids to delete first.
 
-    Processed chunks are skipped. Re-inserting an existing id is ignored by LightRAG, so failed
+    Processed chunks are skipped. Re-inserting an existing id is ignored by the engine, so failed
     or interrupted chunks must be deleted before they can be extracted again.
     """
     to_insert, to_delete = [], []
     for chunk, status in zip(chunks, statuses, strict=True):
         if status is None:
             to_insert.append(chunk)
-        elif status.get("status") != DocStatus.PROCESSED:
+        elif status.get("status") != "processed":
             to_delete.append(chunk.chunk_id)
             to_insert.append(chunk)
     return to_insert, to_delete
@@ -258,9 +223,9 @@ def count_doc_statuses(docs: list[dict[str, Any] | None]) -> dict[str, int]:
             counts["missing"] += 1
             continue
         status = doc.get("status")
-        if status == DocStatus.PROCESSED:
+        if status == "processed":
             counts["processed"] += 1
-        elif status == DocStatus.FAILED:
+        elif status == "failed":
             counts["failed"] += 1
         else:
             counts["other"] += 1
@@ -269,38 +234,16 @@ def count_doc_statuses(docs: list[dict[str, Any] | None]) -> dict[str, int]:
     return counts
 
 
-async def _doc_statuses(rag: LightRAG, ids: list[str]) -> list[dict[str, Any] | None]:
-    """One status per id, None where the id is not stored."""
-    # PGDocStatusStorage returns [] instead of [None, ...] when none of the ids is stored.
-    return await rag.doc_status.get_by_ids(ids) or [None] * len(ids)
-
-
-async def document_ids(rag: LightRAG, book: str) -> list[str]:
-    """LightRAG document ids of one book (`<book>-cNNNNN`), read from doc status.
-
-    Not from parsed/<book>.chunks.jsonl: that file may be gone or newer than the index. The
-    anchored pattern keeps book "a" from matching the documents of book "a-c1".
-    """
-    status = rag.doc_status
-    pattern = "^" + book.replace(".", "\\.") + "-c[0-9]{5}$"
-    rows = await status.db.query(
-        "SELECT id FROM LIGHTRAG_DOC_STATUS WHERE workspace=$1 AND id ~ $2 ORDER BY id",
-        [status.workspace, pattern],
-        multirows=True,
-    )
-    return [r["id"] for r in rows or []]
-
-
-async def delete_document(cfg: Config, rag: LightRAG, book: str) -> dict[str, Any]:
+async def delete_document(cfg: Config, engine: KnowledgeEngine, book: str) -> dict[str, Any]:
     """Delete one book from the index, then its manifest entry and files. Safe to re-run.
 
-    LightRAG removes the book's chunks and the entities and relations only it produced, and
+    The engine removes the book's chunks and the entities and relations only it produced, and
     rebuilds the ones it shares with other documents from their cached extractions (which drops
     manual edits on those). The extraction cache itself stays, so re-adding the file is cheap.
     """
     manifest = load_manifest(cfg)
     entry = manifest["books"].get(book)
-    ids = await document_ids(rag, book)
+    ids = await engine.document_ids(book)
     if entry is None and not ids:
         raise EnigramError(f"No document {book!r}")
     if entry is not None:
@@ -310,7 +253,7 @@ async def delete_document(cfg: Config, rag: LightRAG, book: str) -> dict[str, An
 
     deleted = already_gone = 0
     for n, doc_id in enumerate(ids, start=1):
-        result = await rag.adelete_by_doc_id(doc_id)
+        result = await engine.delete_doc(doc_id)
         if result.status == "success":
             deleted += 1
         elif result.status == "not_found":  # an earlier, interrupted run got it
@@ -341,88 +284,45 @@ async def delete_document(cfg: Config, rag: LightRAG, book: str) -> dict[str, An
     }
 
 
-async def _insert_book(rag: LightRAG, cfg: Config, book: str) -> dict[str, int]:
+async def _insert_book(engine: KnowledgeEngine, cfg: Config, book: str) -> dict[str, int]:
     chunks = read_chunks_jsonl(_chunks_path(cfg, book))
     ids = [c.chunk_id for c in chunks]
-    to_insert, to_delete = plan_inserts(chunks, await _doc_statuses(rag, ids))
+    to_insert, to_delete = plan_inserts(chunks, await engine.doc_statuses(ids))
     for doc_id in to_delete:
-        await rag.adelete_by_doc_id(doc_id)
+        await engine.delete_doc(doc_id)
     if to_delete:
         log.info("[insert] %s: retrying %d unfinished chunks", book, len(to_delete))
     log.info("[insert] %s: %d of %d chunks to extract", book, len(to_insert), len(chunks))
 
     for i in range(0, len(to_insert), INSERT_BATCH_SIZE):
         batch = to_insert[i : i + INSERT_BATCH_SIZE]
-        await rag.ainsert(
+        await engine.insert(
             [c.text for c in batch],
             ids=[c.chunk_id for c in batch],
-            file_paths=[citation_path(c) for c in batch],
+            citations=[citation_path(c) for c in batch],
         )
         log.info("[insert] %s: %d/%d chunks", book, i + len(batch), len(to_insert))
 
-    counts = count_doc_statuses(await _doc_statuses(rag, ids))
+    counts = count_doc_statuses(await engine.doc_statuses(ids))
     if counts["rechunked"]:
         log.warning(
-            "[insert] %s: %d documents were split again by LightRAG; citations may be coarser",
+            "[insert] %s: %d documents were split again by the engine; citations may be coarser",
             book,
             counts["rechunked"],
         )
     return counts
 
 
-def build_rag(cfg: Config, *, query_cache: bool = True) -> LightRAG:
-    """LightRAG over cfg's storage; index and query must share it (same embedding func, cache)."""
-    return LightRAG(
-        working_dir=str(cfg.rag_dir),
-        # "" keeps the file layout of indexes built before WORKSPACE existed.
-        workspace=cfg.workspace if cfg.storage == "postgres" else "",
-        **STORAGE_CLASSES[cfg.storage],
-        llm_model_func=make_llm_func(cfg),
-        embedding_func=make_embedding_func(cfg),
-        chunk_token_size=LIGHTRAG_CHUNK_TOKEN_SIZE,
-        chunk_overlap_token_size=0,
-        llm_model_max_async=cfg.llm_max_async,
-        max_parallel_insert=cfg.max_parallel_insert,
-        # The answer cache is keyed on the question, not the retrieved context, so the API turns
-        # it off to see newly indexed documents. Extraction caching is a separate flag.
-        enable_llm_cache=query_cache,
-        # With Qwen3-8B the gleaning ("continue extracting") pass added ~0 new entities and
-        # looped on repeated relations until the token cap, costing ~100 s per dense chunk.
-        entity_extract_max_gleaning=0,
-        addon_params={"entity_types_guidance": PAPER_ENTITY_GUIDANCE},
-    )
-
-
-async def load_graph(cfg: Config) -> nx.Graph:
-    """The entity graph as NetworkX, read from whichever storage holds the index."""
-    if cfg.storage == "file":
-        return nx.read_graphml(report.find_graph_file(cfg))
-    rag = build_rag(cfg)
-    await rag.initialize_storages()
-    try:
-        storage = rag.chunk_entity_relation_graph
-        nodes, edges = await storage.get_all_nodes(), await storage.get_all_edges()
-    finally:
-        await rag.finalize_storages()
-    if not nodes:
-        raise EnigramError(f"No index found in {cfg.index_location}. Run `enigram index` first.")
-    graph = nx.Graph()
-    graph.add_nodes_from((n.pop("id"), n) for n in nodes)
-    graph.add_edges_from((e.pop("source"), e.pop("target"), e) for e in edges)
-    return graph
-
-
 async def _insert_all(cfg: Config, manifest: dict[str, Any], books: list[str]) -> None:
-    rag = build_rag(cfg)
-    await rag.initialize_storages()
-    try:
+    # require_index=False: the first run has no index yet.
+    async with open_engine(cfg, require_index=False) as engine:
         for book in books:
             entry = manifest["books"][book]
             if entry.get("status") != "parsed":
                 continue
             start = time.perf_counter()
             try:
-                counts = await _insert_book(rag, cfg, book)
+                counts = await _insert_book(engine, cfg, book)
                 not_done = counts["failed"] + counts["missing"] + counts["other"]
                 entry.update(docs=counts, status="failed" if not_done else "indexed", error=None)
                 if not_done:
@@ -433,8 +333,6 @@ async def _insert_all(cfg: Config, manifest: dict[str, Any], books: list[str]) -
             entry["insert_secs"] = round(time.perf_counter() - start, 1)
             entry["updated_at"] = _now()
             save_manifest(cfg, manifest)
-    finally:
-        await rag.finalize_storages()
 
 
 async def run_index(

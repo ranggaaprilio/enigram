@@ -7,7 +7,7 @@ from mcp import Client
 from test_query import FakeRag
 from test_worker import FakeJobStore
 
-from enigram import query
+from enigram.adapters import lightrag_engine
 from enigram.errors import EnigramError
 from enigram.memory import Memory, MemorySearch
 from enigram.server import AppContext, create_server
@@ -45,16 +45,16 @@ def fake_rag(cfg, monkeypatch):
     cfg.rag_dir.mkdir(parents=True)
     (cfg.rag_dir / "graph_chunk_entity_relation.graphml").write_text("<graphml/>")
     rag = FakeRag()
-    monkeypatch.setattr(query, "build_rag", lambda cfg: rag)
+    monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: rag)
     return rag
 
 
 def _with(rag, store, memory=None):
-    """A lifespan handing the tools an existing rag and store, as the HTTP API does."""
+    """A lifespan handing the tools an existing engine and store, as the HTTP API does."""
 
     @asynccontextmanager
     async def lifespan(server):
-        yield AppContext(rag=rag, store=store, memory=memory)
+        yield AppContext(engine=lightrag_engine.LightRagEngine(rag), store=store, memory=memory)
 
     return lifespan
 

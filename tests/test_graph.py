@@ -2,8 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from enigram.adapters.lightrag_engine import LightRagEngine
 from enigram.errors import EnigramError
-from enigram.graph import apply_graph_job, clear_query_cache
+from enigram.graph import apply_graph_job
 
 
 class FakeGraphRag:
@@ -56,7 +57,9 @@ def rag():
 
 async def test_edit_entity_never_renames_and_keeps_a_snapshot(rag):
     result = await apply_graph_job(
-        rag, "edit_entity", {"name": "Mutation Score", "description": "below 47%", "api_key": "w"}
+        LightRagEngine(rag),
+        "edit_entity",
+        {"name": "Mutation Score", "description": "below 47%", "api_key": "w"},
     )
 
     assert rag.calls == [("aedit_entity", "Mutation Score", {"description": "below 47%"}, False)]
@@ -66,7 +69,9 @@ async def test_edit_entity_never_renames_and_keeps_a_snapshot(rag):
 
 async def test_edit_relation_sends_only_given_fields(rag):
     result = await apply_graph_job(
-        rag, "edit_relation", {"source": "Kestrel", "target": "Mutation Score", "keywords": "x"}
+        LightRagEngine(rag),
+        "edit_relation",
+        {"source": "Kestrel", "target": "Mutation Score", "keywords": "x"},
     )
 
     assert rag.calls == [("aedit_relation", "Kestrel", "Mutation Score", {"keywords": "x"})]
@@ -75,7 +80,7 @@ async def test_edit_relation_sends_only_given_fields(rag):
 
 async def test_merge_concatenates_and_snapshots_an_existing_target(rag):
     result = await apply_graph_job(
-        rag, "merge_entities", {"sources": ["Kestrel"], "target": "Kestrel Labs"}
+        LightRagEngine(rag), "merge_entities", {"sources": ["Kestrel"], "target": "Kestrel Labs"}
     )
 
     (call,) = rag.calls
@@ -91,7 +96,7 @@ async def test_merge_concatenates_and_snapshots_an_existing_target(rag):
 
 async def test_merge_into_a_new_name_with_a_description(rag):
     result = await apply_graph_job(
-        rag,
+        LightRagEngine(rag),
         "merge_entities",
         {"sources": ["Kestrel", "Kestrel Labs"], "target": "Kestrel Inc", "description": "d"},
     )
@@ -101,9 +106,9 @@ async def test_merge_into_a_new_name_with_a_description(rag):
 
 
 async def test_delete_entity_and_relation(rag):
-    entity = await apply_graph_job(rag, "delete_entity", {"name": "Kestrel"})
+    entity = await apply_graph_job(LightRagEngine(rag), "delete_entity", {"name": "Kestrel"})
     relation = await apply_graph_job(
-        rag, "delete_relation", {"source": "Kestrel", "target": "Mutation Score"}
+        LightRagEngine(rag), "delete_relation", {"source": "Kestrel", "target": "Mutation Score"}
     )
 
     assert rag.calls == [
@@ -117,7 +122,7 @@ async def test_failed_delete_raises_lightrags_message(rag):
     rag.delete_status = "not_allowed"
 
     with pytest.raises(EnigramError, match="Kestrel: not allowed"):
-        await apply_graph_job(rag, "delete_entity", {"name": "Kestrel"})
+        await apply_graph_job(LightRagEngine(rag), "delete_entity", {"name": "Kestrel"})
 
 
 @pytest.mark.parametrize(
@@ -133,7 +138,7 @@ async def test_failed_delete_raises_lightrags_message(rag):
 )
 async def test_unknown_targets_fail_before_any_edit(rag, kind, payload, match):
     with pytest.raises(EnigramError, match=match):
-        await apply_graph_job(rag, kind, payload)
+        await apply_graph_job(LightRagEngine(rag), kind, payload)
 
     assert rag.calls == []
 
@@ -155,7 +160,7 @@ async def test_clear_query_cache_deletes_only_query_rows():
 
     cache = Cache()
 
-    cleared = await clear_query_cache(SimpleNamespace(llm_response_cache=cache))
+    cleared = await LightRagEngine(SimpleNamespace(llm_response_cache=cache)).clear_query_cache()
 
     assert cleared == 2
     assert cache.deleted == ["q1", "q2"]

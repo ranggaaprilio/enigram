@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from enigram import stats
+from enigram.adapters.lightrag_engine import (
+    QUERY_MAX_ENTITY_TOKENS,
+    QUERY_MAX_RELATION_TOKENS,
+    QUERY_MAX_TOTAL_TOKENS,
+    open_engine,
+)
 from enigram.claims import read_labelled_claims
 from enigram.config import Config
 from enigram.files import atomic_write_text
@@ -27,13 +33,7 @@ from enigram.judges import (
     score_claims_laya,
 )
 from enigram.parse import file_sha256
-from enigram.query import (
-    QUERY_MAX_ENTITY_TOKENS,
-    QUERY_MAX_RELATION_TOKENS,
-    QUERY_MAX_TOTAL_TOKENS,
-    QUERY_MODES,
-    open_rag,
-)
+from enigram.query import QUERY_MODES
 
 log = logging.getLogger(__name__)
 
@@ -397,10 +397,10 @@ async def run_eval(
 
     runs: dict[str, dict[str, Any]] = {}
     # One LightRAG for both systems: a second one in this process would share its global state.
-    async with open_rag(cfg) as rag:
+    async with open_engine(cfg) as engine:
         for mode in QUERY_MODES:
             log.info("[eval] answering %d questions with %s", len(questions), mode)
-            items, failed = await answer_golden(rag, questions, mode)
+            items, failed = await answer_golden(engine, questions, mode)
             answers, labels = write_golden_run(cfg, golden_path, mode, items)
             runs[mode] = {
                 "items": items,

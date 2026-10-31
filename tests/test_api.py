@@ -7,6 +7,7 @@ from test_server import FakeMemoryStore
 from test_worker import FakeJobStore
 
 from enigram import api, index
+from enigram.adapters import lightrag_engine
 from enigram.config import Config
 from enigram.errors import EnigramError
 
@@ -41,7 +42,7 @@ def env(pg_cfg, monkeypatch):
         return rag
 
     monkeypatch.setattr(api, "open_store", fake_open_store)
-    monkeypatch.setattr(api, "build_rag", fake_build_rag)
+    monkeypatch.setattr(lightrag_engine, "build_rag", fake_build_rag)
     with TestClient(api.create_app(pg_cfg)) as client:
         yield client, store, rag, build_kw
 
@@ -66,7 +67,7 @@ def test_lifespan_builds_rag_without_query_cache_and_cleans_up(pg_cfg, monkeypat
         return rag
 
     monkeypatch.setattr(api, "open_store", fake_open_store)
-    monkeypatch.setattr(api, "build_rag", fake_build_rag)
+    monkeypatch.setattr(lightrag_engine, "build_rag", fake_build_rag)
     with TestClient(api.create_app(pg_cfg)) as client:
         assert client.get("/health").json() == {"status": "ok", "workspace": "default"}
 
@@ -260,7 +261,7 @@ def keyed_env(pg_cfg, clean_env, monkeypatch):
         return store
 
     monkeypatch.setattr(api, "open_store", fake_open_store)
-    monkeypatch.setattr(api, "build_rag", lambda cfg, **kw: rag)
+    monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: rag)
     with TestClient(api.create_app(cfg)) as client:
         yield client, store, rag
 

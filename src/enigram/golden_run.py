@@ -7,15 +7,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from lightrag import LightRAG
-
+from enigram.adapters.lightrag_engine import open_engine
 from enigram.claims import split_claims, write_label_sheet
 from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.files import atomic_write_text
 from enigram.golden import GoldenQuestion, check_golden
 from enigram.parse import file_sha256
-from enigram.query import QUERY_MODES, answer_question, open_rag
+from enigram.ports import KnowledgeEngine
+from enigram.query import QUERY_MODES, answer_question
 
 log = logging.getLogger(__name__)
 
@@ -51,14 +51,14 @@ def load_questions(
 
 
 async def answer_golden(
-    rag: LightRAG, questions: list[GoldenQuestion], mode: str
+    engine: KnowledgeEngine, questions: list[GoldenQuestion], mode: str
 ) -> tuple[list[dict[str, Any]], int]:
     """Answer every question with one system; a failed question is recorded, not raised."""
     items, failed = [], 0
     for i, q in enumerate(questions, 1):
         item = _item(q)
         try:
-            result = await answer_question(rag, q.question, mode)
+            result = await answer_question(engine, q.question, mode)
         except EnigramError as e:
             failed += 1
             item["error"] = str(e)
@@ -112,7 +112,7 @@ async def run_golden(
         raise EnigramError(f"mode must be one of {QUERY_MODES}, got {mode!r}")
     questions = load_questions(cfg, golden_path, limit)
     # One LightRAG for the whole run: a second one in this process would share its global state.
-    async with open_rag(cfg) as rag:
-        items, failed = await answer_golden(rag, questions, mode)
+    async with open_engine(cfg) as engine:
+        items, failed = await answer_golden(engine, questions, mode)
     answers_path, labels_path = write_golden_run(cfg, golden_path, mode, items)
     return GoldenRun(answers_path, labels_path, answered=len(items) - failed, failed=failed)

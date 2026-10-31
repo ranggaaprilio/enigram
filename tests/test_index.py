@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import pytest
 
 from enigram import index
+from enigram.adapters import lightrag_engine
+from enigram.adapters.lightrag_engine import LightRagEngine
 from enigram.errors import EnigramError
 from enigram.files import atomic_write_text
 from enigram.parse import Chunk, file_sha256
@@ -167,7 +169,7 @@ class _FakePgRag:
 
 
 def test_build_rag_postgres_uses_pg_storages_in_its_workspace(pg_cfg):
-    rag = index.build_rag(pg_cfg)
+    rag = lightrag_engine.build_rag(pg_cfg)
     assert (rag.kv_storage, rag.vector_storage, rag.graph_storage, rag.doc_status_storage) == (
         "PGKVStorage",
         "PGVectorStorage",
@@ -178,22 +180,22 @@ def test_build_rag_postgres_uses_pg_storages_in_its_workspace(pg_cfg):
 
 
 def test_build_rag_file_keeps_json_storages(cfg):
-    rag = index.build_rag(cfg)
+    rag = lightrag_engine.build_rag(cfg)
     assert (rag.kv_storage, rag.graph_storage) == ("JsonKVStorage", "NetworkXStorage")
     assert rag.workspace == ""
 
 
 def test_build_rag_query_cache_off_keeps_extraction_cache(cfg):
-    assert index.build_rag(cfg).enable_llm_cache is True
-    rag = index.build_rag(cfg, query_cache=False)
+    assert lightrag_engine.build_rag(cfg).enable_llm_cache is True
+    rag = lightrag_engine.build_rag(cfg, query_cache=False)
     assert rag.enable_llm_cache is False
     assert rag.enable_llm_cache_for_entity_extract is True
 
 
 async def test_load_graph_postgres_reads_graph_storage(pg_cfg, monkeypatch):
     rag = _FakePgRag(_FakeGraphStorage())
-    monkeypatch.setattr(index, "build_rag", lambda cfg: rag)
-    graph = await index.load_graph(pg_cfg)
+    monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: rag)
+    graph = await lightrag_engine.load_graph(pg_cfg)
     assert graph.nodes["Mira"]["entity_type"] == "person"
     assert graph.edges["Harbor", "Mira"]["description"] == "home of"
     assert rag.finalized
@@ -204,9 +206,9 @@ async def test_load_graph_postgres_empty_raises(pg_cfg, monkeypatch):
         async def get_all_nodes(self):
             return []
 
-    monkeypatch.setattr(index, "build_rag", lambda cfg: _FakePgRag(Empty()))
+    monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: _FakePgRag(Empty()))
     with pytest.raises(EnigramError, match="workspace 'default'"):
-        await index.load_graph(pg_cfg)
+        await lightrag_engine.load_graph(pg_cfg)
 
 
 def test_guard_llm_model_postgres_trusts_manifest(pg_cfg):
@@ -266,7 +268,7 @@ async def test_insert_book_inserts_all_when_doc_status_returns_empty(cfg):
             self.inserted.extend(ids)
 
     rag = Rag()
-    counts = await index._insert_book(rag, cfg, "p")
+    counts = await index._insert_book(LightRagEngine(rag), cfg, "p")
     assert rag.inserted == ["p-c00001", "p-c00002"]
     assert counts["missing"] == 2
 
@@ -315,7 +317,7 @@ async def test_delete_document_removes_index_entries_files_and_manifest_entry(cf
     kept = _book_files(cfg, "paper-c1", suffix=".md")  # a name that extends "paper"
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"])
 
-    result = await index.delete_document(cfg, rag, "paper")
+    result = await index.delete_document(cfg, LightRagEngine(rag), "paper")
 
     assert rag.deleted == ["paper-c00000", "paper-c00001"]
     assert result == {
@@ -332,7 +334,7 @@ async def test_delete_document_removes_index_entries_files_and_manifest_entry(cf
 async def test_document_ids_use_an_anchored_escaped_pattern():
     rag = FakeDeleteRag(["a.b-c00000"])
 
-    assert await index.document_ids(rag, "a.b") == ["a.b-c00000"]
+    assert await LightRagEngine(rag).document_ids("a.b") == ["a.b-c00000"]
     sql, params = rag.query_args
     assert "id ~ $2" in sql
     assert params == ["default", r"^a\.b-c[0-9]{5}$"]
@@ -342,7 +344,7 @@ async def test_delete_document_resumes_after_an_interrupted_run(cfg):
     _book_files(cfg, "paper")
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"], {"paper-c00000": "not_found"})
 
-    result = await index.delete_document(cfg, rag, "paper")
+    result = await index.delete_document(cfg, LightRagEngine(rag), "paper")
 
     assert (result["documents_deleted"], result["already_gone"]) == (1, 1)
     assert "paper" not in index.load_manifest(cfg)["books"]
@@ -353,7 +355,7 @@ async def test_delete_document_failure_keeps_files_and_marks_deleting(cfg):
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"], {"paper-c00001": "not_allowed"})
 
     with pytest.raises(EnigramError, match="paper-c00001: paper-c00001 not_allowed"):
-        await index.delete_document(cfg, rag, "paper")
+        await index.delete_document(cfg, LightRagEngine(rag), "paper")
 
     assert all(p.exists() for p in paths)
     assert index.load_manifest(cfg)["books"]["paper"]["status"] == "deleting"
@@ -361,12 +363,12 @@ async def test_delete_document_failure_keeps_files_and_marks_deleting(cfg):
 
 async def test_delete_document_unknown_book(cfg):
     with pytest.raises(EnigramError, match="No document 'ghost'"):
-        await index.delete_document(cfg, FakeDeleteRag([]), "ghost")
+        await index.delete_document(cfg, LightRagEngine(FakeDeleteRag([])), "ghost")
 
 
 async def test_delete_document_without_manifest_entry_still_deletes_its_ids(cfg):
     rag = FakeDeleteRag(["orphan-c00000"])
 
-    result = await index.delete_document(cfg, rag, "orphan")
+    result = await index.delete_document(cfg, LightRagEngine(rag), "orphan")
 
     assert (rag.deleted, result["files_deleted"]) == (["orphan-c00000"], [])

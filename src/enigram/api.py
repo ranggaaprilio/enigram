@@ -18,9 +18,10 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from enigram.adapters.lightrag_engine import open_engine
 from enigram.config import Config
 from enigram.errors import EnigramError
-from enigram.index import build_rag, list_sources, load_manifest
+from enigram.index import list_sources, load_manifest
 from enigram.jobs import JobStore, documents_overview, open_store
 from enigram.llm import make_embedding_func
 from enigram.memory import MemoryStore
@@ -161,7 +162,7 @@ def create_app(cfg: Config) -> FastAPI:
     @asynccontextmanager
     async def mcp_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
         # Entered once by session_manager.run() below, after app.state is set.
-        yield AppContext(rag=app.state.rag, store=app.state.store, memory=app.state.memory)
+        yield AppContext(engine=app.state.engine, store=app.state.store, memory=app.state.memory)
 
     mcp = create_server(cfg, lifespan=mcp_lifespan)
     mcp_app = mcp.streamable_http_app(
@@ -186,16 +187,14 @@ def create_app(cfg: Config) -> FastAPI:
         memory = MemoryStore(store.pool, cfg.workspace, make_embedding_func(cfg), cfg.embed_dim)
         await memory.ensure_schema()
         app.state.memory = memory
-        # Not open_rag: a fresh deployment has no index yet and must still start.
-        rag = build_rag(cfg, query_cache=False)
-        await rag.initialize_storages()
-        app.state.store, app.state.rag = store, rag
         try:
-            # A mounted app's own lifespan never runs, so the MCP session manager starts here.
-            async with mcp.session_manager.run():
-                yield
+            # require_index=False: a fresh deployment has no index yet and must still start.
+            async with open_engine(cfg, query_cache=False, require_index=False) as engine:
+                app.state.store, app.state.engine = store, engine
+                # A mounted app's own lifespan never runs, so the MCP session manager starts here.
+                async with mcp.session_manager.run():
+                    yield
         finally:
-            await rag.finalize_storages()
             await store.close()
 
     app = FastAPI(title="enigram", lifespan=lifespan)
@@ -307,7 +306,7 @@ def create_app(cfg: Config) -> FastAPI:
     async def query(request: Request, body: QueryRequest) -> dict[str, Any]:
         store = store_of(request)
         try:
-            result = await answer_question(request.app.state.rag, body.question, body.mode)
+            result = await answer_question(request.app.state.engine, body.question, body.mode)
         except EnigramError as e:
             await store.log_query(
                 "api", body.question, body.mode, error=str(e), api_key=_key_name(request)

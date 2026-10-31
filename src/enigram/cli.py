@@ -122,10 +122,11 @@ async def _index(cfg: Config, args: argparse.Namespace) -> int:
 
 
 async def _query(cfg: Config, question: str, mode: str) -> int:
-    from enigram.query import answer_question, open_rag
+    from enigram.adapters.lightrag_engine import open_engine
+    from enigram.query import answer_question
 
-    async with open_rag(cfg) as rag:
-        result = await answer_question(rag, question, mode)
+    async with open_engine(cfg) as engine:
+        result = await answer_question(engine, question, mode)
     print(result.answer)
     if result.sources:
         print("\nSources:")
@@ -219,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
             from enigram.server import create_server
 
             # Fail with a readable error before the host only sees a server that died.
-            # (Postgres has no file to look for; open_rag checks it when the server starts.)
+            # (Postgres has no file to look for; open_engine checks it when the server starts.)
             if cfg.storage == "file":
                 find_graph_file(cfg)
             create_server(cfg).run()  # blocks; runs its own event loop, stdout is the wire
@@ -248,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
             return _golden_labels(args.sheet)
         if args.command == "eval":
             return asyncio.run(_eval(cfg, args))
-        from enigram.index import load_graph
+        from enigram.adapters.lightrag_engine import load_graph
         from enigram.report import build_report
 
         graph = asyncio.run(load_graph(cfg))

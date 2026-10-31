@@ -1,28 +1,29 @@
 """MCP server exposing the knowledge base to agents over stdio, or over HTTP when mounted by the
-API (`api.py`), which supplies its own LightRAG instance and job store."""
+API (`api.py`), which supplies its own knowledge engine and job store."""
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Annotated
 
-from lightrag import LightRAG
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from enigram.adapters.lightrag_engine import open_engine
 from enigram.config import Config
 from enigram.errors import EnigramError
 from enigram.jobs import JobStore, documents_overview
 from enigram.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX, MemoryStore
-from enigram.query import QUERY_MODE, ContextChunk, Source, answer_question, open_rag
+from enigram.ports import KnowledgeEngine
+from enigram.query import QUERY_MODE, ContextChunk, Source, answer_question
 
 
 @dataclass
 class AppContext:
-    rag: LightRAG
+    engine: KnowledgeEngine
     store: JobStore | None = None  # set over HTTP: queries are logged, jobs show in documents
     memory: MemoryStore | None = None  # set over HTTP: memories belong to an API key
 
@@ -76,8 +77,8 @@ def create_server(
 ) -> MCPServer:
     @asynccontextmanager
     async def open_index(server: MCPServer) -> AsyncIterator[AppContext]:
-        async with open_rag(cfg) as rag:
-            yield AppContext(rag=rag)
+        async with open_engine(cfg) as engine:
+            yield AppContext(engine=engine)
 
     mcp = MCPServer("enigram", lifespan=lifespan or open_index)
 
@@ -94,7 +95,7 @@ def create_server(
         and pages. Takes 30-60 s on the local model. Ask one specific question per call."""
         app = ctx.request_context.lifespan_context
         try:
-            result = await answer_question(app.rag, question)
+            result = await answer_question(app.engine, question)
         except EnigramError as e:
             if app.store:
                 await app.store.log_query(

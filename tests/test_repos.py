@@ -2,6 +2,7 @@ import shutil
 import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -160,26 +161,25 @@ def fake_sync(cfg, monkeypatch):
         index.save_manifest(cfg, manifest)
         return run
 
-    @asynccontextmanager
-    async def fake_open_rag(cfg):
-        fake.opened += 1
-        yield object()
+    async def fake_clear():
+        return 0
 
-    async def fake_delete(cfg, rag, book):
+    @asynccontextmanager
+    async def fake_open_engine(cfg):
+        fake.opened += 1
+        yield SimpleNamespace(clear_query_cache=fake_clear)
+
+    async def fake_delete(cfg, engine, book):
         fake.deleted.append(book)
         (cfg.books_dir / f"{book}.md").unlink(missing_ok=True)
         manifest = index.load_manifest(cfg)
         manifest["books"].pop(book, None)
         index.save_manifest(cfg, manifest)
 
-    async def fake_clear(rag):
-        return 0
-
     monkeypatch.setattr(repos, "clone", fake_clone)
     monkeypatch.setattr(repos, "run_index", fake_run_index)
-    monkeypatch.setattr(repos, "open_rag", fake_open_rag)
+    monkeypatch.setattr(repos, "open_engine", fake_open_engine)
     monkeypatch.setattr(repos, "delete_document", fake_delete)
-    monkeypatch.setattr(repos, "clear_query_cache", fake_clear)
     return fake
 
 

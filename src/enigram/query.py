@@ -1,20 +1,13 @@
-"""Answer questions from the LightRAG index with citations."""
+"""Answer questions from the knowledge index with citations."""
 
 import logging
-import time
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING
 
-from lightrag import LightRAG, QueryParam
-from lightrag.base import DocStatus
-from lightrag.query_validation import QueryValidationError
-
-from enigram.config import Config
 from enigram.errors import EnigramError
-from enigram.index import build_rag
-from enigram.report import find_graph_file
+
+if TYPE_CHECKING:
+    from enigram.ports import KnowledgeEngine
 
 log = logging.getLogger(__name__)
 
@@ -39,11 +32,6 @@ NO_ANSWER_RULE = (
 # "naive" is the plain vector-RAG baseline: the same chunks, embeddings, generator and total
 # context budget as "mix", without the graph, so score differences come from the graph.
 QUERY_MODES = ("mix", "naive")
-# LightRAG defaults (6000/8000/30000 tokens) took 104 s per query on Qwen3-8B; these took 41 s on
-# the same question with a grounded answer, and leave room in Qwen3's 32k context.
-QUERY_MAX_ENTITY_TOKENS = 3000
-QUERY_MAX_RELATION_TOKENS = 3000
-QUERY_MAX_TOTAL_TOKENS = 14000
 
 
 @dataclass(frozen=True)
@@ -100,87 +88,17 @@ def parse_citation(ref: int, citation: str) -> Source:
     return Source(ref=ref, title=parts[0], section=section, pages=pages, citation=citation)
 
 
-def to_result(
-    question: str, raw: dict[str, Any], query_secs: float, mode: str = QUERY_MODE
-) -> QueryResult:
-    answer = ((raw.get("llm_response") or {}).get("content") or "").strip()
-    unanswered = NO_ANSWER_MARKER in answer
-    answer = answer.replace(NO_ANSWER_MARKER, "").strip()
-    if raw.get("status") != "success":
-        if (raw.get("metadata") or {}).get("failure_reason") == "no_results":
-            return QueryResult(
-                question, answer, [], [], found=False, query_secs=query_secs, mode=mode
-            )
-        raise EnigramError(raw.get("message") or "LightRAG query failed")
-
-    data = raw.get("data") or {}
-    return QueryResult(
-        question=question,
-        answer=answer,
-        sources=[
-            parse_citation(int(r["reference_id"]), r["file_path"])
-            for r in data.get("references", [])
-        ],
-        chunks=[
-            ContextChunk(int(c["reference_id"]), c["chunk_id"], c["content"])
-            for c in data.get("chunks", [])
-        ],
-        entities=[
-            ContextEntity(e["entity_name"], e.get("entity_type", ""), e.get("description", ""))
-            for e in data.get("entities", [])
-        ],
-        relations=[
-            ContextRelation(
-                r["src_id"], r["tgt_id"], r.get("keywords", ""), r.get("description", "")
-            )
-            for r in data.get("relationships", [])
-        ],
-        found=not unanswered,
-        query_secs=query_secs,
-        mode=mode,
-    )
-
-
-@asynccontextmanager
-async def open_rag(cfg: Config) -> AsyncIterator[LightRAG]:
-    """Load the index once; fails fast when `enigram index` has not run yet."""
-    if cfg.storage == "file":
-        find_graph_file(cfg)
-    rag = build_rag(cfg)
-    await rag.initialize_storages()
-    try:
-        if cfg.storage == "postgres":
-            counts = await rag.doc_status.get_status_counts()
-            if not counts.get(DocStatus.PROCESSED):
-                raise EnigramError(
-                    f"No index found in {cfg.index_location}. Run `enigram index` first."
-                )
-        yield rag
-    finally:
-        await rag.finalize_storages()
-
-
 async def answer_question(
-    rag: LightRAG, question: str, mode: str = QUERY_MODE, user_prompt: str | None = PRECEDENCE
+    engine: "KnowledgeEngine",
+    question: str,
+    mode: str = QUERY_MODE,
+    user_prompt: str | None = PRECEDENCE,
 ) -> QueryResult:
     if mode not in QUERY_MODES:
         raise EnigramError(f"mode must be one of {QUERY_MODES}, got {mode!r}")
-    # A fresh QueryParam per call: LightRAG mutates it in places.
-    param = QueryParam(
-        mode=mode,  # naive ignores the entity/relation caps; the total budget is shared
-        max_entity_tokens=QUERY_MAX_ENTITY_TOKENS,
-        max_relation_tokens=QUERY_MAX_RELATION_TOKENS,
-        max_total_tokens=QUERY_MAX_TOTAL_TOKENS,
-        enable_rerank=False,  # no rerank model configured; avoids a warning per query
-        # "Additional Instructions" in LightRAG's answer prompt; the no-answer rule is always on.
-        user_prompt=" ".join(p for p in (user_prompt, NO_ANSWER_RULE) if p),
-    )
-    start = time.perf_counter()
-    try:
-        raw = await rag.aquery_llm(question, param)
-    except QueryValidationError as e:
-        raise EnigramError(str(e)) from e
-    result = to_result(question, raw, round(time.perf_counter() - start, 1), mode)
+    # The no-answer rule is always on.
+    instructions = " ".join(p for p in (user_prompt, NO_ANSWER_RULE) if p)
+    result = await engine.query(question, mode, instructions)
     log.info(
         "[query] %s: %d sources, %d chunks (%.1fs)",
         mode,

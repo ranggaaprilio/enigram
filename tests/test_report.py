@@ -4,6 +4,7 @@ import networkx as nx
 import pytest
 
 from enigram import index, report
+from enigram.adapters.lightrag_engine import load_graph
 from enigram.errors import EnigramError
 
 
@@ -70,7 +71,7 @@ def test_score_review_nothing_judged(tmp_path):
 
 async def test_load_graph_without_index_raises(cfg):
     with pytest.raises(EnigramError, match="No index found"):
-        await index.load_graph(cfg)
+        await load_graph(cfg)
 
 
 async def test_build_report_writes_md_json_and_review(cfg):
@@ -81,7 +82,7 @@ async def test_build_report_writes_md_json_and_review(cfg):
         {"books": {"book-a": {"status": "indexed", "pages": 10, "chunks": 4, "parse_secs": 5.0}}},
     )
 
-    md_path = report.build_report(cfg, await index.load_graph(cfg))
+    md_path = report.build_report(cfg, await load_graph(cfg))
 
     data = json.loads(md_path.with_suffix(".json").read_text())
     assert data["graph"]["entities"] == 4

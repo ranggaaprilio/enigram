@@ -2,6 +2,7 @@ import pytest
 from lightrag.query_validation import RAGQueryTooShortError
 
 from enigram import cli, query
+from enigram.adapters import lightrag_engine
 from enigram.errors import EnigramError
 from enigram.parse import Chunk, citation_path
 
@@ -100,7 +101,7 @@ def test_parse_citation_inverts_citation_path():
 
 
 def test_to_result_maps_success():
-    result = query.to_result("Who?", success_response(), 1.5)
+    result = lightrag_engine.to_result("Who?", success_response(), 1.5)
 
     assert result.answer == "Mira Okafor [1]."
     assert [(s.ref, s.section) for s in result.sources] == [
@@ -127,7 +128,7 @@ def test_to_result_no_results_is_an_answer_not_an_error():
         "metadata": {"failure_reason": "no_results", "mode": "mix"},
         "llm_response": {"content": "Sorry, I'm not able to provide an answer to that question."},
     }
-    result = query.to_result("Who?", raw, 0.2)
+    result = lightrag_engine.to_result("Who?", raw, 0.2)
     assert not result.found
     assert result.answer.startswith("Sorry")
     assert result.sources == [] and result.chunks == []
@@ -139,7 +140,7 @@ def test_to_result_marker_means_no_answer_and_is_removed():
         "The context does not mention the Lighthouse Protocol. [no-context]\n"
     )
 
-    result = query.to_result("Who?", raw, 1.0)
+    result = lightrag_engine.to_result("Who?", raw, 1.0)
 
     assert not result.found
     assert result.answer == "The context does not mention the Lighthouse Protocol."
@@ -154,7 +155,7 @@ def test_to_result_no_results_strips_lightrags_marker():
         "llm_response": {"content": "Sorry, I'm not able to provide an answer.[no-context]"},
     }
 
-    result = query.to_result("Who?", raw, 0.2)
+    result = lightrag_engine.to_result("Who?", raw, 0.2)
 
     assert not result.found and result.answer == "Sorry, I'm not able to provide an answer."
 
@@ -162,18 +163,20 @@ def test_to_result_no_results_strips_lightrags_marker():
 def test_to_result_failure_raises():
     raw = {"status": "failure", "message": "Query failed: Connection error.", "data": {}}
     with pytest.raises(EnigramError, match="Query failed: Connection error"):
-        query.to_result("Who?", raw, 0.1)
+        lightrag_engine.to_result("Who?", raw, 0.1)
 
 
 async def test_answer_question_uses_mix_mode_and_budget():
     rag = FakeRag()
-    result = await query.answer_question(rag, "Who designed the protocol?")
+    result = await query.answer_question(
+        lightrag_engine.LightRagEngine(rag), "Who designed the protocol?"
+    )
 
     (param,) = rag.params
     assert param.mode == "mix"
-    assert param.max_entity_tokens == query.QUERY_MAX_ENTITY_TOKENS
-    assert param.max_relation_tokens == query.QUERY_MAX_RELATION_TOKENS
-    assert param.max_total_tokens == query.QUERY_MAX_TOTAL_TOKENS
+    assert param.max_entity_tokens == lightrag_engine.QUERY_MAX_ENTITY_TOKENS
+    assert param.max_relation_tokens == lightrag_engine.QUERY_MAX_RELATION_TOKENS
+    assert param.max_total_tokens == lightrag_engine.QUERY_MAX_TOTAL_TOKENS
     assert param.enable_rerank is False
     assert result.question == "Who designed the protocol?"
     assert result.mode == "mix"
@@ -181,8 +184,10 @@ async def test_answer_question_uses_mix_mode_and_budget():
 
 async def test_answer_question_sends_the_precedence_instruction():
     rag = FakeRag()
-    await query.answer_question(rag, "Who designed the protocol?")
-    await query.answer_question(rag, "Who designed the protocol?", user_prompt=None)
+    await query.answer_question(lightrag_engine.LightRagEngine(rag), "Who designed the protocol?")
+    await query.answer_question(
+        lightrag_engine.LightRagEngine(rag), "Who designed the protocol?", user_prompt=None
+    )
 
     assert [p.user_prompt for p in rag.params] == [
         f"{query.PRECEDENCE} {query.NO_ANSWER_RULE}",
@@ -192,25 +197,29 @@ async def test_answer_question_sends_the_precedence_instruction():
 
 async def test_answer_question_runs_naive_baseline():
     rag = FakeRag()
-    result = await query.answer_question(rag, "Who designed the protocol?", "naive")
+    result = await query.answer_question(
+        lightrag_engine.LightRagEngine(rag), "Who designed the protocol?", "naive"
+    )
 
     (param,) = rag.params
     assert param.mode == "naive"
-    assert param.max_total_tokens == query.QUERY_MAX_TOTAL_TOKENS
+    assert param.max_total_tokens == lightrag_engine.QUERY_MAX_TOTAL_TOKENS
     assert result.mode == "naive"
 
 
 async def test_answer_question_rejects_unknown_mode():
     rag = FakeRag()
     with pytest.raises(EnigramError, match="mode must be one of"):
-        await query.answer_question(rag, "Who designed the protocol?", "hybrid")
+        await query.answer_question(
+            lightrag_engine.LightRagEngine(rag), "Who designed the protocol?", "hybrid"
+        )
     assert rag.params == []
 
 
 def test_to_result_maps_naive_response_without_graph():
     raw = success_response()
     raw["data"]["entities"] = raw["data"]["relationships"] = []
-    result = query.to_result("Who?", raw, 0.5, "naive")
+    result = lightrag_engine.to_result("Who?", raw, 0.5, "naive")
     assert result.entities == [] and result.relations == []
     assert [s.ref for s in result.sources] == [1, 2]
     assert result.mode == "naive"
@@ -228,10 +237,10 @@ def test_cli_modes_match_query_modes():
 async def test_answer_question_rejects_too_short_question():
     rag = FakeRag(error=RAGQueryTooShortError("RAG query is too short."))
     with pytest.raises(EnigramError, match="too short"):
-        await query.answer_question(rag, "a")
+        await query.answer_question(lightrag_engine.LightRagEngine(rag), "a")
 
 
-async def test_open_rag_without_index_raises(cfg):
+async def test_open_engine_without_index_raises(cfg):
     with pytest.raises(EnigramError, match="No index found"):
-        async with query.open_rag(cfg):
+        async with lightrag_engine.open_engine(cfg):
             pass

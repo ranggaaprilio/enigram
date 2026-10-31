@@ -12,12 +12,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from enigram.adapters.lightrag_engine import open_engine
 from enigram.config import Config
 from enigram.errors import EnigramError
-from enigram.graph import clear_query_cache
 from enigram.index import delete_document, load_manifest, run_index, save_manifest
 from enigram.parse import MARKDOWN_SUFFIXES, book_name, file_sha256
-from enigram.query import open_rag
 
 log = logging.getLogger(__name__)
 
@@ -149,11 +148,11 @@ async def index_repo(cfg: Config, url: str, ref: str | None = None) -> dict[str,
             b for b in files if b in ours and books[b].get("sha256") != file_sha256(files[b])
         )
         if removed or changed:
-            # Only on a re-sync: a fresh deployment has no index for open_rag to open.
-            async with open_rag(cfg) as rag:
+            # Only on a re-sync: a fresh deployment has no index for open_engine to open.
+            async with open_engine(cfg) as engine:
                 for book in [*removed, *changed]:
-                    await delete_document(cfg, rag, book)
-                await clear_query_cache(rag)
+                    await delete_document(cfg, engine, book)
+                await engine.clear_query_cache()
 
         cfg.books_dir.mkdir(parents=True, exist_ok=True)
         for book, path in files.items():

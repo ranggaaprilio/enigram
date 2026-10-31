@@ -4,11 +4,11 @@ only one process writes the index."""
 import asyncio
 import logging
 
+from enigram.adapters.lightrag_engine import open_engine
 from enigram.config import Config
-from enigram.graph import GRAPH_JOB_KINDS, apply_graph_job, clear_query_cache
+from enigram.graph import GRAPH_JOB_KINDS, apply_graph_job
 from enigram.index import delete_document, run_index
 from enigram.jobs import Job, JobStore, open_store
-from enigram.query import open_rag
 from enigram.repos import index_repo
 
 log = logging.getLogger(__name__)
@@ -19,10 +19,10 @@ POLL_SECS = 2.0
 async def _run_graph_job(cfg: Config, store: JobStore, job: Job) -> Job:
     log.info("[worker] job %d: %s", job.id, job.kind)
     try:
-        async with open_rag(cfg) as rag:
-            result = await apply_graph_job(rag, job.kind, job.payload)
+        async with open_engine(cfg) as engine:
+            result = await apply_graph_job(engine, job.kind, job.payload)
             # The CLI and stdio MCP cache answers by question; drop them so they see the edit.
-            result["query_cache_rows_cleared"] = await clear_query_cache(rag)
+            result["query_cache_rows_cleared"] = await engine.clear_query_cache()
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
         await store.finish(job.id, "failed", error=str(e))
@@ -36,9 +36,9 @@ async def _run_delete_job(cfg: Config, store: JobStore, job: Job) -> Job:
     book = job.payload["book"]
     log.info("[worker] job %d: deleting %s", job.id, book)
     try:
-        async with open_rag(cfg) as rag:
-            result = await delete_document(cfg, rag, book)
-            result["query_cache_rows_cleared"] = await clear_query_cache(rag)
+        async with open_engine(cfg) as engine:
+            result = await delete_document(cfg, engine, book)
+            result["query_cache_rows_cleared"] = await engine.clear_query_cache()
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
         await store.finish(job.id, "failed", error=str(e))

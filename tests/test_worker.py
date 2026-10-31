@@ -201,32 +201,32 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, monkey
 
 @pytest.fixture
 def fake_graph(monkeypatch):
-    """Replaces open_rag, apply_graph_job and clear_query_cache; read `.calls`, set `.error`."""
+    """Replaces open_engine and apply_graph_job; the fake is its own engine. Read `.calls`, set
+    `.error`."""
 
     class FakeGraph:
         def __init__(self):
             self.calls = []
             self.error = None
-            self.rag = object()
+            self.engine = self
 
         @asynccontextmanager
-        async def open_rag(self, cfg):
-            yield self.rag
+        async def open_engine(self, cfg):
+            yield self.engine
 
-        async def apply(self, rag, kind, payload):
-            self.calls.append((rag, kind, payload))
+        async def apply(self, engine, kind, payload):
+            self.calls.append((engine, kind, payload))
             if self.error:
                 raise self.error
             return {"before": {"description": "old"}, "after": {"description": "new"}}
 
-        async def clear(self, rag):
-            self.calls.append((rag, "clear"))
+        async def clear_query_cache(self):
+            self.calls.append((self.engine, "clear"))
             return 4
 
     fake = FakeGraph()
-    monkeypatch.setattr(worker, "open_rag", fake.open_rag)
+    monkeypatch.setattr(worker, "open_engine", fake.open_engine)
     monkeypatch.setattr(worker, "apply_graph_job", fake.apply)
-    monkeypatch.setattr(worker, "clear_query_cache", fake.clear)
     return fake
 
 
@@ -243,8 +243,8 @@ async def test_graph_job_applies_the_edit_and_clears_cached_answers(cfg, store, 
         "after": {"description": "new"},
         "query_cache_rows_cleared": 4,
     }
-    rag = fake_graph.rag
-    assert fake_graph.calls == [(rag, "edit_entity", payload), (rag, "clear")]
+    engine = fake_graph.engine
+    assert fake_graph.calls == [(engine, "edit_entity", payload), (engine, "clear")]
 
 
 async def test_graph_job_failure_fails_the_job_and_keeps_the_worker(cfg, store, fake_graph):
@@ -262,8 +262,8 @@ async def test_delete_job_deletes_the_document_and_clears_cached_answers(
 ):
     calls = []
 
-    async def fake_delete(cfg, rag, book):
-        calls.append((rag, book))
+    async def fake_delete(cfg, engine, book):
+        calls.append((engine, book))
         return {"book": book, "documents_deleted": 2}
 
     monkeypatch.setattr(worker, "delete_document", fake_delete)
@@ -274,11 +274,11 @@ async def test_delete_job_deletes_the_document_and_clears_cached_answers(
     done = await store.get_job(job.id)
     assert done.status == "done"
     assert done.result == {"book": "paper", "documents_deleted": 2, "query_cache_rows_cleared": 4}
-    assert calls == [(fake_graph.rag, "paper")]
+    assert calls == [(fake_graph.engine, "paper")]
 
 
 async def test_delete_job_failure_fails_the_job(cfg, store, fake_graph, monkeypatch):
-    async def fake_delete(cfg, rag, book):
+    async def fake_delete(cfg, engine, book):
         raise EnigramError("paper-c00001: pipeline busy")
 
     monkeypatch.setattr(worker, "delete_document", fake_delete)
