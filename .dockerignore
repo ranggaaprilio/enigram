@@ -11,3 +11,5 @@ jev/
 apps/api/tests/
 apps/api/scripts/
 apps/web/
+tools/ts-graph/node_modules/
+tools/ts-graph/test/

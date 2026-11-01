@@ -7,5 +7,5 @@ __pycache__/
 .DS_Store
 apps/web/node_modules/
 apps/web/dist/
-tools/ts-graph/node_modules/
 .claude/PRPs
+tools/ts-graph/node_modules/

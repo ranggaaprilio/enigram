@@ -182,13 +182,22 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, deps, 
     interrupted = await store.enqueue("index", {"book": "p"})
     await store.claim()
 
+    graph = object()
+    seen = []
+
     async def fake_open_store():
         return store
 
-    async def stop(cfg, store, deps):
+    async def fake_new_code_graph(s):
+        assert s is store
+        return graph
+
+    async def stop(cfg, store, deps, code_graph):
+        seen.append(code_graph)
         raise _Stop
 
     deps.open_store = fake_open_store
+    deps.new_code_graph = fake_new_code_graph
     monkeypatch.setattr(worker, "build_deps", lambda cfg: deps)
     monkeypatch.setattr(worker, "process_next", stop)
     with pytest.raises(_Stop):
@@ -196,6 +205,7 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, deps, 
 
     assert (await store.get_job(interrupted.id)).status == "queued"
     assert store.closed
+    assert seen == [graph]  # built once, passed to every job
 
 
 @pytest.fixture
@@ -301,22 +311,24 @@ async def test_repo_job_indexes_the_repository(
 ):
     calls = []
 
-    async def fake_index_repo(cfg, deps, url, ref=None):
-        calls.append((url, ref))
+    graph = object()
+
+    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None):
+        calls.append((url, ref, graph))
         return result
 
     monkeypatch.setattr(worker, "index_repo", fake_index_repo)
     job = await store.enqueue("index_repo", {"url": "https://github.com/org/h", "ref": "main"})
 
-    await worker.process_next(cfg, store, deps)
+    await worker.process_next(cfg, store, deps, graph)
 
     finished = await store.get_job(job.id)
     assert (finished.status, finished.error, finished.result) == (status, error, result)
-    assert calls == [("https://github.com/org/h", "main")]
+    assert calls == [("https://github.com/org/h", "main", graph)]
 
 
 async def test_repo_job_exception_fails_the_job(cfg, store, deps, monkeypatch):
-    async def fake_index_repo(cfg, deps, url, ref=None):
+    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None):
         raise EnigramError("git clone failed: repository not found")
 
     monkeypatch.setattr(worker, "index_repo", fake_index_repo)

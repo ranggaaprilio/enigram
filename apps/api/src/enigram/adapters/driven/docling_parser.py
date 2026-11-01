@@ -66,13 +66,13 @@ def build_converter() -> "DocumentConverter":
 
 
 def build_chunker(cfg: Config) -> "HybridChunker":
+    import tiktoken
     from docling.chunking import HybridChunker
-    from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
-    from transformers import AutoTokenizer
+    from docling_core.transforms.chunker.tokenizer.openai import OpenAITokenizer
 
-    tokenizer = HuggingFaceTokenizer(
-        tokenizer=AutoTokenizer.from_pretrained(str(cfg.tokenizer_path)),
-        max_tokens=cfg.chunk_max_tokens,
+    # The same encoding LightRAG counts with (config.CHUNK_TOKENIZER).
+    tokenizer = OpenAITokenizer(
+        tokenizer=tiktoken.get_encoding("cl100k_base"), max_tokens=cfg.chunk_max_tokens
     )
     return HybridChunker(tokenizer=tokenizer, merge_peers=True)
 

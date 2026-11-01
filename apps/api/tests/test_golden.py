@@ -383,3 +383,34 @@ def test_load_golden_set_rejects_non_bool_in_docs(tmp_path):
     question = code_question_yaml("behavior", "validateConfig", extra="    in_docs: maybe\n")
     with pytest.raises(EnigramError, match="'in_docs' must be true or false"):
         golden.load_golden_set(write_golden(tmp_path / "g.yaml", code_golden(question)))
+
+
+def test_code_set_checks_symbols_in_the_code_graph(cfg, tmp_path, fake_repo):
+    from code_fakes import sym
+
+    symbols = [
+        sym("AuthService.validateLogin", file="src/auth/auth.service.ts", lines=(2, 4)),
+        sym("validateConfig", kind="function", file="src/utils/validate-config.ts", parent=""),
+        sym("Dup.run", file="src/a.ts"),
+        sym("Dup.run", file="src/b.ts"),
+    ]
+    path = write_golden(
+        tmp_path / "g.yaml",
+        code_golden(
+            code_question_yaml("behavior", "AuthService.validateLogin", "validateConfig"),
+            code_question_yaml("behavior", "AuthService.missing", qid="b02"),
+            code_question_yaml("behavior", "Dup.run", qid="b03"),
+            code_question_yaml("behavior", "Dup.run", qid="b04", files=("src/b.ts",)),
+        ),
+    )
+
+    resolved, problems = golden.check_golden(cfg, path, symbols=symbols)
+
+    b01 = resolved.questions[0]
+    assert [ev.file for ev in b01.evidence] == [
+        "src/auth/auth.service.ts",
+        "src/utils/validate-config.ts",
+    ]
+    assert problems["b02"] == ["evidence 1: no symbol AuthService.missing in the code graph"]
+    assert problems["b03"] == ["evidence 1: symbol Dup.run: declared in 2 files; add file:"]
+    assert "b04" not in problems and "b01" not in problems

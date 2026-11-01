@@ -7,16 +7,20 @@ from dotenv import load_dotenv
 from enigram.domain.errors import EnigramError
 
 # LightRAG re-chunks anything longer than this. Docling chunks are capped at
-# CHUNK_MAX_TOKENS (Qwen tokenizer) and LightRAG counts with tiktoken, so the
-# 1.5x margin keeps one Docling chunk == one LightRAG chunk.
+# CHUNK_MAX_TOKENS and both Docling and LightRAG count with tiktoken (cl100k_base), so the
+# 1.5x margin is only a safety net that keeps one Docling chunk == one LightRAG chunk.
 LIGHTRAG_CHUNK_TOKEN_SIZE = 1200
 
-THINKING_MODES = ("template", "suffix", "on")
+# off sends thinking.type=disabled to DeepSeek; on leaves its thinking on.
+THINKING_MODES = ("off", "on")
 
-# Chat completions only; embeddings always stay on OMLX (DeepSeek serves no embedding model).
-LLM_PROVIDERS = ("omlx", "deepseek")
+# Chat completions; embeddings are on Voyage (DeepSeek serves no embedding model).
+LLM_PROVIDERS = ("deepseek",)
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
+DEFAULT_EMBED_MODEL = "voyage-4-lite"
+# The Docling chunker's tokenizer, recorded in the manifest by guard_chunk_settings.
+CHUNK_TOKENIZER = "tiktoken:cl100k_base"
 
 # Where LightRAG keeps the index: JSON/GraphML files under rag_dir, or PostgreSQL (pgvector).
 STORAGE_BACKENDS = ("file", "postgres")
@@ -68,8 +72,6 @@ def _api_keys(raw: str) -> tuple[tuple[str, str], ...]:
 
 @dataclass(frozen=True)
 class Config:
-    omlx_base_url: str
-    omlx_api_key: str = field(repr=False)
     llm_provider: str
     llm_base_url: str
     llm_api_key: str = field(repr=False)
@@ -77,7 +79,7 @@ class Config:
     embed_model: str
     embed_dim: int
     embed_max_tokens: int
-    tokenizer_path: Path
+    voyage_api_key: str = field(repr=False)
     chunk_max_tokens: int
     llm_max_async: int
     llm_max_tokens: int
@@ -96,28 +98,24 @@ class Config:
     repo_hosts: tuple[str, ...]
     data_dir: Path
     log_level: str
-    laya_path: Path
+    # The ts-morph sidecar (tools/ts-graph) that parses TypeScript repositories.
+    ts_graph_dir: Path
 
     @classmethod
     def from_env(cls, dotenv_path: Path | None = None) -> "Config":
         load_dotenv(dotenv_path)
-        thinking_mode = os.environ.get("THINKING_MODE", "template").strip() or "template"
+        thinking_mode = os.environ.get("THINKING_MODE", "off").strip() or "off"
         if thinking_mode not in THINKING_MODES:
             raise EnigramError(
                 f"THINKING_MODE must be one of {THINKING_MODES}, got {thinking_mode!r}"
             )
-        llm_provider = os.environ.get("LLM_PROVIDER", "omlx").strip() or "omlx"
+        llm_provider = os.environ.get("LLM_PROVIDER", "deepseek").strip() or "deepseek"
         if llm_provider not in LLM_PROVIDERS:
             raise EnigramError(f"LLM_PROVIDER must be one of {LLM_PROVIDERS}, got {llm_provider!r}")
-        omlx_base_url = os.environ.get("OMLX_BASE_URL", "http://localhost:8000/v1").rstrip("/")
-        omlx_api_key = _required("OMLX_API_KEY")
 
         def endpoint(provider: str, model_var: str, fallback_model: str = "") -> tuple[str, ...]:
             model = os.environ.get(model_var, "").strip() or fallback_model
-            if provider == "deepseek":
-                key = _required("DEEPSEEK_API_KEY")
-                return DEEPSEEK_BASE_URL, key, model or DEEPSEEK_DEFAULT_MODEL
-            return omlx_base_url, omlx_api_key, model or _required(model_var)
+            return DEEPSEEK_BASE_URL, _required("DEEPSEEK_API_KEY"), model or DEEPSEEK_DEFAULT_MODEL
 
         llm_base_url, llm_api_key, llm_model = endpoint(llm_provider, "LLM_MODEL")
         # The judge defaults to the generator; set JUDGE_* so a model never grades its own answers.
@@ -144,21 +142,14 @@ class Config:
             # `index --pages` dev run into the main index.
             raise EnigramError("Use WORKSPACE instead of POSTGRES_WORKSPACE.")
         return cls(
-            omlx_base_url=omlx_base_url,
-            omlx_api_key=omlx_api_key,
             llm_provider=llm_provider,
             llm_base_url=llm_base_url,
             llm_api_key=llm_api_key,
             llm_model=llm_model,
-            embed_model=_required("EMBED_MODEL"),
+            embed_model=os.environ.get("EMBED_MODEL", "").strip() or DEFAULT_EMBED_MODEL,
             embed_dim=_int("EMBED_DIM", 1024),
-            embed_max_tokens=_int("EMBED_MAX_TOKENS", 8192),
-            tokenizer_path=Path(
-                os.environ.get(
-                    "TOKENIZER_PATH",
-                    "~/.omlx/models/mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
-                )
-            ).expanduser(),
+            embed_max_tokens=_int("EMBED_MAX_TOKENS", 32000),
+            voyage_api_key=_required("VOYAGE_API_KEY"),
             chunk_max_tokens=_int("CHUNK_MAX_TOKENS", 800),
             llm_max_async=_int("LLM_MAX_ASYNC", 2),
             # Extraction answers run 600-1000 tokens; the cap stops runaway repetition well
@@ -182,8 +173,10 @@ class Config:
             or DEFAULT_REPO_HOSTS,
             data_dir=Path(os.environ.get("DATA_DIR", "./data")).expanduser(),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-            laya_path=Path(
-                os.environ.get("LAYA_PATH", "~/.omlx/models/convaiinnovations/laya")
+            # parents[4] of apps/api/src/enigram/config.py: the repository root (/app in Docker).
+            ts_graph_dir=Path(
+                os.environ.get("TS_GRAPH_DIR", "").strip()
+                or Path(__file__).resolve().parents[4] / "tools" / "ts-graph"
             ).expanduser(),
         )
 

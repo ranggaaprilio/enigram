@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS enigram_memories (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS enigram_memories_owner ON enigram_memories (workspace, api_key);
+-- Which model made the vector; NULL for rows added before it was recorded.
+ALTER TABLE enigram_memories ADD COLUMN IF NOT EXISTS embed_model TEXT;
 """
 
 
@@ -45,19 +47,40 @@ class PostgresMemoryStore:
     Shares the job store's pool and never closes it. Memory text is never logged.
     """
 
-    def __init__(self, pool: asyncpg.Pool, workspace: str, embed: Embed, dim: int):
+    def __init__(
+        self, pool: asyncpg.Pool, workspace: str, embed: Embed, dim: int, embed_model: str
+    ):
         self.pool = pool
         self.workspace = workspace
         self.embed = embed
         self.dim = dim
+        self.embed_model = embed_model
+        self._other_models: list[str] = []
 
     async def ensure_schema(self) -> None:
         await self.pool.execute(memory_schema(self.dim))
+        # Vectors from another model share the dimension but not the space: a search would
+        # rank them at random. Found once here; add() only writes the current model.
+        rows = await self.pool.fetch(
+            "SELECT DISTINCT coalesce(embed_model, 'unknown') AS m FROM enigram_memories "
+            "WHERE workspace = $1 AND embed_model IS DISTINCT FROM $2 ORDER BY m",
+            self.workspace,
+            self.embed_model,
+        )
+        self._other_models = [r["m"] for r in rows]
+
+    def _guard_model(self) -> None:
+        if self._other_models:
+            raise EnigramError(
+                f"Memories in workspace {self.workspace!r} were embedded with "
+                f"{', '.join(self._other_models)}, not {self.embed_model}; delete them from "
+                "enigram_memories (or switch EMBED_MODEL back) before using memory"
+            )
 
     async def _embed(self, text: str) -> str:
         try:
             vectors = np.asarray(await self.embed([text]))
-        except Exception as e:  # the embedding client raises its own errors (OMLX down, ...)
+        except Exception as e:  # the embedding client raises its own errors (Voyage down, ...)
             raise EnigramError(f"Embedding failed: {e}") from e
         if vectors.shape != (1, self.dim):
             raise EnigramError(
@@ -71,14 +94,16 @@ class PostgresMemoryStore:
             raise EnigramError("A memory needs some text")
         if len(text) > MEMORY_MAX_CHARS:
             raise EnigramError(f"A memory is at most {MEMORY_MAX_CHARS} characters")
+        self._guard_model()
         vector = await self._embed(text)
         row = await self.pool.fetchrow(
-            "INSERT INTO enigram_memories (workspace, api_key, text, embedding) "
-            "VALUES ($1, $2, $3, $4::vector) RETURNING id, created_at",
+            "INSERT INTO enigram_memories (workspace, api_key, text, embedding, embed_model) "
+            "VALUES ($1, $2, $3, $4::vector, $5) RETURNING id, created_at",
             self.workspace,
             api_key,
             text,
             vector,
+            self.embed_model,
         )
         log.info("[memory] added %d for %s", row["id"], api_key or "-")
         return row["id"], row["created_at"]
@@ -90,6 +115,7 @@ class PostgresMemoryStore:
             raise EnigramError("Search for something")
         if not 1 <= limit <= MEMORY_SEARCH_MAX:
             raise EnigramError(f"limit must be between 1 and {MEMORY_SEARCH_MAX}")
+        self._guard_model()
         start = time.perf_counter()
         vector = await self._embed(query)
         embedded = time.perf_counter()

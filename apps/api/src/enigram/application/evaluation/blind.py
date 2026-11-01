@@ -29,7 +29,7 @@ def key_path(sheet: Path) -> Path:
     return sheet.with_name(sheet.stem + ".key.json")
 
 
-def _load_run(path: Path) -> dict[str, Any]:
+def load_answers(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
@@ -41,7 +41,7 @@ def _load_run(path: Path) -> dict[str, Any]:
 
 def write_blind_sheet(cfg: Config, answer_files: list[Path], seed: int | None = None) -> BlindRun:
     """One sheet with every system's answer per question, labelled A, B, … in random order."""
-    runs = [_load_run(p) for p in answer_files]
+    runs = [load_answers(p) for p in answer_files]
     by_mode: dict[str, dict[str, dict[str, Any]]] = {}
     for run in runs:
         if run["mode"] in by_mode:

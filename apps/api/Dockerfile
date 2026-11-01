@@ -1,5 +1,14 @@
 # One image for `enigram api` and `enigram worker` (see docker-compose.yml). Built from the
 # repository root, the uv workspace: `docker build -f apps/api/Dockerfile .`
+
+# The ts-morph sidecar (tools/ts-graph) runs on Node; only the binary and the sidecar's own
+# node_modules are copied, both built on bookworm like python:3.12-slim.
+FROM node:22-bookworm-slim AS tsgraph
+WORKDIR /tsgraph
+COPY tools/ts-graph/package.json tools/ts-graph/package-lock.json ./
+RUN npm ci --omit=dev
+COPY tools/ts-graph/ ./
+
 FROM python:3.12-slim
 
 # Docling's PDF backends need libgl1/libglib. Docling renders each page for its layout model, and
@@ -16,6 +25,10 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /bin/uv
 
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+
+# Config's TS_GRAPH_DIR default resolves to /app/tools/ts-graph.
+COPY --from=tsgraph /usr/local/bin/node /usr/local/bin/node
+COPY --from=tsgraph /tsgraph /app/tools/ts-graph
 
 # Dependencies first, so code changes do not reinstall them.
 COPY pyproject.toml uv.lock ./

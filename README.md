@@ -1,7 +1,7 @@
 # Enigram
 
 Turns written documents into a knowledge graph an agent can read (GraphRAG via
-[LightRAG](https://github.com/HKUDS/LightRAG)), fully local through oMLX. It indexes digital
+[LightRAG](https://github.com/HKUDS/LightRAG)), with DeepSeek (chat) and Voyage (embeddings). It indexes digital
 (non-scanned) English journal papers in PDF, plus Markdown files, and answers questions with citations, from the CLI
 or from Claude Code over MCP.
 
@@ -9,25 +9,25 @@ See `.claude/PRPs/prds/enigram-graphrag.prd.md` for the product plan.
 
 ## Setup
 
-Prerequisites: oMLX running on `http://localhost:8000` with a chat model (Qwen3-8B) and an
-embedding model (Qwen3-Embedding-0.6B), and [uv](https://docs.astral.sh/uv/).
+Prerequisites: a [DeepSeek](https://platform.deepseek.com) API key, a
+[Voyage AI](https://www.voyageai.com) API key, Node 22 (for the TypeScript code graph sidecar in
+`tools/ts-graph`) and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
 cp .env.example .env
 ```
 
-Fill in `.env`: `OMLX_API_KEY`, and `LLM_MODEL` / `EMBED_MODEL` exactly as listed by
-`GET /v1/models`. To run every LLM call (entity extraction, answers, judges) on the DeepSeek API
-instead, set `LLM_PROVIDER=deepseek` and `DEEPSEEK_API_KEY`; `LLM_MODEL` then defaults to
-`deepseek-flash`. Embeddings always stay on oMLX. Then verify:
+Fill in `.env`: `DEEPSEEK_API_KEY` and `VOYAGE_API_KEY`. Every chat call (entity extraction,
+answers, judges) goes to DeepSeek (`LLM_MODEL` defaults to `deepseek-flash`); document and memory
+embeddings go to Voyage (`EMBED_MODEL` defaults to `voyage-4-lite`). Then verify:
 
 ```bash
 uv run enigram check
 ```
 
-All lines should be ✓. If the raw output still contains `<think>`, set `THINKING_MODE=suffix`
-and run `check` again.
+All lines should be ✓: the DeepSeek models are served, JSON mode works and the Voyage embedding
+has `EMBED_DIM` dimensions.
 
 ### Index storage
 
@@ -86,7 +86,7 @@ uv run enigram query "How do AI coding agents relate to code review practices in
 
 Prints the answer (Markdown, citing `[n]`), the sources (paper title, section, pages) and the
 time. Retrieval combines the knowledge graph and vector search (LightRAG mode `mix`). A new
-question takes ~40-50 s on Qwen3-8B; asking the same question again is answered from the cache.
+question is answered from the cache when asked again.
 
 To compare against plain vector RAG, add `--mode naive`:
 
@@ -161,11 +161,9 @@ worker and the web UI on `http://localhost:3000`. Uploads land in `data/books/`;
 pipeline as `enigram index`, and every query is stored with its retrieval trace.
 
 The service needs `STORAGE_BACKEND=postgres` (the job queue lives there, and only Postgres lets
-the API see what the worker indexed). Models stay outside compose: oMLX on the host is reached at
-`host.docker.internal` (override with `COMPOSE_OMLX_BASE_URL`), and `~/.omlx/models` is mounted
-at the same absolute path so the tokenizer path of an index built on the host still matches
-(override with `COMPOSE_TOKENIZER_PATH`). The first PDF downloads Docling's layout models into the
-`model-cache` volume. Do not run `enigram index` on the host while the worker runs: both would
+the API see what the worker indexed). Models are online (DeepSeek, Voyage); the image also
+carries Node and the `tools/ts-graph` sidecar. The first PDF downloads Docling's layout models into
+the `model-cache` volume. Do not run `enigram index` on the host while the worker runs: both would
 write the same index.
 
 | Endpoint | Does |
@@ -263,6 +261,26 @@ bitbucket.org, codeberg.org`), without credentials, so private repositories are 
 Symlinks, files over 1 MB and anything in `.git` are skipped; a repository with more than 500
 Markdown files is refused. The image installs `git`; without Docker, `git` must be on the `PATH`.
 
+A repository with a `tsconfig.json` at its root also gets a code graph (needs
+`STORAGE_BACKEND=postgres`): the `tools/ts-graph` sidecar (Node 22, ts-morph) reads its symbols,
+calls, injections, environment reads and entry points (Nest routes, `@Cron`, events, jobs,
+`bootstrap`) without running or installing anything from the repository, then the generator
+writes a summary of every symbol an entry point reaches and a step-by-step flow per entry point
+(cached by body hash, so a re-index only pays for what changed). Secret-named files are skipped
+and secret-looking values redacted. Limits: 2,000 TypeScript files, 50,000 lines. The job result
+has a `code` block with the counts, the share of calls that resolved and the tokens spent.
+
+```bash
+cd tools/ts-graph && npm ci && cd -     # once, without Docker
+uv run enigram repo https://github.com/ranggaaprilio/nestjs-boilerplate --ref eval-v1 [--limit 3]
+uv run enigram query --scope code "Can an unconfirmed user log in?"
+```
+
+`enigram repo` indexes one repository without the API and writes the result to
+`data/reports/repo-index-<ts>.json`; `--limit N` summarises only the first N entry points.
+`query --scope code` answers from the flow summaries and the source, citing
+`file:start-end@sha`.
+
 ### Correcting the graph
 
 When an answer is wrong because the graph is, search the Graph page for the wrong fact (e.g.
@@ -296,8 +314,9 @@ There are two hand-written golden sets (committed):
 - `eval/golden.yaml`: questions about one TypeScript repository at a pinned commit, with symbols
   as evidence. Format, lock and labelling protocol are in [`eval/README.md`](eval/README.md).
   `golden check` clones the pinned repository once into `data/eval/repos/` and checks that it is
-  at `pinned_sha` and that every evidence symbol is declared there; it needs no index. Delete
-  `data/eval/repos` after the pin changes.
+  at `pinned_sha` and that every evidence symbol is declared there; it needs no index.
+  `golden check --graph` checks the symbols by qualified name in the code graph instead (after
+  `enigram repo <url> --ref <ref>`). Delete `data/eval/repos` after the pin changes.
 - `eval/golden-docs.yaml`: questions about the indexed documents. Pass
   `--file eval/golden-docs.yaml` to every `golden` and `eval` command below.
 
@@ -314,15 +333,24 @@ report X."). `golden check` cannot prove the answer is absent, so check those by
    uv run enigram golden check
    ```
 
-2. Answer them with one system. A full run takes ~20 min with `mix` (~10 with `naive`);
-   re-running is fast because answers are cached:
+2. Answer them with one system: `mix` or `naive` for the document set; `code` (the code graph)
+   or `agent+repo` (a coding agent reading the pinned clone, the baseline) for the code set:
 
    ```bash
-   uv run enigram golden answer --mode mix
+   uv run enigram golden answer --file eval/golden-docs.yaml --system mix
+   uv run enigram golden answer --system code --split dev
+   uv run enigram golden answer --system agent+repo --split dev
    ```
 
-   This writes `data/eval/answers-<mode>-<timestamp>.json` (answers, claims and retrieved
-   context) and `data/eval/labels-<mode>-<timestamp>.md`.
+   This writes `data/eval/answers-<system>-<timestamp>.json` (answers, claims, retrieved context,
+   tokens, citations) and `data/eval/labels-<system>-<timestamp>.md`. `--category` (repeatable)
+   filters by category; the `verdict` and `reserve` splits are locked until Phase 7
+   (`--allow-verdict`). The code systems skip `behavior_annotation` (Phase 2). For a code run,
+   check the citations against the pinned clone:
+
+   ```bash
+   uv run enigram golden citations data/eval/answers-code-<timestamp>.json
+   ```
 3. In the labels file, mark each claim (one sentence of the answer) `[x]` if the retrieved
    context supports it or `[-]` if it does not. Label at least 30 claims.
 4. Count the labels:
@@ -335,7 +363,7 @@ report X."). `golden check` cannot prove the answer is absent, so check those by
    files of several systems into one blind sheet, label it, then open the key:
 
    ```bash
-   uv run enigram golden blind data/eval/answers-mix-<ts>.json data/eval/answers-naive-<ts>.json
+   uv run enigram golden blind data/eval/answers-code-<ts>.json data/eval/answers-agent+repo-<ts>.json
    uv run enigram golden unblind data/eval/blind-<timestamp>.md
    ```
 
@@ -345,13 +373,19 @@ report X."). `golden check` cannot prove the answer is absent, so check those by
 ## Evaluate
 
 ```bash
-uv run enigram eval --labels data/eval/labels-mix-<timestamp>.md
+uv run enigram eval --answers data/eval/answers-code-<ts>.json data/eval/answers-agent+repo-<ts>.json \
+  --blind data/eval/blind-<ts>.md
 ```
 
-Runs GraphRAG (`mix`) and the vector baseline (`naive`) on every golden question, scores the
-answers and writes `data/reports/eval-<timestamp>.{md,json}`. Scoring takes 60-100 s per answer,
-so a full run of 20 questions (40 answers) takes 1-1.5 hours; `--limit 2` is a ~6 minute trial. Each run also saves both systems' answers and label
-sheets in `data/eval/`, so new claims can be labelled for the next run.
+Scores existing answer files (from `golden answer`) against the labelled blind sheets and writes
+`data/reports/eval-<timestamp>.{md,json}`: accuracy per system, split and category, citation
+validity (`<answers>.citations.json`, made by `golden citations` or on the fly), abstention,
+injection markers, tokens, latency and tool calls. The Phase-1 criteria (code ≥ 7/10 on `dev`,
+code ≥ agent+repo − 1, every code answer fully cited, unresolved calls in flows ≤ 50%) get PASS,
+FAIL or INSUFFICIENT DATA.
+
+`--judge` also grades every answer with Ragas and the LLM claim judge (60-100 s per answer); it
+is meant for Phase 7:
 
 | Score | How |
 |---|---|
@@ -359,16 +393,11 @@ sheets in `data/eval/`, so new claims can be labelled for the next run.
 | context recall, context precision | Deterministic: retrieved chunks vs. the golden evidence chunks |
 | claim faithfulness (LLM) | The judge model judges each sentence of the answer against the retrieved context |
 | abstention | The judge model decides whether each answer declines to answer: the share of `unanswerable` questions refused (higher is better) and of answerable ones refused (false abstention, lower is better). Reported only, no target |
-| Laya | P(grounded) per sentence; reported zero-shot (P ≥ 0.5) and with a threshold calibrated on the human labels (5-fold CV), plus AUROC |
 
-`--labels` takes one or more label sheets; claims are matched by question and sentence text, so
-sheets from `golden answer` or an earlier `eval` both work. The report answers the three PRD
-criteria (GraphRAG faithfulness ≥ 0.9, GraphRAG beats the baseline on multi-hop questions, Laya
-agrees with humans) with PASS, FAIL or INSUFFICIENT DATA, lists every missing score with its
-reason, and compares the headline numbers with the previous run.
-
-With only one paper indexed, both systems retrieve every chunk: context recall is always 1.0 and
-the GraphRAG-vs-baseline comparison is not meaningful until ~5-10 papers are indexed.
+With `--judge`, `--labels` takes claim label sheets from `golden answer` to measure the judge
+against humans; claims are matched by question and sentence text. Without `--judge`, abstention
+is rule-based (the system said it has no answer). Every report lists missing scores with their
+reason and compares the headline numbers with the previous run.
 
 ## Reset
 
@@ -394,6 +423,6 @@ CONTRIBUTING.md for the layout, and `make` for shortcuts).
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run pytest -m "not omlx and not docling"   # fast unit tests
-uv run pytest                                  # + Docling, + OMLX when OMLX_API_KEY is set
+uv run pytest -m "not live and not docling"   # fast unit tests
+uv run pytest                                  # + Docling, + live APIs when both keys are set
 ```

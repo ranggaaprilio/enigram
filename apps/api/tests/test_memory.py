@@ -36,7 +36,7 @@ async def pool():
 @pytest.fixture
 async def memory(pool):
     """A store in its own workspace, so rows never mix with real memories."""
-    memory = PostgresMemoryStore(pool, f"test_{uuid4().hex[:8]}", fake_embed, DIM)
+    memory = PostgresMemoryStore(pool, f"test_{uuid4().hex[:8]}", fake_embed, DIM, "fake-embed")
     await memory.ensure_schema()
     yield memory
     await pool.execute("DELETE FROM enigram_memories WHERE workspace = $1", memory.workspace)
@@ -71,7 +71,7 @@ async def test_memories_belong_to_one_key(memory):
 
 async def test_memories_belong_to_one_workspace(memory, pool):
     await memory.add("staging database", "laptop-a")
-    other = PostgresMemoryStore(pool, f"{memory.workspace}_other", fake_embed, DIM)
+    other = PostgresMemoryStore(pool, f"{memory.workspace}_other", fake_embed, DIM, "fake-embed")
 
     assert (await other.search("staging", "laptop-a")).memories == []
 
@@ -105,7 +105,7 @@ async def test_embedding_failure_is_an_enigram_error(pool):
     async def down(texts):
         raise ConnectionError("connection refused")
 
-    memory = PostgresMemoryStore(pool, "unused", down, DIM)
+    memory = PostgresMemoryStore(pool, "unused", down, DIM, "fake-embed")
 
     with pytest.raises(EnigramError, match="Embedding failed: connection refused"):
         await memory.add("staging database", "laptop-a")
@@ -115,7 +115,17 @@ async def test_wrong_embedding_shape_is_an_enigram_error(pool):
     async def short(texts):
         return np.zeros((1, 3))
 
-    memory = PostgresMemoryStore(pool, "unused", short, DIM)
+    memory = PostgresMemoryStore(pool, "unused", short, DIM, "fake-embed")
 
     with pytest.raises(EnigramError, match=r"shape \(1, 3\), expected \(1, 1024\)"):
         await memory.search("staging", "laptop-a")
+
+
+async def test_memories_from_another_embedding_model_are_refused(pool, memory):
+    await memory.add("staging database", "laptop-a")
+    other = PostgresMemoryStore(pool, memory.workspace, fake_embed, DIM, "voyage-4-lite")
+    await other.ensure_schema()
+    with pytest.raises(EnigramError, match="embedded with fake-embed, not voyage-4-lite"):
+        await other.search("staging", "laptop-a")
+    with pytest.raises(EnigramError, match="embedded with fake-embed"):
+        await other.add("deploy friday", "laptop-a")

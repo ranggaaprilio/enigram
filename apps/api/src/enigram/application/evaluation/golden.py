@@ -17,6 +17,7 @@ from enigram.application.indexing import load_manifest
 from enigram.application.repo_sync import check_ref, check_repo_url, clone
 from enigram.config import Config
 from enigram.domain.chunk import Chunk
+from enigram.domain.code import CodeSymbol
 from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
@@ -312,14 +313,37 @@ def resolve_symbol(ev: Evidence, files: dict[str, str]) -> tuple[Evidence, list[
     return replace(ev, file=hits[0]), []
 
 
-def resolve_symbols(q: GoldenQuestion, files: dict[str, str]) -> tuple[GoldenQuestion, list[str]]:
+def resolve_graph_symbol(
+    ev: Evidence, by_name: dict[str, list[CodeSymbol]]
+) -> tuple[Evidence, list[str]]:
+    """Find `ev.symbol` by exact qualified name in the code graph: the type-aware check."""
+    rows = [s for s in by_name.get(ev.symbol, []) if not ev.file or s.file == ev.file]
+    if not rows:
+        where = f" in {ev.file}" if ev.file else ""
+        return ev, [f"no symbol {ev.symbol}{where} in the code graph"]
+    files = sorted({s.file for s in rows})
+    if len(files) > 1:
+        return ev, [f"symbol {ev.symbol}: declared in {len(files)} files; add file:"]
+    return replace(ev, file=files[0]), []
+
+
+def resolve_symbols(
+    q: GoldenQuestion,
+    files: dict[str, str],
+    by_name: dict[str, list[CodeSymbol]] | None = None,
+) -> tuple[GoldenQuestion, list[str]]:
+    """Resolve symbol evidence by grep, or by qualified name when `by_name` (the code graph's
+    symbols) is given."""
     problems, resolved = [], []
     for i, ev in enumerate(q.evidence, 1):
         if not ev.symbol:
             problems.append(f"evidence {i}: code golden sets take symbol evidence, not quotes")
             resolved.append(ev)
             continue
-        ev, found = resolve_symbol(ev, files)
+        if by_name is not None:
+            ev, found = resolve_graph_symbol(ev, by_name)
+        else:
+            ev, found = resolve_symbol(ev, files)
         problems += [f"evidence {i}: {p}" for p in found]
         resolved.append(ev)
     return replace(q, evidence=tuple(resolved)), problems
@@ -380,11 +404,13 @@ def category_problems(q: GoldenQuestion) -> list[str]:
     return []
 
 
-def check_golden(cfg: Config, path: Path) -> tuple[GoldenSet, dict[str, list[str]]]:
+def check_golden(
+    cfg: Config, path: Path, *, symbols: list[CodeSymbol] | None = None
+) -> tuple[GoldenSet, dict[str, list[str]]]:
     """The set with resolved evidence and problems per question id (empty dict = valid).
 
     A document set is checked against the index; a code set against its pinned repository,
-    so it needs no index."""
+    so it needs no index, or, with `symbols`, against the code graph of that repository."""
     golden = load_golden_set(path)
     if golden.repo is None:
         chunks = load_indexed_chunks(cfg)
@@ -394,9 +420,14 @@ def check_golden(cfg: Config, path: Path) -> tuple[GoldenSet, dict[str, list[str
             return resolve_evidence(q, chunks, normalized)
     else:
         files = read_ts_files(checkout_pinned(cfg, golden.repo))
+        by_name: dict[str, list[CodeSymbol]] | None = None
+        if symbols is not None:
+            by_name = {}
+            for s in symbols:
+                by_name.setdefault(s.qualified_name, []).append(s)
 
         def resolve(q: GoldenQuestion) -> tuple[GoldenQuestion, list[str]]:
-            return resolve_symbols(q, files)
+            return resolve_symbols(q, files, by_name)
 
     resolved, problems = [], {}
     for q in golden.questions:
