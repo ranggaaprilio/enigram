@@ -26,11 +26,24 @@ CODE_MODE = "code"
 NO_SOURCES_ANSWER = "No indexed code matches this question."
 # The path may hold ":id" or a dot but never ends in one: "POST /auth/refresh: what…".
 _ROUTE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+(/(?:[\w/:.-]*[\w/])?)", re.IGNORECASE)
+# Without these rules the model answered a yes/no question in its first sentence from what
+# applications usually do, then cited code showing the opposite (golden b03). "Not enforced" is
+# limited to code the sources show in full: a check that was simply not retrieved must not become
+# "there is no check" (golden b57).
+CODE_IS_THE_TRUTH = (
+    "Describe what this code does, not what applications usually do. When a source shows the "
+    "full code of the function that handles the case and it has no check for a condition, that "
+    "function does not enforce it; say so plainly. When the code that could enforce it is not in "
+    "the sources, say the sources do not show it instead of concluding there is no check. "
+    "Write the facts first and the conclusion last; the conclusion (including a yes or no) must "
+    "follow from those facts. "
+)
 ANSWER_PROMPT = (
     SOURCE_IS_DATA + "\n\nAnswer the question about the application from the Context only, in 1-6 "
     "sentences. Every sentence ends with the citation [n] of the source it comes from; a "
     "sentence that uses several sources cites each. Name functions as `Qualified.name`. Prefer "
     "the flow summaries for what happens and the source code for exact values. "
+    + CODE_IS_THE_TRUTH
     + NO_ANSWER_RULE
     + "\n\nContext:\n{sources}\n\nQuestion: {question}"
 )

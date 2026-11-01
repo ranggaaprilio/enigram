@@ -87,3 +87,12 @@ async def test_context_packing_stops_at_the_budget(cfg, graph, monkeypatch):
     assert 0 < len(small.sources) < len(full.sources)
     assert small.extra["context_tokens"] <= 120
     assert [s.ref for s in small.sources] == list(range(1, len(small.sources) + 1))
+
+
+async def test_prompt_asks_for_facts_before_the_conclusion(cfg, graph):
+    chat = FakeChat("x [1].")
+    await answer_code_question(cfg, chat, graph, 1, SHA, "What does AppService.find do?")
+    prompt = chat.prompts[0]
+    assert code_query.CODE_IS_THE_TRUTH in prompt
+    assert "facts first and the conclusion last" in prompt
+    assert prompt.index(code_query.CODE_IS_THE_TRUTH) < prompt.index("Context:")
