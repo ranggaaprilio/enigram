@@ -6,15 +6,16 @@ import pytest
 from enigram.config import Config
 
 CONFIG_ENV = (
-    "OMLX_BASE_URL",
-    "OMLX_API_KEY",
     "LLM_PROVIDER",
     "DEEPSEEK_API_KEY",
     "LLM_MODEL",
     "JUDGE_PROVIDER",
     "JUDGE_MODEL",
     "JUDGE_MAX_TOKENS",
+    "VOYAGE_API_KEY",
     "EMBED_MODEL",
+    "EMBED_DIM",
+    "EMBED_MAX_TOKENS",
     "THINKING_MODE",
     "DATA_DIR",
     "STORAGE_BACKEND",
@@ -25,16 +26,18 @@ CONFIG_ENV = (
     "POSTGRES_DATABASE",
     "ENIGRAM_API_KEYS",
     "REPO_HOSTS",
+    "TS_GRAPH_DIR",
 )
 
 
 def pytest_collection_modifyitems(config, items):
-    laya_path = Path(
-        os.environ.get("LAYA_PATH", "~/.omlx/models/convaiinnovations/laya")
-    ).expanduser()
+    live_keys = ("DEEPSEEK_API_KEY", "VOYAGE_API_KEY")
     skips = {
-        "omlx": None if os.environ.get("OMLX_API_KEY") else "OMLX_API_KEY not set",
-        "laya": None if (laya_path / "model.safetensors").exists() else f"no Laya at {laya_path}",
+        "live": (
+            None
+            if all(os.environ.get(k) for k in live_keys)
+            else "DEEPSEEK_API_KEY and VOYAGE_API_KEY not set"
+        ),
         "postgres": (
             None if os.environ.get("ENIGRAM_TEST_PG_DSN") else "ENIGRAM_TEST_PG_DSN not set"
         ),
@@ -65,18 +68,9 @@ def clean_env(monkeypatch):
 
 @pytest.fixture
 def cfg(clean_env, monkeypatch, tmp_path) -> Config:
-    monkeypatch.setenv("OMLX_API_KEY", "test-key-not-real")
-    monkeypatch.setenv("LLM_MODEL", "llm-test")
-    monkeypatch.setenv("EMBED_MODEL", "embed-test")
-    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
-    return Config.from_env(clean_env)
-
-
-@pytest.fixture
-def deepseek_cfg(cfg, clean_env, monkeypatch) -> Config:
-    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
-    monkeypatch.delenv("LLM_MODEL")
+    monkeypatch.setenv("VOYAGE_API_KEY", "vo-key-not-real")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     return Config.from_env(clean_env)
 
 

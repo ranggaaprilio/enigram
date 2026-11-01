@@ -8,3 +8,4 @@ __pycache__/
 apps/web/node_modules/
 apps/web/dist/
 .claude/PRPs
+tools/ts-graph/node_modules/

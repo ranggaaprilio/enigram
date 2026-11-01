@@ -62,7 +62,7 @@ def test_select_books_rejects_name_collision(cfg, tmp_path):
         index.select_books(cfg, [a, b], {"books": {}})
 
 
-async def test_run_index_returns_early_without_omlx_when_up_to_date(cfg, deps, tmp_path):
+async def test_run_index_returns_early_without_llm_when_up_to_date(cfg, deps, tmp_path):
     folder = tmp_path / "papers"
     folder.mkdir()
     pdf = folder / "p.pdf"
@@ -71,10 +71,10 @@ async def test_run_index_returns_early_without_omlx_when_up_to_date(cfg, deps, t
     index.guard_chunk_settings(cfg, manifest)
     index.save_manifest(cfg, manifest)
 
-    async def no_omlx():
+    async def no_llm():
         raise AssertionError("check_llm must not run when nothing changed")
 
-    deps.check_llm = no_omlx
+    deps.check_llm = no_llm
     run = await index.run_index(cfg, deps, folder)
 
     assert run.up_to_date == ["p"]
@@ -82,41 +82,48 @@ async def test_run_index_returns_early_without_omlx_when_up_to_date(cfg, deps, t
     assert run.report_path is None
 
 
-def test_guard_llm_model_records_model_on_fresh_index(deepseek_cfg):
+def test_guard_embed_model_records_then_rejects_another_model(cfg):
+    cfg.rag_dir.mkdir(parents=True)
+    (cfg.rag_dir / "kv_store.json").write_text("{}")
+    manifest = {"books": {"p": {"status": "indexed"}}}
+    index.guard_embed_model(cfg, manifest)  # recorded before: trusted and recorded
+    assert manifest["embed_model"] == cfg.embed_model
+    index.guard_embed_model(cfg, manifest)
+    manifest["embed_model"] = "qwen3-embedding"
+    with pytest.raises(EnigramError, match="Embedding model changed"):
+        index.guard_embed_model(cfg, manifest)
+
+
+def test_guard_llm_model_records_model_on_fresh_index(cfg):
     manifest = {"books": {}}
-    index.guard_llm_model(deepseek_cfg, manifest)
+    index.guard_llm_model(cfg, manifest)
     assert manifest["llm_provider"] == "deepseek"
     assert manifest["llm_model"] == "deepseek-flash"
 
 
-@pytest.mark.parametrize(
-    "stored",
-    [
-        {},  # index built before the extraction model was recorded
-        {"llm_provider": "omlx", "llm_model": "qwen3-8b"},
-    ],
-)
-def test_guard_llm_model_rejects_index_from_another_model(deepseek_cfg, stored):
-    deepseek_cfg.rag_dir.mkdir(parents=True)
-    (deepseek_cfg.rag_dir / "kv_store.json").write_text("{}")
+def test_guard_llm_model_rejects_index_from_another_model(cfg):
+    cfg.rag_dir.mkdir(parents=True)
+    (cfg.rag_dir / "kv_store.json").write_text("{}")
+    stored = {"llm_provider": "deepseek", "llm_model": "deepseek-v4-pro"}
     manifest = {"books": {"p": {"status": "indexed"}}, **stored}
     with pytest.raises(EnigramError, match="Extraction LLM changed"):
-        index.guard_llm_model(deepseek_cfg, manifest)
+        index.guard_llm_model(cfg, manifest)
 
 
-def test_guard_llm_model_accepts_legacy_index_on_omlx(cfg):
+def test_guard_llm_model_rejects_manifest_without_provider(cfg):
+    # Indexes built before the provider was recorded were extracted on a local model.
     cfg.rag_dir.mkdir(parents=True)
     (cfg.rag_dir / "kv_store.json").write_text("{}")
     manifest = {"books": {"p": {"status": "indexed"}}}
-    index.guard_llm_model(cfg, manifest)
-    assert manifest["llm_provider"] == "omlx"
+    with pytest.raises(EnigramError, match="Extraction LLM changed"):
+        index.guard_llm_model(cfg, manifest)
 
 
-def test_guard_llm_model_accepts_same_model(deepseek_cfg):
-    deepseek_cfg.rag_dir.mkdir(parents=True)
-    (deepseek_cfg.rag_dir / "kv_store.json").write_text("{}")
+def test_guard_llm_model_accepts_same_model(cfg):
+    cfg.rag_dir.mkdir(parents=True)
+    (cfg.rag_dir / "kv_store.json").write_text("{}")
     manifest = {"books": {"p": {}}, "llm_provider": "deepseek", "llm_model": "deepseek-flash"}
-    index.guard_llm_model(deepseek_cfg, manifest)
+    index.guard_llm_model(cfg, manifest)
 
 
 def test_list_sources_finds_pdf_and_markdown(tmp_path):
@@ -214,7 +221,7 @@ async def test_load_graph_postgres_empty_raises(pg_cfg, monkeypatch):
 
 def test_guard_llm_model_postgres_trusts_manifest(pg_cfg):
     # No local rag_dir: with Postgres the manifest alone says an index exists.
-    manifest = {"books": {"p": {"status": "indexed"}}, "llm_provider": "omlx", "llm_model": "x"}
+    manifest = {"books": {"p": {"status": "indexed"}}, "llm_provider": "deepseek", "llm_model": "x"}
     with pytest.raises(EnigramError, match="Extraction LLM changed"):
         index.guard_llm_model(pg_cfg, manifest)
 

@@ -1,4 +1,6 @@
-"""End-to-end indexing against the real OMLX server. Skipped unless OMLX_API_KEY is set."""
+"""End-to-end indexing against the real DeepSeek and Voyage APIs.
+
+Skipped unless DEEPSEEK_API_KEY and VOYAGE_API_KEY are set."""
 
 import dataclasses
 import json
@@ -20,7 +22,7 @@ def live_cfg(tmp_path) -> Config:
     return dataclasses.replace(cfg, data_dir=tmp_path / "data", storage="file")
 
 
-@pytest.mark.omlx
+@pytest.mark.live
 @pytest.mark.docling
 async def test_index_end_to_end_and_resume(live_cfg, book_pdf, monkeypatch):
     calls = []

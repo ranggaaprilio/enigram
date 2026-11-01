@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
     from enigram.domain.answer import QueryResult
     from enigram.domain.chunk import ParsedBook
+    from enigram.domain.code import CodeEdge, CodeEntrypoint, CodeFile, CodeSymbol, FlowSummary
     from enigram.domain.job import Job
     from enigram.domain.memory import MemorySearch
 
@@ -136,12 +137,42 @@ class DocumentParser(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # raw JSON text from the model; may be invalid, validate before use
+
+
+@dataclass(frozen=True)
+class ChatReply:
+    text: str
+    tool_calls: list[ToolCall]
+    finish_reason: str  # "stop" | "length" | "tool_calls" | ...
+    tokens_in: int
+    tokens_out: int
+    secs: float
+
+
 class ChatModel(Protocol):
-    """One prompt in, the reply out (reasoning blocks removed)."""
+    """A chat model: one prompt in, the reply out (reasoning blocks removed)."""
 
     async def complete(
         self, prompt: str, *, temperature: float | None = None, json_mode: bool = False
     ) -> str: ...
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        json_mode: bool = False,
+    ) -> ChatReply:
+        """One chat-completions call with token usage; `tools` in the OpenAI function format."""
+        ...
 
 
 class AnswerScorer(Protocol):
@@ -154,11 +185,83 @@ class AnswerScorer(Protocol):
         ...
 
 
-class ClaimScorer(Protocol):
-    """A second, non-LLM opinion on whether each claim is grounded."""
+@dataclass(frozen=True)
+class ParsedGraph:
+    symbols: list["CodeSymbol"]
+    edges: list["CodeEdge"]
+    entrypoints: list["CodeEntrypoint"]
+    report: dict[str, Any]
 
-    def score_claims(self, claims: list[tuple[str, list[str]]]) -> list[dict[str, Any]]:
-        """Per (claim, premises): {"p_grounded": float | None, "truncated": bool}."""
+
+class CodeParser(Protocol):
+    def parse(self, root: Path) -> ParsedGraph:
+        """Static analysis of a checked-out repository; never runs the repository's code."""
+        ...
+
+
+class CodeGraphRepository(Protocol):
+    """The code graph of indexed repositories, scoped to one workspace."""
+
+    async def ensure_schema(self) -> None: ...
+
+    async def replace_repo(
+        self,
+        url: str,
+        ref: str | None,
+        commit_sha: str,
+        files: list["CodeFile"],
+        graph: ParsedGraph,
+    ) -> int:
+        """The repo id. One transaction: the old files, symbols, edges and entry points of
+        (url, ref) are gone; summaries stay (build_summaries prunes them)."""
+        ...
+
+    async def set_report(self, repo_id: int, report: dict[str, Any]) -> None: ...
+
+    async def get_repo(self, url: str, ref: str | None) -> dict[str, Any] | None:
+        """{"id", "url", "ref", "indexed_sha", "indexed_at", "report"}, None if not indexed."""
+        ...
+
+    async def list_repos(self) -> list[dict[str, Any]]: ...
+
+    async def entrypoints(self, repo_id: int) -> list[tuple["CodeEntrypoint", "CodeSymbol"]]: ...
+
+    async def symbols_by_id(self, repo_id: int, ids: list[str]) -> dict[str, "CodeSymbol"]: ...
+
+    async def symbols_in_repo(self, repo_id: int) -> list["CodeSymbol"]: ...
+
+    async def find_symbols(self, repo_id: int, names: list[str]) -> list["CodeSymbol"]:
+        """Exact qualified_name matches, or qualified names ending in ".<name>"."""
+        ...
+
+    async def callees(
+        self, repo_id: int, symbol_id: str
+    ) -> list[tuple["CodeEdge", "CodeSymbol | None"]]:
+        """calls and calls_external edges out of a symbol (None for external); a call to an
+        interface or abstract member is followed by one IMPLEMENTATION_CALL edge per
+        implementation."""
+        ...
+
+    async def search(self, repo_id: int, query: str, limit: int = 10) -> list[tuple[str, float]]:
+        """(symbol id, rank) by full-text search over summaries and by qualified name."""
+        ...
+
+    async def save_summaries(
+        self, repo_id: int, commit_sha: str, summaries: list["FlowSummary"], model: str
+    ) -> None: ...
+
+    async def summaries(self, repo_id: int, symbol_ids: list[str]) -> dict[str, "FlowSummary"]:
+        """Keyed by f"{symbol_id}:{kind}"."""
+        ...
+
+    async def delete_summaries_except(self, repo_id: int, keep: list[tuple[str, str]]) -> int:
+        """Delete every summary whose (symbol_id, kind) is not in `keep`; returns how many."""
+        ...
+
+    async def routes(
+        self, repo_id: int, verb_path: str
+    ) -> list[tuple["CodeEntrypoint", "CodeSymbol"]]:
+        """HTTP entry points matching "VERB /path"."""
         ...
 
 
@@ -176,7 +279,10 @@ class Deps:
     load_graph: Callable[[], Awaitable["nx.Graph"]]  # the entity graph, for the index report
     new_parser: Callable[[], DocumentParser]
     check_llm: Callable[[], Awaitable[Any]]  # fails fast on a misconfigured LLM endpoint
+    generator: Callable[[], ChatModel]  # the answer/summary/agent model (cfg, not cfg.judge)
+    code_parser: Callable[[], CodeParser]
+    # new_code_graph(store): the code graph, sharing the store's pool like new_memory.
+    new_code_graph: Callable[[JobRepository], Awaitable[CodeGraphRepository]]
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
-    claim_scorer: Callable[[], ClaimScorer]  # loads a local model: only built when needed
     query_budget: dict[str, int]  # the engine's retrieval token caps, recorded in eval reports

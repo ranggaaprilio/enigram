@@ -233,11 +233,9 @@ def test_to_result_maps_naive_response_without_graph():
 
 def test_cli_modes_match_query_modes():
     commands = cli._build_parser()._subparsers._group_actions[0].choices
-    golden_commands = commands["golden"]._subparsers._group_actions[0].choices
-    for subparser in (commands["query"], golden_commands["answer"]):
-        (mode,) = [a for a in subparser._actions if a.dest == "mode"]
-        assert tuple(mode.choices) == answer.QUERY_MODES
-        assert mode.default == answer.QUERY_MODE
+    (mode,) = [a for a in commands["query"]._actions if a.dest == "mode"]
+    assert tuple(mode.choices) == answer.QUERY_MODES
+    assert mode.default == answer.QUERY_MODE
 
 
 async def test_answer_question_rejects_too_short_question():
@@ -250,3 +248,62 @@ async def test_open_engine_without_index_raises(cfg):
     with pytest.raises(EnigramError, match="No index found"):
         async with lightrag_engine.open_engine(cfg):
             pass
+
+
+async def test_cli_query_scope_code_uses_graph(cfg, deps, monkeypatch, capsys):
+    from code_fakes import SHA, FakeChat, FakeCodeGraph, fixture_graph
+
+    from enigram import bootstrap
+    from enigram.application.code_summary import build_summaries
+
+    graph = FakeCodeGraph(fixture_graph())
+    await build_summaries(cfg, FakeChat(), graph, 1, SHA)
+    closed = []
+
+    class Store:
+        async def close(self):
+            closed.append(True)
+
+    async def open_store():
+        return Store()
+
+    async def new_code_graph(store):
+        return graph
+
+    deps.open_store, deps.new_code_graph = open_store, new_code_graph
+    deps.generator = lambda: FakeChat("It loads the user [2].", tokens=(500, 12))
+    monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
+    args = cli._build_parser().parse_args(
+        ["query", "--scope", "code", "What does AppService.find do?"]
+    )
+
+    assert await cli._query(cfg, args) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith("It loads the user [2].")
+    assert "[2] src/app.service.ts:10-15@70ae60dbb609 (AppService.find)" in out
+    assert "(code, " in out and "500 in / 12 out tokens)" in out
+    assert closed == [True]
+
+
+async def test_cli_query_scope_code_needs_one_repo(cfg, deps, monkeypatch):
+    from code_fakes import FakeCodeGraph
+
+    from enigram import bootstrap
+
+    class Store:
+        async def close(self):
+            pass
+
+    async def open_store():
+        return Store()
+
+    async def new_code_graph(store):
+        return FakeCodeGraph()
+
+    deps.open_store, deps.new_code_graph = open_store, new_code_graph
+    monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
+    args = cli._build_parser().parse_args(["query", "--scope", "code", "Who logs in?"])
+
+    with pytest.raises(EnigramError, match="enigram repo <url>"):
+        await cli._query(cfg, args)
