@@ -1,6 +1,7 @@
 """In-memory code graph and chat model shared by the code tests (no Postgres, no network)."""
 
 import dataclasses
+import re
 from typing import Any
 
 from enigram.application.ports import ChatReply, ParsedGraph
@@ -177,10 +178,10 @@ class FakeCodeGraph:
 
     async def search(self, repo_id, query, limit=10):
         self.calls.append(("search", query))
-        words = {w.lower() for w in query.split() if len(w) > 3}
+        words = {w.lower() for w in re.findall(r"\w+", query) if len(w) > 3}
         ranks = {}
         for (rid, symbol_id, _), s in self.stored.items():
-            if rid == repo_id and words & set(s.text.lower().split()):
+            if rid == repo_id and words & set(re.findall(r"\w+", s.text.lower())):
                 ranks[symbol_id] = 0.5
         for s in self.graphs[repo_id].symbols:
             if any(n.lower() in s.qualified_name.lower() for n in IDENTIFIER.findall(query)):

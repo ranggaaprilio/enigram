@@ -1,7 +1,12 @@
-"""Evaluate GraphRAG and the vector baseline on the golden set and write the evaluation report."""
+"""Score `golden answer` files against blind labels and write the evaluation report.
+
+Answering and labelling come first (`golden answer`, `golden blind`, labelling, `golden
+unblind`); this scores what exists. With `judge=True` Ragas and the LLM claim judge also grade
+every answer (Phase 7)."""
 
 import json
 import logging
+import math
 import subprocess
 import time
 from dataclasses import dataclass
@@ -10,24 +15,25 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from enigram.application.evaluation.claims import read_labelled_claims
-from enigram.application.evaluation.golden import CATEGORIES, UNANSWERABLE
-from enigram.application.evaluation.golden_run import (
-    answer_golden,
-    load_questions,
-    write_golden_run,
+from enigram.application.evaluation.blind import key_path, load_answers, read_blind_labels
+from enigram.application.evaluation.citations import (
+    check_answers,
+    citations_path,
+    sentences_without_citation,
 )
+from enigram.application.evaluation.claims import read_labelled_claims
+from enigram.application.evaluation.golden import BEHAVIOR, CATEGORIES, INJECTION, UNANSWERABLE
 from enigram.application.evaluation.judges import (
     JUDGE_TEMPERATURE,
     judge_abstention,
     judge_claims_llm,
 )
-from enigram.application.files import atomic_write_text, file_sha256
-from enigram.application.indexing import load_manifest
+from enigram.application.files import atomic_write_text
 from enigram.application.ports import AnswerScorer, ChatModel, Deps
 from enigram.config import Config
 from enigram.domain import stats
-from enigram.domain.answer import QUERY_MODES
+from enigram.domain.errors import EnigramError
+from enigram.domain.normalize import normalize_answer
 
 log = logging.getLogger(__name__)
 
@@ -39,12 +45,14 @@ METRICS = (
     "context_precision",
     "claim_faithfulness_llm",
 )
-MULTI_HOP = ("multi_section", "multi_paper")
-# PRD Key Hypothesis targets.
-FAITHFULNESS_TARGET = 0.9
-MIN_LABELLED_CLAIMS = 30  # PRD: ~30-50 human-labelled claims
-MIN_ANSWERS = 5  # below this a mean says nothing
-MAX_LISTED_CLAIMS = 50
+# PRD Phase 1 success signal and kill criteria.
+PHASE1_DEV_QUESTIONS = 10
+PHASE1_MIN_CORRECT = 7  # of the 10 dev questions
+PHASE1_AGENT_MARGIN = 1  # code ≥ agent+repo − 1
+PHASE1_UNRESOLVED_MAX = 0.5
+PHASE7_MIN_VERDICT = 40
+MAX_LISTED_FAILURES = 50
+FAILURE_PREVIEW_CHARS = 160
 
 PASS, FAIL, INSUFFICIENT = "PASS", "FAIL", "INSUFFICIENT DATA"
 
@@ -53,6 +61,28 @@ PASS, FAIL, INSUFFICIENT = "PASS", "FAIL", "INSUFFICIENT DATA"
 class EvalRun:
     report_path: Path
     verdicts: dict[str, str]  # criterion -> PASS / FAIL / INSUFFICIENT DATA
+
+
+def blind_correctness(sheets: list[Path]) -> dict[tuple[str, str], bool]:
+    """(system, question id) -> labelled correct, from labelled blind sheets and their keys."""
+    out: dict[tuple[str, str], bool] = {}
+    for sheet in sheets:
+        path = key_path(sheet)
+        if not path.exists():
+            raise EnigramError(f"{path} not found next to the sheet")
+        key = json.loads(path.read_text(encoding="utf-8"))
+        if key.get("sheet") != sheet.name:
+            raise EnigramError(f"{path} belongs to {key.get('sheet')}, not {sheet.name}")
+        labels = read_blind_labels(sheet)
+        for qid, letters in key["map"].items():
+            for letter, system in letters.items():
+                verdict = labels.get((qid, letter))
+                if verdict is None:
+                    continue
+                if out.get((system, qid), verdict) != verdict:
+                    raise EnigramError(f"{system} {qid} is labelled both ways across blind sheets")
+                out[(system, qid)] = verdict
+    return out
 
 
 async def _score_abstention(judge: ChatModel, item: dict[str, Any]) -> None:
@@ -72,7 +102,7 @@ async def _score_abstention(judge: ChatModel, item: dict[str, Any]) -> None:
 
 async def _score_item(judge: ChatModel, scorer: AnswerScorer, item: dict[str, Any]) -> None:
     contexts = [c["text"] for c in item["chunks"]]
-    evidence = {ev["chunk_id"] for ev in item["evidence"]}
+    evidence = {ev["chunk_id"] for ev in item["evidence"] if ev.get("chunk_id")}
     retrieved = [stats.doc_id(c["chunk_id"]) for c in item["chunks"]]
     scores, errors = await scorer.score(
         item["question"], item["answer"], contexts, item["ground_truth"]
@@ -87,6 +117,7 @@ async def _score_item(judge: ChatModel, scorer: AnswerScorer, item: dict[str, An
         errors["claim_faithfulness_llm"] = "no claims judged"
     item["scores"] = {
         **scores,
+        # Chunk-level recall needs chunk evidence: document golden sets only.
         "context_recall": stats.context_recall(evidence, retrieved),
         "context_precision": stats.context_precision(evidence, retrieved),
         "claim_faithfulness_llm": grounded_share,
@@ -126,10 +157,89 @@ def _abstention(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _accuracy_block(items: list[dict[str, Any]]) -> dict[str, Any]:
+    labelled = [i for i in items if i.get("correct") is not None]
+    correct = sum(i["correct"] for i in labelled)
+    return {
+        "labelled": len(labelled),
+        "correct": correct,
+        "accuracy": correct / len(labelled) if labelled else None,
+    }
+
+
+def _percentile(values: list[float], share: float) -> float | None:
+    """Nearest-rank percentile."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(share * len(ordered)) - 1)]
+
+
+def _system_stats(items: list[dict[str, Any]], citations: dict[str, Any] | None) -> dict[str, Any]:
+    answered = [i for i in items if not i.get("error")]
+    graded = [i for i in answered if i["category"] != UNANSWERABLE]
+    splits = sorted({i["split"] for i in graded if i.get("split")})
+    categories = [c for c in CATEGORIES if any(i["category"] == c for i in graded)]
+    injections = [i for i in answered if i["category"] == INJECTION]
+    leaked = [i["id"] for i in injections if i.get("marker") and i["marker"] in i.get("answer", "")]
+    secs = [i["query_secs"] for i in answered if i.get("query_secs") is not None]
+    tool_calls = [i["tool_calls"] for i in answered if i.get("tool_calls") is not None]
+    tokens_in = [i.get("tokens_in") or 0 for i in answered]
+    tokens_out = [i.get("tokens_out") or 0 for i in answered]
+    return {
+        **_accuracy_block(graded),
+        "by_split": {
+            s: _accuracy_block([i for i in graded if i.get("split") == s]) for s in splits
+        },
+        "by_category": {
+            c: _accuracy_block([i for i in graded if i["category"] == c]) for c in categories
+        },
+        "citations": (
+            {
+                k: citations[k]
+                for k in ("answers", "answers_fully_valid", "citations", "citations_valid")
+            }
+            | {
+                "valid_share": (
+                    citations["citations_valid"] / citations["citations"]
+                    if citations["citations"]
+                    else None
+                )
+            }
+            if citations
+            else None
+        ),
+        "sentences_without_citation": (
+            citations["sentences_without_citation"]
+            if citations
+            else sum(sentences_without_citation(i.get("answer") or "") for i in answered)
+        ),
+        "abstention": _abstention(answered),
+        "injection": {
+            "n": len(injections),
+            "passed": len(injections) - len(leaked),
+            "failed": leaked,
+        },
+        "tokens": {
+            "in": sum(tokens_in),
+            "out": sum(tokens_out),
+            "mean_in": sum(tokens_in) / len(tokens_in) if tokens_in else None,
+            "mean_out": sum(tokens_out) / len(tokens_out) if tokens_out else None,
+        },
+        "latency": {
+            "mean": sum(secs) / len(secs) if secs else None,
+            "p50": _percentile(secs, 0.5),
+            "p95": _percentile(secs, 0.95),
+        },
+        "tool_calls_mean": sum(tool_calls) / len(tool_calls) if tool_calls else None,
+        "failed": len(items) - len(answered),
+    }
+
+
 def _judgments(runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        {**j, "mode": mode, "id": item["id"]}
-        for mode, run in runs.items()
+        {**j, "mode": system, "id": item["id"]}
+        for system, run in runs.items()
         for item in run["items"]
         for j in item.get("claim_judgments", [])
     ]
@@ -142,11 +252,7 @@ def _agreement(judgments: list[dict[str, Any]], n_labels: int) -> dict[str, Any]
     return {
         "labelled_claims": len(labelled),
         "unmatched_labels": n_labels - len(matched_keys),
-        "llm": {
-            "n": len(llm),
-            "accuracy": stats.accuracy(llm),
-            "kappa": stats.cohen_kappa(llm),
-        },
+        "llm": {"n": len(llm), "accuracy": stats.accuracy(llm), "kappa": stats.cohen_kappa(llm)},
     }
 
 
@@ -156,94 +262,161 @@ def _verdict(result: Any, ok: bool, enough: bool) -> str:
     return PASS if ok else FAIL
 
 
+def _dev(items: list[dict[str, Any]]) -> dict[str, bool]:
+    """Question id -> correct, for the labelled dev behaviour questions."""
+    return {
+        i["id"]: i["correct"]
+        for i in items
+        if i["category"] == BEHAVIOR and i.get("split") == "dev" and i.get("correct") is not None
+    }
+
+
 def _hypothesis(
-    runs: dict[str, dict[str, Any]], agreement: dict[str, Any], books: int
+    runs: dict[str, dict[str, Any]],
+    systems: dict[str, dict[str, Any]],
+    unresolved_share: float | None,
 ) -> dict[str, dict[str, Any]]:
-    faith = runs["mix"]["overall"]["faithfulness"]
-    by_id = {
-        mode: {
-            item["id"]: (item.get("scores") or {}).get("answer_correctness")
-            for item in run["items"]
-            if item["category"] in MULTI_HOP
-        }
-        for mode, run in runs.items()
-    }
-    paired = [
-        (by_id["mix"][qid], by_id["naive"][qid])
-        for qid in by_id["mix"]
-        if by_id["mix"][qid] is not None and by_id["naive"].get(qid) is not None
-    ]
-    delta = (
-        sum(m for m, _ in paired) / len(paired) - sum(n for _, n in paired) / len(paired)
-        if paired
-        else None
-    )
-
+    code = _dev(runs["code"]["items"]) if "code" in runs else {}
+    agent = _dev(runs["agent+repo"]["items"]) if "agent+repo" in runs else {}
+    both = sorted(code.keys() & agent.keys())
+    code_both, agent_both = sum(code[q] for q in both), sum(agent[q] for q in both)
+    margin = code_both - agent_both if both else None
+    cites = (systems.get("code") or {}).get("citations")
+    verdict_labelled = (systems.get("code") or {}).get("by_split", {}).get("verdict", {})
     return {
-        "faithfulness_graphrag": {
-            "target": f"≥ {FAITHFULNESS_TARGET}",
-            "result": faith["mean"],
-            "n": faith["n"],
+        "phase1_dev_accuracy": {
+            "target": f"code ≥ {PHASE1_MIN_CORRECT}/{PHASE1_DEV_QUESTIONS} on split dev",
+            "result": sum(code.values()) if code else None,
+            "n": len(code),
             "verdict": _verdict(
-                faith["mean"],
-                faith["mean"] is not None and faith["mean"] >= FAITHFULNESS_TARGET,
-                faith["n"] >= MIN_ANSWERS,
+                code or None,
+                sum(code.values()) >= PHASE1_MIN_CORRECT,
+                len(code) >= PHASE1_DEV_QUESTIONS,
             ),
-            "note": "Ragas faithfulness of GraphRAG (mix) answers",
+            "note": "blind labels, behaviour questions of split dev",
         },
-        "multihop_graphrag_beats_baseline": {
-            "target": "mix − naive > 0",
-            "result": delta,
-            "n": len(paired),
-            "verdict": _verdict(delta, delta is not None and delta > 0, len(paired) >= MIN_ANSWERS),
+        "phase1_not_worse_than_agent": {
+            "target": f"code ≥ agent+repo − {PHASE1_AGENT_MARGIN} on the same dev questions",
+            "result": margin,
+            "n": len(both),
+            "verdict": _verdict(
+                margin,
+                margin is not None and margin >= -PHASE1_AGENT_MARGIN,
+                len(both) >= PHASE1_DEV_QUESTIONS,
+            ),
             "note": (
-                "mean answer correctness on multi-hop questions"
-                + (" · only 1 paper indexed: both systems see every chunk" if books < 2 else "")
+                f"code {code_both}, agent+repo {agent_both} correct (result = difference)"
+                if both
+                else "needs labelled dev answers from both systems"
             ),
+        },
+        "phase1_citations_valid": {
+            "target": "every code answer fully valid",
+            "result": (cites["answers_fully_valid"] / cites["answers"])
+            if cites and cites["answers"]
+            else None,
+            "n": cites["answers"] if cites else 0,
+            "verdict": _verdict(
+                cites or None,
+                bool(cites) and cites["answers_fully_valid"] == cites["answers"],
+                bool(cites) and cites["answers"] > 0,
+            ),
+            "note": "structural check (golden citations): sha, file, lines, symbol in range",
+        },
+        "phase1_unresolved_share": {
+            "target": f"unresolved calls in flows ≤ {PHASE1_UNRESOLVED_MAX}",
+            "result": unresolved_share,
+            "n": 1 if unresolved_share is not None else 0,
+            "verdict": _verdict(
+                unresolved_share,
+                unresolved_share is not None and unresolved_share <= PHASE1_UNRESOLVED_MAX,
+                True,
+            ),
+            "note": "kill-criterion input from the index report (code_repos.report.summaries)",
+        },
+        "phase7_paired_accuracy": {
+            "target": f"paired one-sided CI on ≥ {PHASE7_MIN_VERDICT} verdict questions",
+            "result": None,
+            "n": verdict_labelled.get("labelled", 0),
+            "verdict": INSUFFICIENT,
+            "note": "paired one-sided CI (margin 15) is added in Phase 7",
         },
     }
 
 
-def _failures(runs: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    lowest = {}
-    for mode, run in runs.items():
-        scored = [
-            (item["scores"]["faithfulness"], item["id"])
-            for item in run["items"]
-            if (item.get("scores") or {}).get("faithfulness") is not None
-        ]
-        lowest[mode] = [{"id": qid, "faithfulness": f} for f, qid in sorted(scored)[:5]]
-    flagged = [j for j in _judgments(runs) if j["llm"] is False]
-    return {
-        "lowest_faithfulness": lowest,
-        "not_grounded_claims": flagged[:MAX_LISTED_CLAIMS],
-        "not_grounded_total": len(flagged),
-    }
+async def _unresolved_share(
+    cfg: Config, deps: Deps, runs: dict[str, dict[str, Any]]
+) -> float | None:
+    """The indexed repository's unresolved share in flows, when Postgres is configured."""
+    repo = (runs.get("code") or {}).get("repo")
+    if not repo or cfg.storage != "postgres":
+        return None
+    try:
+        store = await deps.open_store()
+    except EnigramError as e:
+        log.warning("[eval] cannot read the code graph report: %s", e)
+        return None
+    try:
+        graph = await deps.new_code_graph(store)
+        row = await graph.get_repo(repo["url"], repo["ref"])
+    finally:
+        await store.close()
+    if not row or row["indexed_sha"] != repo["pinned_sha"]:
+        return None
+    return ((row.get("report") or {}).get("summaries") or {}).get("unresolved_share_in_flows")
+
+
+async def _symbols(cfg: Config, deps: Deps, repo: dict[str, Any]) -> list | None:
+    """The indexed symbols of the pinned repository, when Postgres has them."""
+    if cfg.storage != "postgres":
+        return None
+    try:
+        store = await deps.open_store()
+    except EnigramError:
+        return None
+    try:
+        graph = await deps.new_code_graph(store)
+        row = await graph.get_repo(repo["url"], repo["ref"])
+        if not row or row["indexed_sha"] != repo["pinned_sha"]:
+            return None
+        return await graph.symbols_in_repo(row["id"])
+    finally:
+        await store.close()
+
+
+def _failures(runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for system, run in runs.items():
+        for item in run["items"]:
+            if item.get("correct") is False:
+                preview = normalize_answer(item.get("answer") or "")[:FAILURE_PREVIEW_CHARS]
+                rows.append({"system": system, "id": item["id"], "answer": preview})
+    return rows[:MAX_LISTED_FAILURES]
 
 
 def _missing(runs: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
     rows = []
-    for mode, run in runs.items():
+    for system, run in runs.items():
         for item in run["items"]:
             if item.get("error"):
                 rows.append(
-                    {"mode": mode, "id": item["id"], "metric": "*", "reason": item["error"]}
+                    {"mode": system, "id": item["id"], "metric": "*", "reason": item["error"]}
                 )
             for metric, reason in (item.get("score_errors") or {}).items():
-                rows.append({"mode": mode, "id": item["id"], "metric": metric, "reason": reason})
+                rows.append({"mode": system, "id": item["id"], "metric": metric, "reason": reason})
     return rows
 
 
 def _headline(data: dict[str, Any]) -> dict[str, float | None]:
-    head = {
-        f"{mode}.{metric}": block["overall"][metric]["mean"]
-        for mode, block in data["systems"].items()
-        for metric in METRICS
-    }
-    for mode, block in data["systems"].items():
-        head[f"{mode}.abstention_unanswerable"] = block["abstention"]["unanswerable"]["rate"]
-        head[f"{mode}.abstention_answerable"] = block["abstention"]["answerable"]["rate"]
-    head["llm.accuracy"] = data["agreement"]["llm"]["accuracy"]
+    head: dict[str, float | None] = {}
+    for system, block in (data.get("systems") or {}).items():
+        head[f"{system}.accuracy"] = block.get("accuracy")
+        head[f"{system}.citations_valid_share"] = (block.get("citations") or {}).get("valid_share")
+        abstention = block.get("abstention") or {}
+        head[f"{system}.abstention_unanswerable"] = (abstention.get("unanswerable") or {}).get(
+            "rate"
+        )
+        head[f"{system}.abstention_answerable"] = (abstention.get("answerable") or {}).get("rate")
     return head
 
 
@@ -254,7 +427,7 @@ def _trend(cfg: Config, current: dict[str, Any]) -> dict[str, Any] | None:
     try:
         old = json.loads(previous[-1].read_text(encoding="utf-8"))
         before, now = _headline(old), _headline(current)
-    except (json.JSONDecodeError, KeyError) as e:
+    except (json.JSONDecodeError, AttributeError) as e:
         log.warning("[eval] cannot compare with %s: %s", previous[-1].name, e)
         return None
     return {
@@ -285,19 +458,24 @@ def _git_commit() -> str | None:
 
 def _metadata(
     cfg: Config,
-    golden_path: Path,
+    runs: dict[str, dict[str, Any]],
+    blind_sheets: list[Path],
     label_files: list[Path],
-    questions: list,
-    secs: float,
-    query_budget: dict[str, int],
+    judge: bool,
 ) -> dict[str, Any]:
-    books = [b for b, e in load_manifest(cfg)["books"].items() if e.get("status") == "indexed"]
+    first = next(iter(runs.values()))
+    items = first["items"]
     return {
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "duration_secs": round(secs, 1),
+        "duration_secs": None,  # filled in when the run is done
         "git_commit": _git_commit(),
+        "systems": list(runs),
+        "answer_files": {system: run["path"] for system, run in runs.items()},
+        "blind_sheets": [str(p) for p in blind_sheets],
+        "label_files": [str(p) for p in label_files],
+        "judge_run": judge,
         "models": {
-            "generator": cfg.llm_model,
+            "generator": {system: run.get("llm_model") for system, run in runs.items()},
             "embedding": cfg.embed_model,
             "judge_provider": cfg.judge_provider,
             "judge": cfg.judge_model,
@@ -306,100 +484,117 @@ def _metadata(
             "ragas_version": _version("ragas"),
         },
         "golden": {
-            "file": str(golden_path),
-            "sha256": file_sha256(golden_path),
-            "questions": len(questions),
-            "by_category": {c: sum(q.category == c for q in questions) for c in CATEGORIES},
+            "file": first.get("golden_file"),
+            "sha256": first.get("golden_sha256"),
+            "repo": first.get("repo"),
+            "questions": len(items),
+            "by_category": {c: sum(i["category"] == c for i in items) for c in CATEGORIES},
         },
-        "label_files": [str(p) for p in label_files],
-        "indexed_papers": books,
-        "query_budget": dict(query_budget),
     }
 
 
-async def run_eval(
-    cfg: Config,
-    deps: Deps,
-    golden_path: Path,
-    label_files: list[Path],
-    limit: int | None = None,
-) -> EvalRun:
-    start = time.perf_counter()
-    questions = load_questions(cfg, golden_path, limit)
-    human = read_labelled_claims(*label_files) if label_files else {}
-
+def _load_runs(answer_files: list[Path]) -> dict[str, dict[str, Any]]:
     runs: dict[str, dict[str, Any]] = {}
-    # One LightRAG for both systems: a second one in this process would share its global state.
-    async with deps.open_engine() as engine:
-        for mode in QUERY_MODES:
-            log.info("[eval] answering %d questions with %s", len(questions), mode)
-            items, failed = await answer_golden(engine, questions, mode)
-            answers, labels = write_golden_run(cfg, golden_path, mode, items)
-            runs[mode] = {
-                "items": items,
-                "failed": failed,
-                "answers": str(answers),
-                "labels": str(labels),
-            }
+    for path in answer_files:
+        run = load_answers(path)
+        system = run.get("system") or run["mode"]
+        if system in runs:
+            raise EnigramError(f"two answer files for system {system!r}")
+        runs[system] = {**run, "path": str(path)}
+    shas = {run.get("golden_sha256") for run in runs.values()}
+    if len(shas) > 1:
+        raise EnigramError("The answer files come from different versions of the golden set")
+    return runs
 
+
+async def _citations(
+    cfg: Config, deps: Deps, run: dict[str, Any], symbols_cache: dict
+) -> dict[str, Any] | None:
+    path = citations_path(Path(run["path"]))
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    if not run.get("repo"):
+        return None
+    key = run["repo"]["pinned_sha"]
+    if key not in symbols_cache:
+        symbols_cache[key] = await _symbols(cfg, deps, run["repo"])
+    return check_answers(cfg, Path(run["path"]), symbols_cache[key])
+
+
+async def _judge(
+    deps: Deps, runs: dict[str, dict[str, Any]], label_files: list[Path]
+) -> dict[str, Any]:
+    human = read_labelled_claims(*label_files) if label_files else {}
     scorer = deps.answer_scorer()
     judge = deps.judge()
-    for mode, run in runs.items():
+    for system, run in runs.items():
         for i, item in enumerate(run["items"], 1):
             if item.get("error"):
                 continue
             t = time.perf_counter()
-            # Ragas and the claim judges grade answers to answerable questions only.
+            # Ragas and the claim judge grade answers to answerable questions only.
             if item["category"] != UNANSWERABLE:
                 await _score_item(judge, scorer, item)
             await _score_abstention(judge, item)
+            for j in item.get("claim_judgments", []):
+                j["human"] = human.get((item["id"], j["claim"]))
             log.info(
-                "[eval] scored %s %s %d/%d (%.1fs)",
-                mode,
+                "[eval] judged %s %s %d/%d (%.1fs)",
+                system,
                 item["id"],
                 i,
                 len(run["items"]),
                 time.perf_counter() - t,
             )
+    return _agreement(_judgments(runs), len(human))
 
-    scored = [item for run in runs.values() for item in run["items"] if "claim_judgments" in item]
-    for item in scored:
-        for j in item["claim_judgments"]:
-            j["human"] = human.get((item["id"], j["claim"]))
 
-    for run in runs.values():
-        run["overall"] = _aggregate([i for i in run["items"] if i["category"] != UNANSWERABLE])
-        run["by_category"] = {
-            cat: _aggregate([i for i in run["items"] if i["category"] == cat])
-            for cat in CATEGORIES
-            if cat != UNANSWERABLE and any(i["category"] == cat for i in run["items"])
-        }
-        run["abstention"] = _abstention(run["items"])
-    metadata = _metadata(
-        cfg, golden_path, label_files, questions, time.perf_counter() - start, deps.query_budget
-    )
-    agreement = _agreement(_judgments(runs), len(human))
+async def run_eval(
+    cfg: Config,
+    deps: Deps,
+    answer_files: list[Path],
+    blind_sheets: list[Path],
+    label_files: list[Path] | None = None,
+    *,
+    judge: bool = False,
+) -> EvalRun:
+    start = time.perf_counter()
+    label_files = label_files or []
+    runs = _load_runs(answer_files)
+    correct = blind_correctness(blind_sheets)
+    for system, run in runs.items():
+        for item in run["items"]:
+            item["correct"] = correct.get((system, item["id"]))
+            # Rule-based without a judge: the system said it has no answer.
+            item["abstained"] = None if item.get("error") else not item.get("found", True)
+            item.setdefault("score_errors", {})
+
+    agreement = await _judge(deps, runs, label_files) if judge else None
+    symbols_cache: dict = {}
+    systems = {}
+    for system, run in runs.items():
+        citations = await _citations(cfg, deps, run, symbols_cache)
+        systems[system] = _system_stats(run["items"], citations)
+        if judge:
+            answerable = [i for i in run["items"] if i["category"] != UNANSWERABLE]
+            systems[system]["overall"] = _aggregate(answerable)
+    unresolved = await _unresolved_share(cfg, deps, runs)
     data = {
-        "metadata": metadata,
-        "hypothesis": _hypothesis(runs, agreement, len(metadata["indexed_papers"])),
-        "systems": {
-            mode: {
-                k: run[k]
-                for k in ("overall", "by_category", "abstention", "failed", "answers", "labels")
-            }
-            for mode, run in runs.items()
-        },
+        "metadata": _metadata(cfg, runs, blind_sheets, label_files, judge),
+        "hypothesis": _hypothesis(runs, systems, unresolved),
+        "systems": systems,
         "agreement": agreement,
         "failures": _failures(runs),
         "missing": _missing(runs),
-        "items": {mode: run["items"] for mode, run in runs.items()},
+        "items": {system: run["items"] for system, run in runs.items()},
     }
+    data["metadata"]["duration_secs"] = round(time.perf_counter() - start, 1)
     data["trend"] = _trend(cfg, data)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     json_path = cfg.reports_dir / f"eval-{stamp}.json"
     md_path = json_path.with_suffix(".md")
-    atomic_write_text(json_path, json.dumps(data, indent=2, ensure_ascii=False))
+    atomic_write_text(json_path, json.dumps(data, indent=2, ensure_ascii=False, default=str))
     atomic_write_text(md_path, render_markdown(data))
     return EvalRun(md_path, {k: v["verdict"] for k, v in data["hypothesis"].items()})
 
@@ -410,6 +605,13 @@ def _fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.3f}"
     return str(value)
+
+
+def _blocks(blocks: dict[str, dict[str, Any]]) -> str:
+    return (
+        ", ".join(f"{k} {b['correct']}/{b['labelled']}" for k, b in blocks.items() if b["labelled"])
+        or "—"
+    )
 
 
 def _metric_table(blocks: dict[str, dict[str, Any]]) -> list[str]:
@@ -424,14 +626,14 @@ def _metric_table(blocks: dict[str, dict[str, Any]]) -> list[str]:
 
 
 def render_markdown(data: dict[str, Any]) -> str:
-    meta, agreement = data["metadata"], data["agreement"]
+    meta, systems = data["metadata"], data["systems"]
+    golden = meta["golden"]
     lines = [
         "# Evaluation report",
         "",
         f"Generated {meta['generated_at']} in {meta['duration_secs']} s · commit "
-        f"{meta['git_commit'] or '—'} · golden `{meta['golden']['file']}` "
-        f"({meta['golden']['questions']} questions) · papers indexed: "
-        f"{len(meta['indexed_papers'])}",
+        f"{meta['git_commit'] or '—'} · golden `{golden['file']}` "
+        f"({golden['questions']} questions answered) · systems: {', '.join(meta['systems'])}",
         "",
         "## Hypothesis",
         "",
@@ -443,64 +645,100 @@ def render_markdown(data: dict[str, Any]) -> str:
             f"| {name} | {h['target']} | {_fmt(h['result'])} | {h['n']} | **{h['verdict']}** "
             f"| {h['note']} |"
         )
-    lines += ["", "## Metrics by system", ""]
-    lines += _metric_table({mode: s["overall"] for mode, s in data["systems"].items()})
-    for mode, system in data["systems"].items():
-        lines += ["", f"### {mode} by category", ""]
-        lines += _metric_table(system["by_category"])
-        if system["failed"]:
-            lines.append(f"\n{system['failed']} question(s) could not be answered (see Missing).")
     lines += [
         "",
-        "## Abstention",
+        "## Accuracy by system",
         "",
-        "Unanswerable questions should be refused; answerable ones should not (false abstention).",
+        "Blind labels; unanswerable questions are scored under Abstention, not here.",
         "",
-        "| System | Unanswerable refused | Unanswerable answered (ids) | Answerable refused "
-        "| Answerable refused (ids) |",
-        "|---|---|---|---|---|",
+        "| System | Labelled | Correct | Accuracy | By split | By category |",
+        "|---|---|---|---|---|---|",
     ]
-    for mode, system in data["systems"].items():
-        un, ans = system["abstention"]["unanswerable"], system["abstention"]["answerable"]
+    for system, s in systems.items():
         lines.append(
-            f"| {mode} | {_fmt(un['rate'])} (n={un['n']}) | {', '.join(un['answered']) or '—'} "
-            f"| {_fmt(ans['rate'])} (n={ans['n']}) | {', '.join(ans['refused']) or '—'} |"
+            f"| {system} | {s['labelled']} | {s['correct']} | {_fmt(s['accuracy'])} "
+            f"| {_blocks(s['by_split'])} | {_blocks(s['by_category'])} |"
         )
     lines += [
         "",
-        "## Judge agreement with human labels",
+        "## Citations",
         "",
-        f"Labelled claims matched: {agreement['labelled_claims']} "
-        f"(target ≥ {MIN_LABELLED_CLAIMS}); labels not matched to any claim: "
-        f"{agreement['unmatched_labels']}",
-        "",
-        "| Judge | n | Accuracy | Cohen's κ | Notes |",
-        "|---|---|---|---|---|",
-        f"| LLM claim judge (`{meta['models']['judge']}`) | {agreement['llm']['n']} "
-        f"| {_fmt(agreement['llm']['accuracy'])} | {_fmt(agreement['llm']['kappa'])} "
-        f"| temperature {meta['models']['judge_temperature']} |",
-        "",
-        "## Failures",
-        "",
+        "| System | Answers fully valid | Citations valid | Sentences without citation |",
+        "|---|---|---|---|",
     ]
-    for mode, rows in data["failures"]["lowest_faithfulness"].items():
-        listed = ", ".join(f"{r['id']} ({_fmt(r['faithfulness'])})" for r in rows) or "—"
-        lines.append(f"- Lowest faithfulness, {mode}: {listed}")
-    total = data["failures"]["not_grounded_total"]
-    lines += ["", f"Claims judged not grounded by the LLM judge: {total}", ""]
-    if total:
+    for system, s in systems.items():
+        c = s["citations"]
+        cells = (
+            f"{c['answers_fully_valid']}/{c['answers']} | {c['citations_valid']}/{c['citations']}"
+            if c
+            else "— | —"
+        )
+        lines.append(f"| {system} | {cells} | {s['sentences_without_citation']} |")
+    lines += [
+        "",
+        "## Abstention & injection",
+        "",
+        "Unanswerable questions should be refused; answerable ones should not (false abstention). "
+        "Injection answers must not contain the question's marker.",
+        "",
+        "| System | Unanswerable refused | Unanswerable answered (ids) | Answerable refused "
+        "| Injection passed | Injection leaked (ids) |",
+        "|---|---|---|---|---|---|",
+    ]
+    for system, s in systems.items():
+        un, ans, inj = (
+            s["abstention"]["unanswerable"],
+            s["abstention"]["answerable"],
+            s["injection"],
+        )
+        lines.append(
+            f"| {system} | {_fmt(un['rate'])} (n={un['n']}) | {', '.join(un['answered']) or '—'} "
+            f"| {_fmt(ans['rate'])} (n={ans['n']}) | {inj['passed']}/{inj['n']} "
+            f"| {', '.join(inj['failed']) or '—'} |"
+        )
+    lines += [
+        "",
+        "## Cost",
+        "",
+        "| System | Tokens in | Tokens out | Mean in / answer | Latency mean / p50 / p95 (s) "
+        "| Tool calls / answer |",
+        "|---|---|---|---|---|---|",
+    ]
+    for system, s in systems.items():
+        t, lat = s["tokens"], s["latency"]
+        lines.append(
+            f"| {system} | {t['in']} | {t['out']} | {_fmt(t['mean_in'])} "
+            f"| {_fmt(lat['mean'])} / {_fmt(lat['p50'])} / {_fmt(lat['p95'])} "
+            f"| {_fmt(s['tool_calls_mean'])} |"
+        )
+    lines += ["", "## Judge agreement", ""]
+    agreement = data["agreement"]
+    if agreement is None:
+        lines.append("Not run (pass `--judge` for Ragas and the LLM claim judge).")
+    else:
+        lines += _metric_table({system: s["overall"] for system, s in systems.items()})
         lines += [
-            "| Mode | Question | Claim | LLM | Human |",
-            "|---|---|---|---|---|",
+            "",
+            f"Labelled claims matched: {agreement['labelled_claims']}; labels not matched to any "
+            f"claim: {agreement['unmatched_labels']}",
+            "",
+            "| Judge | n | Accuracy | Cohen's κ |",
+            "|---|---|---|---|",
+            f"| LLM claim judge (`{meta['models']['judge']}`) | {agreement['llm']['n']} "
+            f"| {_fmt(agreement['llm']['accuracy'])} | {_fmt(agreement['llm']['kappa'])} |",
         ]
-        for j in data["failures"]["not_grounded_claims"]:
-            claim = j["claim"].replace("|", "¦")[:160]
-            lines.append(
-                f"| {j['mode']} | {j['id']} | {claim} | {_fmt(j['llm'])} | {_fmt(j['human'])} |"
-            )
-    lines += ["", "## Missing scores", ""]
+    lines += ["", "## Failures", ""]
+    if data["failures"]:
+        lines += ["| System | Question | Answer (normalized) |", "|---|---|---|"]
+        lines += [
+            f"| {r['system']} | {r['id']} | {r['answer'].replace('|', '¦').replace(chr(10), ' ')} |"
+            for r in data["failures"]
+        ]
+    else:
+        lines.append("No answer labelled wrong.")
+    lines += ["", "## Missing", ""]
     if data["missing"]:
-        lines += ["| Mode | Question | Metric | Reason |", "|---|---|---|---|"]
+        lines += ["| System | Question | Metric | Reason |", "|---|---|---|---|"]
         lines += [
             f"| {r['mode']} | {r['id']} | {r['metric']} | {r['reason'].replace('|', '¦')} |"
             for r in data["missing"]
@@ -515,26 +753,31 @@ def render_markdown(data: dict[str, Any]) -> str:
     else:
         lines.append("First evaluation run; nothing to compare with.")
     models = meta["models"]
+    generators = set(models["generator"].values())
     lines += [
         "",
         "## Run metadata",
         "",
-        f"- Generator `{models['generator']}`; judge `{models['judge']}` (temperature "
-        f"{models['judge_temperature']}, thinking "
-        f"{'on' if models['judge_thinking'] else 'off'}); "
+        f"- Generator {', '.join(f'{s} `{m}`' for s, m in models['generator'].items())}; "
         f"embedding `{models['embedding']}`",
-        (
-            "- **The same model generates and judges answers**; set JUDGE_MODEL to a different "
-            "model. Human labels are the check on that."
-            if models["judge"] == models["generator"]
-            else "- The judge is a different model from the generator."
-        ),
-        f"- ragas {models['ragas_version']}",
-        f"- Golden sha256 `{meta['golden']['sha256'][:12]}`, by category "
-        f"{meta['golden']['by_category']}",
-        f"- Label files: {', '.join(meta['label_files']) or 'none'}",
-        f"- Query budget: {meta['query_budget']}",
     ]
-    for mode, system in data["systems"].items():
-        lines.append(f"- {mode}: answers `{system['answers']}`, label sheet `{system['labels']}`")
+    if meta["judge_run"]:
+        lines += [
+            f"- Judge `{models['judge']}` (temperature {models['judge_temperature']}, thinking "
+            f"{'on' if models['judge_thinking'] else 'off'}), ragas {models['ragas_version']}",
+            (
+                "- **The same model generates and judges answers**; set JUDGE_MODEL to a "
+                "different model."
+                if models["judge"] in generators
+                else "- The judge is a different model from the generators."
+            ),
+        ]
+    repo = golden.get("repo")
+    lines += [
+        f"- Golden sha256 `{(golden['sha256'] or '')[:12]}`, by category {golden['by_category']}"
+        + (f", repo {repo['url']} @ {repo['pinned_sha'][:12]}" if repo else ""),
+        f"- Blind sheets: {', '.join(meta['blind_sheets']) or 'none'}",
+        f"- Label files: {', '.join(meta['label_files']) or 'none'}",
+    ]
+    lines += [f"- {s}: answers `{p}`" for s, p in meta["answer_files"].items()]
     return "\n".join(lines) + "\n"

@@ -86,13 +86,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="validate the golden set against the index (document set) or the pinned "
         "repository (code set)",
     )
-    answer = gsub.add_parser("answer", help="answer every golden question and write a label sheet")
+    check.add_argument(
+        "--graph",
+        action="store_true",
+        help="check evidence symbols by qualified name in the indexed code graph (needs "
+        "`enigram repo` on the pinned ref)",
+    )
+    answer = gsub.add_parser("answer", help="answer golden questions and write a label sheet")
     for p in (check, answer):
         p.add_argument("--file", type=Path, default=Path("eval/golden.yaml"), help="golden YAML")
+    # Literal copy of golden_run.SYSTEMS so parsing never imports LightRAG; a test keeps them equal.
     answer.add_argument(
-        "--mode", choices=("mix", "naive"), default="mix", help="system to answer with"
+        "--system",
+        choices=("mix", "naive", "code", "agent+repo"),
+        default="mix",
+        help="mix/naive = the document index; code = the code graph; agent+repo = a coding agent "
+        "reading the pinned clone",
+    )
+    answer.add_argument("--split", choices=("dev", "verdict", "reserve"), help="only this split")
+    answer.add_argument(
+        "--category", action="append", help="only this category (repeat for several)"
+    )
+    answer.add_argument(
+        "--allow-verdict",
+        action="store_true",
+        help="allow the verdict and reserve splits (locked until Phase 7)",
     )
     answer.add_argument("--limit", type=int, help="only the first N questions (quick trial)")
+    citations = gsub.add_parser(
+        "citations", help="check every file:line@sha citation of an answers file"
+    )
+    citations.add_argument("answers", type=Path, help="data/eval/answers-<system>-<ts>.json")
     labels = gsub.add_parser("labels", help="count human claim labels in a label sheet")
     labels.add_argument("sheet", type=Path, help="data/eval/labels-<mode>-<ts>.md")
     blind = gsub.add_parser(
@@ -110,18 +134,36 @@ def _build_parser() -> argparse.ArgumentParser:
     unblind.add_argument("sheet", type=Path, help="data/eval/blind-<ts>.md")
 
     evaluate = sub.add_parser(
-        "eval", help="evaluate GraphRAG and the vector baseline on the golden set (~1 h)"
+        "eval",
+        help="score answer files against blind labels (with --judge: Ragas + LLM claim judge)",
     )
-    evaluate.add_argument("--file", type=Path, default=Path("eval/golden.yaml"), help="golden YAML")
+    evaluate.add_argument(
+        "--answers",
+        type=Path,
+        nargs="+",
+        required=True,
+        metavar="ANSWERS",
+        help="data/eval/answers-<system>-<ts>.json, one per system",
+    )
+    evaluate.add_argument(
+        "--blind",
+        type=Path,
+        nargs="*",
+        default=[],
+        metavar="SHEET",
+        help="labelled blind sheets (data/eval/blind-<ts>.md) with their key files",
+    )
     evaluate.add_argument(
         "--labels",
         type=Path,
-        nargs="+",
+        nargs="*",
         default=[],
         metavar="SHEET",
-        help="human claim label sheets (labels-<mode>-<ts>.md) to measure the judges against",
+        help="human claim label sheets (labels-<system>-<ts>.md) to measure the judge against",
     )
-    evaluate.add_argument("--limit", type=int, help="only the first N questions (quick trial)")
+    evaluate.add_argument(
+        "--judge", action="store_true", help="also run Ragas and the LLM claim judge (slow)"
+    )
     return parser
 
 
@@ -252,7 +294,29 @@ async def _repo(cfg: Config, args: argparse.Namespace) -> int:
     return 1 if result["failed"] else 0
 
 
-def _golden_check(cfg: Config, path: Path) -> int:
+async def _graph_symbols(cfg: Config, url: str, ref: str | None, pinned_sha: str) -> list:
+    """Symbols of the indexed repository at the pinned commit."""
+    from enigram.bootstrap import build_deps
+
+    deps = build_deps(cfg)
+    store = await deps.open_store()
+    try:
+        graph = await deps.new_code_graph(store)
+        repo = await graph.get_repo(url, ref)
+        run = f"`enigram repo {url}" + (f" --ref {ref}`" if ref else "`")
+        if repo is None:
+            raise EnigramError(f"{url} is not indexed; run {run}")
+        if repo["indexed_sha"] != pinned_sha:
+            raise EnigramError(
+                f"{url} is indexed at {repo['indexed_sha'][:12]}, the golden set pins "
+                f"{pinned_sha[:12]}; run {run}"
+            )
+        return await graph.symbols_in_repo(repo["id"])
+    finally:
+        await store.close()
+
+
+def _golden_check(cfg: Config, path: Path, graph: bool = False) -> int:
     from enigram.application.evaluation.golden import (
         BEHAVIOR,
         BEHAVIOR_ANNOTATION,
@@ -267,10 +331,17 @@ def _golden_check(cfg: Config, path: Path) -> int:
         TARGET_UNANSWERABLE_CODE,
         UNANSWERABLE,
         check_golden,
+        load_golden_set,
     )
     from enigram.application.files import file_sha256
 
-    golden_set, problems = check_golden(cfg, path)
+    symbols = None
+    if graph:
+        repo = load_golden_set(path).repo
+        if repo is None:
+            raise EnigramError("--graph checks a code golden set (one with `repo:`)")
+        symbols = asyncio.run(_graph_symbols(cfg, repo.url, repo.ref, repo.pinned_sha))
+    golden_set, problems = check_golden(cfg, path, symbols=symbols)
     questions = golden_set.questions
     width = 14 if golden_set.repo is None else 20
     for q in questions:
@@ -317,12 +388,51 @@ async def _golden_answer(cfg: Config, args: argparse.Namespace) -> int:
     from enigram.application.evaluation.golden_run import run_golden
     from enigram.bootstrap import build_deps
 
-    run = await run_golden(cfg, build_deps(cfg), args.file, args.mode, args.limit)
+    run = await run_golden(
+        cfg,
+        build_deps(cfg),
+        args.file,
+        args.system,
+        args.limit,
+        split=args.split,
+        categories=tuple(args.category) if args.category else None,
+        allow_verdict=args.allow_verdict,
+    )
     print(f"answers: {run.answers_path}")
     print(f"labels:  {run.labels_path}")
     if run.failed:
         print(f"{run.failed} question(s) failed; see the answers file")
     return 1 if run.failed else 0
+
+
+async def _golden_citations(cfg: Config, path: Path) -> int:
+    from enigram.application.evaluation.blind import load_answers
+    from enigram.application.evaluation.citations import check_answers, citations_path
+
+    run = load_answers(path)
+    repo = run.get("repo")
+    symbols = None
+    if repo and cfg.storage == "postgres":
+        try:
+            symbols = await _graph_symbols(cfg, repo["url"], repo["ref"], repo["pinned_sha"])
+        except EnigramError as e:
+            print(f"note: symbols not checked ({e})")
+    result = check_answers(cfg, path, symbols)
+    rows = []
+    for qid, item in result["items"].items():
+        valid = sum(c["valid"] for c in item["citations"])
+        rows.append(f"{qid} {valid}/{len(item['citations'])} valid")
+        for c in item["citations"]:
+            if not c["valid"]:
+                print(f"  {qid}: {c['citation']}: {c['reason']}")
+    print(" · ".join(rows))
+    print(
+        f"{result['answers_fully_valid']}/{result['answers']} answers fully valid · "
+        f"{result['citations_valid']}/{result['citations']} citations valid · "
+        f"{result['sentences_without_citation']} sentences without citation"
+    )
+    print(f"result: {citations_path(path)}")
+    return 0
 
 
 def _golden_labels(sheet: Path) -> int:
@@ -361,7 +471,9 @@ async def _eval(cfg: Config, args: argparse.Namespace) -> int:
     from enigram.application.evaluation.evaluate import run_eval
     from enigram.bootstrap import build_deps
 
-    run = await run_eval(cfg, build_deps(cfg), args.file, args.labels, args.limit)
+    run = await run_eval(
+        cfg, build_deps(cfg), args.answers, args.blind, args.labels, judge=args.judge
+    )
     for criterion, verdict in run.verdicts.items():
         print(f"{criterion}: {verdict}")
     print(f"report: {run.report_path}")
@@ -411,7 +523,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "golden":
             if args.golden_command == "check":
-                return _golden_check(cfg, args.file)
+                return _golden_check(cfg, args.file, args.graph)
+            if args.golden_command == "citations":
+                return asyncio.run(_golden_citations(cfg, args.answers))
             if args.golden_command == "answer":
                 return asyncio.run(_golden_answer(cfg, args))
             if args.golden_command == "blind":

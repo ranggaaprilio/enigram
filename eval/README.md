@@ -126,12 +126,33 @@ Commits between them only touch dependencies, i18n JSON or docs.
 
 ## Blind labelling protocol
 
-1. Answer the questions with each system; each run writes `data/eval/answers-<system>-<ts>.json`.
+1. Answer the `dev` questions with each system; each run writes
+   `data/eval/answers-<system>-<ts>.json`:
+   `uv run enigram golden answer --system code --split dev` and
+   `uv run enigram golden answer --system agent+repo --split dev`. Add `--category injection` or
+   `--category unanswerable` (without `--split`) for those categories. `verdict` and `reserve`
+   are refused without `--allow-verdict`.
 2. `uv run enigram golden blind data/eval/answers-code-….json data/eval/answers-agent+repo-….json`
    writes `data/eval/blind-<ts>.md` (answers normalized, letters shuffled per question) and the
    sealed `blind-<ts>.key.json`. Do not open the key.
 3. Mark each answer `[x]` correct or `[-]` wrong against the ground truth.
 4. `uv run enigram golden unblind data/eval/blind-<ts>.md` opens the key and scores each system.
+
+### Citation check
+
+`uv run enigram golden citations data/eval/answers-<system>-<ts>.json` checks every
+`file:line@sha` an answer cites (its `[n]` refs resolved through the sources, plus inline
+citations): the sha is the pinned commit, the file exists in the clone, the lines are inside it,
+and for a `code` source a symbol of the code graph covers the lines and its name appears in them.
+It writes `<answers>.citations.json`. An answer is fully valid when it cites and every citation
+holds; an abstention may cite nothing.
+
+### Scoring
+
+`uv run enigram eval --answers <answers-code> <answers-agent+repo> --blind <blind-sheet>` scores
+the labelled answers (accuracy per split and category, citations, abstention, injection, tokens,
+latency, tool calls) and gives the Phase-1 criteria a verdict. `--judge` adds Ragas and the LLM
+claim judge.
 
 Normalization removes `[n]` citations, `file:line@sha` citations, headings, the References
 section, emphasis and the origin tags. Contract for Phase 2: answers render a sentence's origin as
@@ -152,5 +173,7 @@ The baseline a developer would use instead of Enigram: a coding agent reading th
   question, confirmed in Phase 1. When the budget runs out the agent answers with what it has.
 - Prompt: answer in 1-5 sentences, each with a `path:line@<pinned_sha>` citation.
 - Output: `answers-agent+repo-<ts>.json` in the `golden answer` format plus `tool_calls`,
-  `tokens_in`, `tokens_out` and `citations` per item; cached per (question, sha).
+  `tokens_in`, `tokens_out`, `citations`, `trace` (tool, arguments, output size per call) and
+  `budget_exhausted` per item; cached per (question, sha, model) in `data/eval/agent-cache/`, so
+  a rerun is free. Code: `application/evaluation/agent_repo.py`.
 - Reported: accuracy (blind labels), citation validity, tokens, latency, tool calls.

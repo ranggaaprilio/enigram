@@ -233,11 +233,9 @@ def test_to_result_maps_naive_response_without_graph():
 
 def test_cli_modes_match_query_modes():
     commands = cli._build_parser()._subparsers._group_actions[0].choices
-    golden_commands = commands["golden"]._subparsers._group_actions[0].choices
-    for subparser in (commands["query"], golden_commands["answer"]):
-        (mode,) = [a for a in subparser._actions if a.dest == "mode"]
-        assert tuple(mode.choices) == answer.QUERY_MODES
-        assert mode.default == answer.QUERY_MODE
+    (mode,) = [a for a in commands["query"]._actions if a.dest == "mode"]
+    assert tuple(mode.choices) == answer.QUERY_MODES
+    assert mode.default == answer.QUERY_MODE
 
 
 async def test_answer_question_rejects_too_short_question():

@@ -24,7 +24,8 @@ CODE_QUERY_SEARCH_LIMIT = 10
 CODE_QUERY_REACH_DEPTH = 2  # an entry point counts as related when a hit is this close
 CODE_MODE = "code"
 NO_SOURCES_ANSWER = "No indexed code matches this question."
-_ROUTE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+(/[\w/:.-]*)", re.IGNORECASE)
+# The path may hold ":id" or a dot but never ends in one: "POST /auth/refresh: what…".
+_ROUTE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+(/(?:[\w/:.-]*[\w/])?)", re.IGNORECASE)
 ANSWER_PROMPT = (
     SOURCE_IS_DATA + "\n\nAnswer the question about the application from the Context only, in 1-6 "
     "sentences. Every sentence ends with the citation [n] of the source it comes from; a "

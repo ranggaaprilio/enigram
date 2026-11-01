@@ -38,12 +38,22 @@ async def test_identifier_reaches_find_symbols_and_its_flow(cfg, graph):
     assert chat.kwargs[0] == {"temperature": 0.0, "max_tokens": 800, "tools": None}
 
 
-async def test_route_question_reaches_routes(cfg, graph):
-    result = await answer_code_question(
-        cfg, FakeChat("x [1]."), graph, 1, SHA, "What happens on GET /users/:id?"
-    )
+@pytest.mark.parametrize(
+    "question",
+    ["What happens on GET /users/:id?", "Walk through GET /users/:id: what is returned?"],
+)
+async def test_route_question_reaches_routes(cfg, graph, question):
+    result = await answer_code_question(cfg, FakeChat("x [1]."), graph, 1, SHA, question)
     assert ("routes", "GET /users/:id") in graph.calls
     assert result.extra["flows"][0] == ROUTE
+
+
+def test_route_pattern_trims_trailing_punctuation():
+    assert code_query._ROUTE.findall("POST /auth/refresh: and get /a/b. and GET /") == [
+        ("POST", "/auth/refresh"),
+        ("get", "/a/b"),
+        ("GET", "/"),
+    ]
 
 
 async def test_no_context_marker_means_not_found(cfg, graph):
