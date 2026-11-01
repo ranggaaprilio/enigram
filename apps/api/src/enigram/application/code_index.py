@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 CODE_MAX_FILES = 2000  # PRD NFR: v1 repository size
 CODE_MAX_LOC = 50_000
 TS_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
-_SKIP_DIRS = {"node_modules", "dist", "build", ".git", "coverage"}
+SKIP_DIRS = {"node_modules", "dist", "build", ".git", "coverage"}
 GIT_TIMEOUT_SECS = 60
 
 
@@ -39,7 +39,7 @@ def repo_limits(root: Path) -> tuple[int, int]:
     raises over the v1 limits. Symbolic links are not followed or counted."""
     files = lines = 0
     for folder, dirs, names in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for name in names:
             path = Path(folder) / name
             if not _is_ts(name) or path.is_symlink():

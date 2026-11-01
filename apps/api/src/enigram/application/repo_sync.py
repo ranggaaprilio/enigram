@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from enigram.application.code_index import index_code, is_ts_repo
+from enigram.application.code_index import SKIP_DIRS, index_code, is_ts_repo
 from enigram.application.files import file_sha256
 from enigram.application.indexing import delete_document, load_manifest, run_index, save_manifest
 from enigram.application.ports import CodeGraphRepository, Deps
@@ -65,14 +65,15 @@ def repo_book(repo: str, rel: Path) -> str:
 
 
 def collect_markdown(root: Path, repo: str) -> dict[str, Path]:
-    """Document name -> file, for regular Markdown files outside .git, size-capped.
+    """Document name -> file, for regular Markdown files outside .git and vendored or built
+    folders (node_modules, dist, build, coverage: the code graph skips the same), size-capped.
 
     Symlinks are skipped: a repository can point one at any file on the worker.
     """
     root = root.resolve()
     files: dict[str, Path] = {}
     for folder, dirs, names in os.walk(root, followlinks=False):
-        dirs[:] = [d for d in dirs if d != ".git"]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for name in sorted(names):
             path = Path(folder) / name
             if path.suffix.lower() not in MARKDOWN_SUFFIXES or path.is_symlink():

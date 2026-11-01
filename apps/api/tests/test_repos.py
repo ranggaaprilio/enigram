@@ -81,6 +81,9 @@ def test_collect_markdown_keeps_only_regular_markdown(tmp_path):
             "docs/guide.MARKDOWN": "# Guide",
             "docs/notes.txt": "not markdown",
             ".git/info.md": "git internals",
+            "node_modules/pkg/README.md": "# A package",
+            "dist/docs/api.md": "# Built",
+            "packages/web/build/notes.md": "# Built too",
             "big.md": "x" * (repos.REPO_MAX_FILE_BYTES + 1),
         },
     )
