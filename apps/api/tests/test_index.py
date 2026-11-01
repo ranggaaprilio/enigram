@@ -82,6 +82,18 @@ async def test_run_index_returns_early_without_llm_when_up_to_date(cfg, deps, tm
     assert run.report_path is None
 
 
+def test_guard_embed_model_records_then_rejects_another_model(cfg):
+    cfg.rag_dir.mkdir(parents=True)
+    (cfg.rag_dir / "kv_store.json").write_text("{}")
+    manifest = {"books": {"p": {"status": "indexed"}}}
+    index.guard_embed_model(cfg, manifest)  # recorded before: trusted and recorded
+    assert manifest["embed_model"] == cfg.embed_model
+    index.guard_embed_model(cfg, manifest)
+    manifest["embed_model"] = "qwen3-embedding"
+    with pytest.raises(EnigramError, match="Embedding model changed"):
+        index.guard_embed_model(cfg, manifest)
+
+
 def test_guard_llm_model_records_model_on_fresh_index(cfg):
     manifest = {"books": {}}
     index.guard_llm_model(cfg, manifest)

@@ -97,6 +97,21 @@ def guard_storage(cfg: Config, manifest: dict[str, Any]) -> None:
     manifest.update(current)
 
 
+def guard_embed_model(cfg: Config, manifest: dict[str, Any]) -> None:
+    """Vectors from two embedding models live in unrelated spaces, even at the same dimension.
+    A manifest without the model is recorded as is: indexes from before it was recorded were
+    built on a local LLM, which guard_llm_model already refuses."""
+    current = {"embed_model": cfg.embed_model, "embed_dim": cfg.embed_dim}
+    stored = {k: manifest.get(k) for k in current}
+    known = stored["embed_model"] is not None
+    if known and _has_index(cfg) and manifest.get("books") and stored != current:
+        raise EnigramError(
+            f"Embedding model changed from {stored} to {current}. "
+            f"Delete {cfg.index_location} and {cfg.manifest_path} to re-index."
+        )
+    manifest.update(current)
+
+
 def guard_llm_model(cfg: Config, manifest: dict[str, Any]) -> None:
     """Entities and relations from two extraction models must not mix in one graph."""
     current = {"llm_provider": cfg.llm_provider, "llm_model": cfg.llm_model}
@@ -346,6 +361,7 @@ async def run_index(
     manifest = load_manifest(cfg)
     guard_storage(cfg, manifest)
     guard_chunk_settings(cfg, manifest)
+    guard_embed_model(cfg, manifest)
     todo, up_to_date = select_books(cfg, pdfs, manifest)
     if not todo:
         log.info("[index] all %d documents are already indexed and unchanged", len(up_to_date))

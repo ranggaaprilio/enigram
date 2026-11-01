@@ -25,7 +25,9 @@ async def _new_memory(cfg: Config, store: JobRepository) -> MemoryRepository:
     # Here, not in the API: this is the one place that knows the job store is Postgres and that
     # the memory table can share its pool.
     assert isinstance(store, PostgresJobStore)
-    memory = PostgresMemoryStore(store.pool, cfg.workspace, make_embedding_func(cfg), cfg.embed_dim)
+    memory = PostgresMemoryStore(
+        store.pool, cfg.workspace, make_embedding_func(cfg), cfg.embed_dim, cfg.embed_model
+    )
     await memory.ensure_schema()
     return memory
 

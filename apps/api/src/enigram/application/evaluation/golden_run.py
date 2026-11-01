@@ -39,7 +39,8 @@ CODE_SYSTEMS = ("code", "agent+repo")
 # behavior_annotation needs the annotations of Phase 2.
 CODE_SYSTEM_CATEGORIES = (BEHAVIOR, UNANSWERABLE, INJECTION)
 LOCKED_SPLITS = ("verdict", "reserve")
-_REFS = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+# Not after a name or a closing bracket: `roles[0]` and `args[1]` index arrays, they cite nothing.
+_REFS = re.compile(r"(?<![\w\])])\[(\d+(?:\s*,\s*\d+)*)\]")
 
 Answer = Callable[[GoldenQuestion], Awaitable[QueryResult]]
 
@@ -108,13 +109,18 @@ def select_questions(
     return selected
 
 
-def answer_citations(answer: str, sources: list[Source]) -> list[dict[str, Any]]:
+def answer_citations(
+    answer: str, sources: list[Source], *, refs: bool = True
+) -> list[dict[str, Any]]:
     """Every code citation an answer makes: its `[n]` refs resolved through the sources, then
-    inline `path:line@sha` citations (ref None). A `[n]` with no source has file None."""
+    inline `path:line@sha` citations (ref None). A `[n]` with no source has file None.
+    `refs=False` for answers that cite inline only (agent+repo): their sources are those inline
+    citations, so a stray `[1]` would count the first one twice."""
     by_ref = {s.ref: s for s in sources}
     out: list[dict[str, Any]] = []
-    refs = dict.fromkeys(int(n) for group in _REFS.findall(answer) for n in group.split(","))
-    for n in refs:
+    numbers = _REFS.findall(answer) if refs else []
+    refs_found = dict.fromkeys(int(n) for group in numbers for n in group.split(","))
+    for n in refs_found:
         source = by_ref.get(n)
         if source is None:
             out.append(
@@ -158,7 +164,9 @@ async def answer_golden(
                 tool_calls=result.extra.get("tool_calls"),
                 trace=result.extra.get("trace"),
                 budget_exhausted=result.extra.get("budget_exhausted"),
-                citations=answer_citations(result.answer, result.sources),
+                citations=answer_citations(
+                    result.answer, result.sources, refs=system != "agent+repo"
+                ),
                 error=None,
             )
             log.info(

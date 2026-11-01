@@ -268,3 +268,11 @@ def test_systems_match_the_cli_choices():
     answer = commands["golden"]._subparsers._group_actions[0].choices["answer"]
     (system,) = [a for a in answer._actions if a.dest == "system"]
     assert tuple(system.choices) == SYSTEMS
+
+
+def test_answer_citations_skip_array_indexes_and_agent_refs():
+    sources = [Source(1, "A.run", "code", "", "src/a.ts:3-9@abc1234")]
+    out = answer_citations("It reads `user.roles[0]` and args[1] [1].", sources)
+    assert [c["ref"] for c in out] == [1]
+    agent = answer_citations("See [1] and src/a.ts:3-9@abc1234.", sources, refs=False)
+    assert [(c["ref"], c["file"]) for c in agent] == [(None, "src/a.ts")]

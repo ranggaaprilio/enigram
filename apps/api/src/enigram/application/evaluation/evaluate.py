@@ -290,7 +290,8 @@ def _hypothesis(
             "n": len(code),
             "verdict": _verdict(
                 code or None,
-                sum(code.values()) >= PHASE1_MIN_CORRECT,
+                # A share, not a count: 7 correct of 20 labelled is 35%, not a pass.
+                sum(code.values()) * PHASE1_DEV_QUESTIONS >= PHASE1_MIN_CORRECT * len(code),
                 len(code) >= PHASE1_DEV_QUESTIONS,
             ),
             "note": "blind labels, behaviour questions of split dev",

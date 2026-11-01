@@ -316,3 +316,13 @@ def test_blind_correctness_rejects_conflicting_sheets(cfg, two_systems):
 
     with pytest.raises(EnigramError, match="labelled both ways"):
         evaluate.blind_correctness([sheet, other])
+
+
+@pytest.mark.parametrize(("correct", "verdict"), [(7, "FAIL"), (14, "PASS")])
+def test_dev_accuracy_is_a_share_of_the_labelled_questions(correct, verdict):
+    items = [
+        {"id": f"b{i:02}", "category": "behavior", "split": "dev", "correct": i < correct}
+        for i in range(20)
+    ]
+    hypothesis = evaluate._hypothesis({"code": {"items": items}}, {}, None)
+    assert hypothesis["phase1_dev_accuracy"]["verdict"] == verdict

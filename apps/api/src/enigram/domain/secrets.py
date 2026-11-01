@@ -32,11 +32,12 @@ _PATTERNS = tuple(
         ),
         ("slack_token", r"xox[baprs]-[0-9A-Za-z-]{10,}"),
         ("jwt", r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-        # The value must mix letters and digits: `password: 'incorrectPassword'` is an error code
-        # the answers need, not a secret.
+        # The key may be a compound name (JWT_SECRET, clientSecret, "accessToken"). The value
+        # must mix letters and digits: `password: 'incorrectPassword'` is an error code the
+        # answers need, not a secret.
         (
             "generic_assignment",
-            r"(?i)\b(api[_-]?key|secret|token|password|passwd)\b\s*[:=]\s*"
+            r"(?i)\b\w*(?:api[_-]?key|secret|token|password|passwd)\w*['\"]?\s*[:=]\s*"
             r"['\"](?=[^'\"\s]*\d)(?=[^'\"\s]*[a-z])[^'\"\s]{12,}['\"]",
         ),
     )

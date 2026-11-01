@@ -17,6 +17,7 @@ from enigram.application.files import atomic_write_text
 from enigram.application.ports import ChatModel
 from enigram.domain.answer import NO_ANSWER_MARKER, ContextChunk, QueryResult, Source
 from enigram.domain.code import parse_code_citations
+from enigram.domain.secrets import is_secret_path, redact
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +83,8 @@ BUDGET_MESSAGE = "Tool budget exhausted. Answer now from what you have read."
 
 class RepoTools:
     """Read-only tools confined to one clone; every problem is returned as text, never raised
-    to the model."""
+    to the model. Like the code index, secret files are not read and secret values are
+    redacted: the model is external, and both systems must see the same inputs."""
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
@@ -95,6 +97,8 @@ class RepoTools:
         parts = Path(rel.lstrip("/")).parts
         if any(part in SKIP_DIRS for part in parts):
             return f"{rel}: not readable"
+        if parts and is_secret_path(Path(*parts).as_posix()):
+            return f"{rel}: not readable (secret file)"
         probe = self.root
         for part in parts:
             probe = probe / part
@@ -138,7 +142,7 @@ class RepoTools:
             return f"{path} has {len(lines)} lines"
         body = "\n".join(f"{n}: {lines[n - 1]}" for n in range(first, last + 1))
         tail = f"\n… lines {last + 1}-{len(lines)} not shown" if last < len(lines) else ""
-        return body + tail
+        return redact(body)[0] + tail
 
     def grep(self, pattern: str, glob: str | None = None) -> str:
         try:
@@ -151,7 +155,11 @@ class RepoTools:
             for name in sorted(names):
                 path = Path(folder) / name
                 rel = self._rel(path)
-                if path.is_symlink() or (glob and not fnmatch.fnmatch(rel, glob)):
+                if (
+                    path.is_symlink()
+                    or is_secret_path(rel)
+                    or (glob and not fnmatch.fnmatch(rel, glob))
+                ):
                     continue
                 try:
                     if path.stat().st_size > FILE_MAX_BYTES:
@@ -161,7 +169,8 @@ class RepoTools:
                     continue
                 for n, line in enumerate(text.splitlines(), 1):
                     if regex.search(line):
-                        hits.append(f"{rel}:{n}:{line.strip()[:GREP_MAX_LINE_CHARS]}")
+                        line = redact(line.strip())[0][:GREP_MAX_LINE_CHARS]
+                        hits.append(f"{rel}:{n}:{line}")
                         if len(hits) >= GREP_MAX_HITS:
                             return "\n".join(hits) + f"\n… stopped at {GREP_MAX_HITS} hits"
         return "\n".join(hits) or "no matches"

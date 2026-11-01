@@ -78,7 +78,12 @@ export function fileSymbols(root, sf) {
       add(ctor, `${name}.constructor`, "constructor", exported, name);
     }
     for (const method of cls.getMethods()) {
-      if (method.isOverload()) continue;
+      // ts-morph calls every method without a body an overload, `abstract foo(): T;` included.
+      // An abstract method is the only declaration a call through the abstract class finds, so it
+      // must be a symbol; abstract overloads after the first would repeat its id.
+      if (method.isOverload() && !(method.isAbstract() && method === cls.getMethod(method.getName()))) {
+        continue;
+      }
       add(method, `${name}.${method.getName()}`, "method", exported, name);
     }
     for (const accessor of [...cls.getGetAccessors(), ...cls.getSetAccessors()]) {

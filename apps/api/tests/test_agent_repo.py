@@ -27,6 +27,8 @@ def repo(tmp_path):
     (root / "node_modules/x/index.ts").write_text("validateLogin\n")
     (tmp_path / "secret.txt").write_text("outside")
     (root / "link.ts").symlink_to(tmp_path / "secret.txt")
+    (root / ".env").write_text("AUTH_JWT_SECRET=abc123def456ghi\n")
+    (root / "src/auth/config.ts").write_text("const clientSecret = 'abc123def456ghi';\n")
     return root
 
 
@@ -142,6 +144,7 @@ async def test_cache_hit_makes_no_calls(repo, tmp_path):
         (("read_file", {"path": "link.ts"}), "symbolic link"),
         (("read_file", {"path": "node_modules/x/index.ts"}), "not readable"),
         (("read_file", {"path": "src"}), "not a file"),
+        (("read_file", {"path": ".env"}), "secret file"),
         (("read_file", {}), "missing argument"),
         (("list_dir", {"path": "src/auth/auth.service.ts"}), "not a directory"),
         (("grep", {"pattern": "("}), "invalid regular expression"),
@@ -155,6 +158,14 @@ def test_tools_return_errors_as_text(repo, call, expected):
 
 def test_list_dir_and_glob(repo):
     tools = RepoTools(repo)
-    assert tools.list_dir(".").splitlines() == ["src/"]  # no node_modules, no symlinks
+    # No node_modules, no symlinks; a secret file is listed but not readable.
+    assert tools.list_dir(".").splitlines() == [".env", "src/"]
     assert tools.grep("validateLogin", "*.md") == "no matches"
     assert "auth.service.ts:2" in tools.grep("validateLogin", "src/**/*.ts")
+
+
+def test_tools_hide_secret_files_and_values(repo):
+    tools = RepoTools(repo)
+    assert "abc123" not in tools.grep("SECRET|Secret")
+    assert "[REDACTED]" in tools.grep("clientSecret")
+    assert "abc123" not in tools.read_file("src/auth/config.ts")

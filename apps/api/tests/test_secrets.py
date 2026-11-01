@@ -13,6 +13,9 @@ from enigram.domain.secrets import REDACTED, is_secret_path, redact
         "slack = 'xoxb-1234567890-abc'",
         "jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmn'",
         "const password = 'hunter2hunter2';",
+        "AUTH_JWT_SECRET: 'abc123def456ghi'",
+        "clientSecret = 'abc123def456ghi'",
+        '"accessToken": "abc123def456ghi"',
     ],
 )
 def test_redact_each_pattern(text):

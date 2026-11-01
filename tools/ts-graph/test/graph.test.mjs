@@ -74,7 +74,7 @@ test("imports are file to file inside the repository, bare specifiers outside", 
 test("spec files are skipped and counted", () => {
   assert.ok(!graph.symbols.some((s) => s.file.endsWith(".spec.ts")));
   assert.equal(graph.report.files_skipped.test, 1);
-  assert.equal(graph.report.files, 6);
+  assert.equal(graph.report.files, 7);
 });
 
 test("symbol rows carry lines, decorators, signature and body", () => {
@@ -134,4 +134,10 @@ test("the CLI exits 2 without a tsconfig.json", () => {
     (e) => e.status === 2 && /tsconfig\.json/.test(e.stderr.toString()),
   );
   fs.rmSync(dir, { recursive: true });
+});
+
+test("an abstract class method is a symbol, so a call through the abstract class resolves to it", () => {
+  assert.equal(symbol("SessionRepo.findById").parent, "SessionRepo");
+  assert.ok(edge("calls", "SessionService.get", "SessionRepo.findById"));
+  assert.ok(edge("extends", "SqlSessionRepo", "SessionRepo"));
 });
