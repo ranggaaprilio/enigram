@@ -59,7 +59,9 @@ def check_ref(ref: str | None) -> str | None:
 
 def repo_book(repo: str, rel: Path) -> str:
     """Document name of one file: <repo>--<path without suffix, "/" as "--">."""
-    return book_name(Path("--".join([repo, *rel.with_suffix("").parts])))
+    # Not book_name(Path(...)): its .stem would cut at the dot of a directory like .github.
+    joined = "--".join([repo, *rel.with_suffix("").parts])
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", joined).strip("-") or repo
 
 
 def collect_markdown(root: Path, repo: str) -> dict[str, Path]:

@@ -277,3 +277,16 @@ async def test_index_repo_typescript_needs_postgres(cfg, deps, fake_sync):
 async def test_index_repo_checks_the_url_again(cfg, deps, fake_sync):
     with pytest.raises(EnigramError, match="not in REPO_HOSTS"):
         await repos.index_repo(cfg, deps, "https://intranet.local/org/handbook")
+
+
+@pytest.mark.parametrize(
+    ("rel", "book"),
+    [
+        (".claude/skills/generate/SKILL.md", "org-app--.claude--skills--generate--SKILL"),
+        (".github/ISSUE_TEMPLATE/bug_report.md", "org-app--.github--ISSUE_TEMPLATE--bug_report"),
+        ("docs/v1.2/notes.md", "org-app--docs--v1.2--notes"),
+    ],
+)
+def test_repo_book_keeps_dotted_directories(rel, book):
+    # Path(...).stem used to cut everything after the last dot of a dotted directory.
+    assert repos.repo_book("org-app", Path(rel)) == book
