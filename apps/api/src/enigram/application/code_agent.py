@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 AGENT_MODE = "enigram-agent"
 AGENT_VERSION = "1b.1"  # bump when tool output or the prompt changes: busts the answer cache
 AGENT_MAX_REPOS = 3
-GRAPH_MAX_HITS = 10  # find_symbol candidates, callers/callees rows (×3)
+GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
 SNIPPET_CHARS = 100
 AGENT_GREP_MAX_HITS = 20
@@ -240,24 +240,16 @@ class CodeAgentTools:
         rows = "\n".join(self._row(r, s) for r, s in found[:GRAPH_MAX_HITS])
         return f"{len(found)} symbols match {name}; pass the qualified name:\n{rows}"
 
-    async def _resolve(self, repo: dict[str, Any], name: str) -> CodeSymbol | str:
-        matches = await self.graph.find_symbols(repo["id"], [name])
-        exact = [s for s in matches if s.qualified_name == name] or matches
-        if len(exact) == 1:
-            return exact[0]
-        if not exact:
-            return f"no symbol named {name} in {self.names[repo['id']]}"
-        return self._candidates(name, [(repo, s) for s in exact])
-
     # -- graph tools --------------------------------------------------------------------------
 
     async def search_code(self, query: str, repo: Any = None) -> str:
         targets = self._targets(repo)
         if isinstance(targets, str):
             return targets
+        self.graph_calls += 1  # only a graph query that ran can open the fallback
         hits: list[tuple[float, str, dict[str, Any], CodeSymbol]] = []
         for r in targets:
-            ranked = await self.graph.search(r["id"], query, SEARCH_MAX_HITS)
+            ranked = await self.graph.search(r["id"], query, SEARCH_MAX_HITS, bodies=True)
             symbols = await self.graph.symbols_by_id(r["id"], [i for i, _ in ranked])
             hits += [(rank, i, r, symbols[i]) for i, rank in ranked if i in symbols]
         hits.sort(key=lambda h: (-h[0], self.names[h[2]["id"]], h[1]))
@@ -275,6 +267,7 @@ class CodeAgentTools:
         targets = self._targets(repo)
         if isinstance(targets, str):
             return targets
+        self.graph_calls += 1  # only a graph query that ran can open the fallback
         found: list[tuple[dict[str, Any], CodeSymbol]] = []
         for r in targets:
             found += [(r, s) for s in await self.graph.find_symbols(r["id"], [name])]
@@ -321,6 +314,7 @@ class CodeAgentTools:
         targets = self._targets(repo)
         if isinstance(targets, str):
             return targets
+        self.graph_calls += 1  # only a graph query that ran can open the fallback
         found = []
         m = ROUTE.search(route)
         for r in targets:
@@ -387,8 +381,6 @@ class CodeAgentTools:
         try:
             if name in READ_TOOL_NAMES:
                 return await self.read(name, args)
-            if name in GRAPH_TOOL_NAMES:
-                self.graph_calls += 1
             if name == "search_code":
                 out = await self.search_code(args["query"], args.get("repo"))
             elif name == "find_symbol":
@@ -413,6 +405,31 @@ class CodeAgentTools:
         }
 
 
+def _select(
+    repos: list[dict[str, Any]], repo: str, ref: str | None, hosts: tuple[str, ...]
+) -> dict[str, Any]:
+    """The repository a caller asked about: its URL (with `ref`, or the only ref indexed) or its
+    name ("org-app", "org-app@dev"). Several refs and none given is an error, never a guess."""
+    key = repo.strip()
+    found = [
+        r
+        for r in repos
+        if _norm_url(r["url"]) == _norm_url(key)
+        or repo_name(r, hosts).lower() == key.lower()
+        or (repo_name(r, hosts).split("@")[0].lower() == key.lower() and not r.get("ref"))
+    ]
+    if ref is not None:
+        found = [r for r in found if (r.get("ref") or None) == (ref or None)]
+    if len(found) == 1:
+        return found[0]
+    if found:
+        names = ", ".join(sorted(repo_name(r, hosts) for r in found))
+        raise EnigramError(f"{repo} is indexed at several refs ({names}); pass one of these names")
+    indexed = ", ".join(sorted(repo_name(r, hosts) for r in repos))
+    where = f" ({ref})" if ref else ""
+    raise EnigramError(f"{repo}{where} is not indexed; indexed: {indexed}")
+
+
 async def answer_with_agent(
     cfg: Config,
     chat: ChatModel,
@@ -420,6 +437,7 @@ async def answer_with_agent(
     question: str,
     *,
     repo_url: str | None = None,
+    repo_ref: str | None = None,
     cache_dir: Path | None = None,
     max_tool_calls: int = AGENT_MAX_TOOL_CALLS,
     max_input_tokens: int = AGENT_MAX_INPUT_TOKENS,
@@ -429,16 +447,12 @@ async def answer_with_agent(
     repos = await graph_repo.list_repos()
     if not repos:
         raise EnigramError("No repository indexed; run `enigram repo <url>`")
-    selected = None
-    if repo_url:
-        selected = next((r for r in repos if _norm_url(r["url"]) == _norm_url(repo_url)), None)
-        if selected is None:
-            urls = ", ".join(sorted(r["url"] for r in repos))
-            raise EnigramError(f"{repo_url} is not indexed; indexed: {urls}")
+    selected = _select(repos, repo_url, repo_ref, cfg.repo_hosts) if repo_url else None
     path = None
     if cache_dir is not None:
         shas = ",".join(sorted(r["indexed_sha"] for r in repos))
-        cache_key = f"{AGENT_VERSION}\n{question}\n{shas}\n{repo_url or ''}\n{model}"
+        picked = f"{selected['url']}@{selected['ref'] or ''}" if selected else ""
+        cache_key = f"{AGENT_VERSION}\n{question}\n{shas}\n{picked}\n{model}"
         key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
         if path.exists():

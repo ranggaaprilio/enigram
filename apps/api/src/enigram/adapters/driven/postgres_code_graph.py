@@ -347,30 +347,6 @@ class PostgresCodeGraph:
                     )
         return out
 
-    async def callers(self, repo_id: int, symbol_id: str) -> list[tuple[CodeEdge, CodeSymbol]]:
-        """`calls` edges into a symbol, and into the interface/abstract member it implements
-        (a caller reaches `SqlUserRepo.load` through `UserRepo.load`)."""
-        targets = [symbol_id]
-        file, _, qualified = symbol_id.partition("#")
-        owner, dot, name = qualified.rpartition(".")
-        if dot:
-            bases = await self.pool.fetch(
-                "SELECT DISTINCT dst FROM code_edges WHERE repo_id = $1 AND src = $2 "
-                "AND kind IN ('implements', 'extends') AND resolved ORDER BY dst",
-                repo_id,
-                f"{file}#{owner}",
-            )
-            targets += [f"{r['dst']}.{name}" for r in bases]
-        rows = await self.pool.fetch(
-            f"SELECT {_EDGE_COLUMNS}, {_JOINED_SYMBOL_COLUMNS} FROM code_edges e "
-            "JOIN code_symbols s ON s.repo_id = e.repo_id AND s.id = e.src "
-            "WHERE e.repo_id = $1 AND e.dst = ANY($2::text[]) AND e.kind = 'calls' "
-            "ORDER BY s.file, e.line, e.src",
-            repo_id,
-            targets,
-        )
-        return [(_edge(r), _symbol(r, "s_")) for r in rows]
-
     async def edges_from(
         self, repo_id: int, symbol_id: str, kinds: tuple[str, ...]
     ) -> list[tuple[CodeEdge, CodeSymbol | None]]:
@@ -399,7 +375,9 @@ class PostgresCodeGraph:
         found = await self.symbols_by_id(repo_id, ids)
         return [found[i] for i in ids if i in found]
 
-    async def search(self, repo_id: int, query: str, limit: int = 10) -> list[tuple[str, float]]:
+    async def search(
+        self, repo_id: int, query: str, limit: int = 10, *, bodies: bool = False
+    ) -> list[tuple[str, float]]:
         ranks: dict[str, float] = {}
         rows = await self.pool.fetch(
             "SELECT symbol_id, max(ts_rank(to_tsvector('english', text), q)) AS rank "
@@ -423,20 +401,21 @@ class PostgresCodeGraph:
             )
             for r in rows:
                 ranks[r["id"]] = max(ranks.get(r["id"], 0.0), NAME_MATCH_RANK)
-        # Modules and config factories have no summary (no entry point reaches them): their
-        # bodies are the only text that names `fileSize` or `registerAs`.
-        rows = await self.pool.fetch(
-            "SELECT id, ts_rank(to_tsvector('english', body), q) * $4 AS rank "
-            f"FROM code_symbols, {_OR_QUERY} "
-            "WHERE repo_id = $1 AND to_tsvector('english', body) @@ q "
-            "ORDER BY rank DESC, id LIMIT $3",
-            repo_id,
-            query,
-            limit,
-            BODY_MATCH_WEIGHT,
-        )
-        for r in rows:
-            ranks[r["id"]] = max(ranks.get(r["id"], 0.0), float(r["rank"]))
+        if bodies:
+            # Modules and config factories have no summary (no entry point reaches them): their
+            # bodies are the only text that names `fileSize` or `registerAs`.
+            rows = await self.pool.fetch(
+                "SELECT id, ts_rank(to_tsvector('english', body), q) * $4 AS rank "
+                f"FROM code_symbols, {_OR_QUERY} "
+                "WHERE repo_id = $1 AND to_tsvector('english', body) @@ q "
+                "ORDER BY rank DESC, id LIMIT $3",
+                repo_id,
+                query,
+                limit,
+                BODY_MATCH_WEIGHT,
+            )
+            for r in rows:
+                ranks[r["id"]] = max(ranks.get(r["id"], 0.0), float(r["rank"]))
         return sorted(ranks.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
 
     async def save_summaries(

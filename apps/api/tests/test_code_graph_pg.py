@@ -94,20 +94,12 @@ async def test_search_matches_summary_words_and_names(graph):
 async def test_search_ranks_bodies_below_summaries(graph):
     repo_id = await graph.replace_repo(URL, None, SHA, [], agent_graph())
 
-    hits = dict(await graph.search(repo_id, "What is the fileSize limit?"))
+    hits = dict(await graph.search(repo_id, "What is the fileSize limit?", bodies=True))
+    plain = dict(await graph.search(repo_id, "What is the fileSize limit?"))
 
     module = "src/app.module.ts#AppModule"
     assert 0 < hits[module] <= 0.5  # 0.5 * ts_rank: below any name match (1.0)
-
-
-async def test_callers_include_calls_through_the_interface(graph):
-    repo_id = await graph.replace_repo(URL, None, SHA, [], agent_graph())
-
-    direct = await graph.callers(repo_id, SERVICE)
-    impl = await graph.callers(repo_id, "src/repo.ts#SqlUserRepo.load")
-
-    assert [(e.kind, s.qualified_name) for e, s in direct] == [("calls", "AppController.find")]
-    assert [s.qualified_name for _, s in impl] == ["AppService.find"]  # via UserRepo.load
+    assert module not in plain  # the frozen `code` system searches as in Phase 1
 
 
 async def test_edges_from_and_decorators_text_round_trip(graph):

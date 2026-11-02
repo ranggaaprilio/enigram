@@ -44,7 +44,8 @@ def store(cfg, tmp_path):
 def test_ensure_store_makes_a_bare_partial_clone_and_refetches(cfg, store):
     tools, dest, source, sha = store
 
-    assert dest == cfg.repo_store / "org-app@default.git" == store_path(cfg, URL, None)
+    assert dest == cfg.repo_store / "github.com" / "org--app@default.git"
+    assert dest == store_path(cfg, URL, None)
     assert (dest / "HEAD").exists() and not (dest / "src").exists()
     promisor = subprocess.run(
         ["git", "-C", str(dest), "config", "remote.origin.promisor"], capture_output=True
@@ -98,6 +99,11 @@ def test_grep_lists_hits_without_secrets_or_skipped_dirs(store, monkeypatch):
     assert tools.grep("bcrypt", glob="src/**/*.ts") == (
         "src/auth/auth.service.ts:3:return bcrypt.compare(a, b);"
     )
+    # fnmatch, as agent+repo: `*` crosses folders, so `*.ts` finds nested files.
+    assert tools.grep("bcrypt", glob="*.ts") == tools.grep("bcrypt", glob="src/**/*.ts")
+    # Perl regex, the syntax re.compile accepted: \d and (?:...) work.
+    assert tools.grep(r"(?:return)\s+bcrypt") == tools.grep("bcrypt")
+    assert tools.grep(r"^\d$") == "no matches" and tools.grep(r"^x\d?$").startswith("src/big.ts:1")
     assert tools.grep("bcrypt", glob="lib/*.ts") == "no matches"
     assert "abc123def456ghi" not in tools.grep("clientSecret")
     assert tools.grep("AUTH_JWT_SECRET") == "no matches"  # .env is skipped
@@ -115,3 +121,19 @@ def test_list_dir_and_run_dispatch(store):
     assert tools.run("list_dir", {}) == tools.list_dir(".")
     assert tools.run("read_file", {}) == "missing argument 'path'"
     assert tools.run("rm", {}) == "unknown tool 'rm'"
+
+
+def test_store_paths_keep_host_and_full_repository_name(cfg):
+    paths = {
+        store_path(cfg, u, None)
+        for u in (
+            "https://github.com/org/socket.io",
+            "https://github.com/org/socket.web",
+            "https://gitlab.com/org/app",
+            "https://github.com/org/app",
+        )
+    }
+    assert len(paths) == 4
+    assert store_path(cfg, "https://github.com/org/socket.io.git", "v1") == (
+        cfg.repo_store / "github.com" / "org--socket.io@v1.git"
+    )

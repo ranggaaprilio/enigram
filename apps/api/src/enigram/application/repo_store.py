@@ -2,10 +2,12 @@
 read at the indexed commit with `git show`, so the agent sees exactly the tree the graph was built
 from. Blobs are fetched on first read (--filter=blob:none); nothing from the repository is run."""
 
+import fnmatch
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from enigram.application.agent_loop import (
     FILE_MAX_BYTES,
@@ -34,8 +36,13 @@ _GIT = ("git", "-c", "uploadpack.allowFilter=true")
 
 
 def store_path(cfg: Config, url: str, ref: str | None) -> Path:
-    name = check_repo_url(url, cfg.repo_hosts)
-    return cfg.repo_store / f"{name}@{check_ref(ref) or 'default'}.git"
+    """<REPO_STORE>/<host>/<org>--<repo>@<ref>.git: host and full path, so two repositories never
+    share a store (check_repo_url's display name drops the host and cuts at the last dot)."""
+    check_repo_url(url, cfg.repo_hosts)  # validates scheme, host and path segments
+    parts = urlsplit(url)
+    segments = parts.path.strip("/").removesuffix(".git").split("/")
+    name = "--".join(re.sub(r"[^A-Za-z0-9._-]+", "-", s) for s in segments)
+    return cfg.repo_store / (parts.hostname or "") / f"{name}@{check_ref(ref) or 'default'}.git"
 
 
 def _run(
@@ -136,14 +143,14 @@ class GitTools:
         return redact(body)[0] + tail
 
     def grep(self, pattern: str, glob: str | None = None) -> str:
-        """`git grep -E` at the commit; downloads the commit's blobs once on a partial clone."""
+        """`git grep -P` at the commit (Perl regex, the syntax Python's `re` accepts); `glob` is
+        matched with fnmatch on the repository path, as agent+repo does (`*.ts` matches files in
+        every folder). Downloads the commit's blobs once on a partial clone."""
         try:
             re.compile(pattern)
         except (re.error, TypeError) as e:
             return f"invalid regular expression: {e}"
-        args = ["grep", "-n", "-I", "-E", f"--max-count={GREP_MAX_HITS}", "-e", pattern, self.sha]
-        if glob:
-            args += ["--", f":(glob){glob.lstrip('/')}"]
+        args = ["grep", "-n", "-I", "-P", f"--max-count={GREP_MAX_HITS}", "-e", pattern, self.sha]
         done = self._git(*args, check=False)
         if done.returncode not in (0, 1):  # 1: no match
             lines = done.stderr.decode(errors="replace").strip().splitlines()
@@ -154,6 +161,8 @@ class GitTools:
             rel, _, rest = raw.removeprefix(prefix).partition(":")
             n, _, line = rest.partition(":")
             if is_secret_path(rel) or any(p in SKIP_DIRS for p in rel.split("/")):
+                continue
+            if glob and not fnmatch.fnmatch(rel, glob.lstrip("/")):
                 continue
             hits.append(f"{rel}:{n}:{redact(line.strip())[0][:GREP_MAX_LINE_CHARS]}")
             if len(hits) >= GREP_MAX_HITS:

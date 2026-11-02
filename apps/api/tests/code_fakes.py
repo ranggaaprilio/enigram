@@ -234,23 +234,6 @@ class FakeCodeGraph:
                             )
         return out
 
-    async def callers(self, repo_id, symbol_id):
-        symbols, graph = self._symbols(repo_id), self.graphs[repo_id]
-        targets = {symbol_id}
-        file, _, qualified = symbol_id.partition("#")
-        owner, dot, name = qualified.rpartition(".")
-        if dot:
-            targets |= {
-                f"{e.dst}.{name}"
-                for e in graph.edges
-                if e.kind in ("implements", "extends") and e.src == f"{file}#{owner}"
-            }
-        edges = [e for e in graph.edges if e.kind == "calls" and e.dst in targets]
-        return [
-            (e, symbols[e.src])
-            for e in sorted(edges, key=lambda e: (symbols[e.src].file, e.line, e.src))
-        ]
-
     async def edges_from(self, repo_id, symbol_id, kinds):
         symbols = self._symbols(repo_id)
         edges = [e for e in self.graphs[repo_id].edges if e.src == symbol_id and e.kind in kinds]
@@ -258,11 +241,11 @@ class FakeCodeGraph:
             (e, symbols.get(e.dst)) for e in sorted(edges, key=lambda e: (e.kind, e.line, e.dst))
         ]
 
-    async def search(self, repo_id, query, limit=10):
+    async def search(self, repo_id, query, limit=10, *, bodies=False):
         self.calls.append(("search", query))
         words = {w.lower() for w in re.findall(r"\w+", query) if len(w) > 3}
         ranks = {}
-        for s in self.graphs[repo_id].symbols:  # bodies, below summaries
+        for s in self.graphs[repo_id].symbols if bodies else ():  # bodies, below summaries
             if words & set(re.findall(r"\w+", s.body.lower())):
                 ranks[s.id] = 0.25
         for (rid, symbol_id, _), s in self.stored.items():

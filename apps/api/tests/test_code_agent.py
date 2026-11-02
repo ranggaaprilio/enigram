@@ -362,3 +362,39 @@ async def test_turns_are_counted_and_the_cache_key_is_versioned(cfg, graph, tmp_
     assert first.extra["diagnostics"]["turns"] == 3
     assert again.replies == [] and second.answer == "Other answer."  # a miss, not a hit
     assert len(list(cache.iterdir())) == 2
+
+
+async def test_a_failed_graph_call_does_not_open_the_fallback(cfg, graph):
+    tools = _tools(cfg, graph, open_git=FakeGit())
+    path = {"repo": "org-app", "path": "src/app.controller.ts"}
+
+    assert await tools.run("search_code", {}) == "missing argument 'query'"
+    assert (await tools.run("find_symbol", {"name": "X", "repo": "typo"})).startswith(
+        "no indexed repository"
+    )
+
+    assert "not in scope" in await tools.run("read_file", path)
+
+
+async def test_the_selected_repo_respects_the_ref(cfg, graph):
+    await graph.replace_repo(URL, "eval-v1", "b" * 40, [], agent_graph())
+    store_path(cfg, URL, "eval-v1").mkdir(parents=True)
+    (store_path(cfg, URL, "eval-v1") / "HEAD").write_text("x")
+    git = FakeGit()
+
+    pinned = ScriptedChat([tool_reply(("grep", _args(pattern="x"))), answer_reply(FINAL)])
+    result = await answer_with_agent(
+        cfg, pinned, graph, "q", repo_url=URL, repo_ref="eval-v1", open_git=git
+    )
+    assert result.extra["diagnostics"]["repos_touched"] == ["org-app@eval-v1"]
+    assert git.opened == [(store_path(cfg, URL, "eval-v1"), "b" * 40)]  # the pinned sha
+    by_name = ScriptedChat([answer_reply(FINAL)])
+    await answer_with_agent(cfg, by_name, graph, "q", repo_url="org-app@eval-v1")
+
+    with pytest.raises(
+        EnigramError, match="indexed at several refs \\(org-app, org-app@eval-v1\\)"
+    ):
+        await answer_with_agent(cfg, ScriptedChat([]), graph, "q", repo_url=URL)
+    with pytest.raises(EnigramError, match=r"https://github.com/org/app \(main\) is not indexed"):
+        await answer_with_agent(cfg, ScriptedChat([]), graph, "q", repo_url=URL, repo_ref="main")
+    assert by_name.replies == []  # resolved by name, answered

@@ -274,6 +274,7 @@ async def _answer_enigram_agent(
                 graph,
                 q.question,
                 repo_url=repo_spec.url,
+                repo_ref=repo_spec.ref,
                 cache_dir=cfg.eval_dir / "enigram-agent-cache",
                 model=cfg.llm_model,
             )
