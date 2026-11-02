@@ -62,6 +62,12 @@ def test_config_repr_hides_api_keys(cfg, clean_env, monkeypatch):
     assert KEY_A not in repr(Config.from_env(clean_env))
 
 
+def test_config_repo_store_defaults_under_data_dir(cfg, clean_env, monkeypatch, tmp_path):
+    assert cfg.repo_store == tmp_path / "data" / "repos"
+    monkeypatch.setenv("REPO_STORE", str(tmp_path / "store"))
+    assert Config.from_env(clean_env).repo_store == tmp_path / "store"
+
+
 def test_config_repo_hosts_default_and_override(cfg, clean_env, monkeypatch):
     assert cfg.repo_hosts == ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org")
 

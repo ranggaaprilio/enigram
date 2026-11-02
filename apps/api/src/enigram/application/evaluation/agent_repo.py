@@ -12,22 +12,30 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from enigram.application.agent_loop import (
+    AGENT_MAX_INPUT_TOKENS,
+    AGENT_MAX_TOOL_CALLS,
+    BUDGET_MESSAGE,
+    FILE_MAX_BYTES,
+    GREP_MAX_HITS,
+    GREP_MAX_LINE_CHARS,
+    LIST_MAX_ENTRIES,
+    READ_MAX_LINES,
+    SKIP_DIRS,
+    loop_answer,
+    result_from_json,
+    run_tool_loop,
+)
 from enigram.application.evaluation.golden import GoldenQuestion
 from enigram.application.files import atomic_write_text
 from enigram.application.ports import ChatModel
-from enigram.domain.answer import NO_ANSWER_MARKER, ContextChunk, QueryResult, Source
-from enigram.domain.code import parse_code_citations
+from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult
 from enigram.domain.secrets import is_secret_path, redact
 
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "agent+repo"
-AGENT_MAX_TOOL_CALLS = 30
-AGENT_MAX_INPUT_TOKENS = 120_000  # cumulative prompt tokens per question (eval/README.md)
-LIST_MAX_ENTRIES, READ_MAX_LINES, GREP_MAX_HITS = 200, 200, 50
-FILE_MAX_BYTES = 1_000_000  # like repo_sync.REPO_MAX_FILE_BYTES
-GREP_MAX_LINE_CHARS = 200
-SKIP_DIRS = {".git", "node_modules", "dist", "build"}
+__all__ = ["AGENT_MODE", "BUDGET_MESSAGE", "TOOLS", "AgentRepoRunner", "RepoTools"]
 TOOLS = [
     {
         "type": "function",
@@ -78,7 +86,6 @@ SYSTEM_PROMPT = (
     "it relies on. If the repository does not answer the question, say so in one sentence "
     f"ending with {NO_ANSWER_MARKER}."
 )
-BUDGET_MESSAGE = "Tool budget exhausted. Answer now from what you have read."
 
 
 class RepoTools:
@@ -190,18 +197,6 @@ class RepoTools:
         return f"unknown tool {name!r}"
 
 
-def _result_from_json(data: dict[str, Any]) -> QueryResult:
-    return QueryResult(
-        **{
-            **data,
-            "sources": [Source(**s) for s in data["sources"]],
-            "chunks": [ContextChunk(**c) for c in data["chunks"]],
-            "entities": [],
-            "relations": [],
-        }
-    )
-
-
 class AgentRepoRunner:
     def __init__(
         self,
@@ -232,88 +227,34 @@ class AgentRepoRunner:
         path = self._cache_path(q.question)
         if path and path.exists():
             log.info("[agent] %s: cached", q.id)
-            return _result_from_json(json.loads(path.read_text(encoding="utf-8")))
+            return result_from_json(json.loads(path.read_text(encoding="utf-8")))
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT.format(sha=self.sha, sha12=self.sha[:12])},
             {"role": "user", "content": q.question},
         ]
-        calls = tokens_in = tokens_out = 0
-        trace: list[dict[str, Any]] = []
-        exhausted = False
         start = time.perf_counter()
-        while True:
-            reply = await self.chat.chat(messages, tools=TOOLS, temperature=0.0)
-            tokens_in += reply.tokens_in
-            tokens_out += reply.tokens_out
-            if not reply.tool_calls:
-                break
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": reply.text or None,
-                    "tool_calls": [
-                        {
-                            "id": c.id,
-                            "type": "function",
-                            "function": {"name": c.name, "arguments": c.arguments},
-                        }
-                        for c in reply.tool_calls
-                    ],
-                }
-            )
-            for c in reply.tool_calls:
-                calls += 1
-                try:
-                    args = json.loads(c.arguments) if c.arguments else {}
-                except json.JSONDecodeError:
-                    args = None
-                out = (
-                    "invalid JSON arguments"
-                    if not isinstance(args, dict)
-                    else self.tools.run(c.name, args)
-                )
-                trace.append({"tool": c.name, "args": args, "chars": len(out)})
-                messages.append({"role": "tool", "tool_call_id": c.id, "content": out})
-            # Checked after each round, so the first call always happens.
-            if calls >= self.max_tool_calls or tokens_in >= self.max_input_tokens:
-                exhausted = True
-                messages.append({"role": "user", "content": BUDGET_MESSAGE})
-                reply = await self.chat.chat(messages, temperature=0.0)  # no tools: answer now
-                tokens_in += reply.tokens_in
-                tokens_out += reply.tokens_out
-                break
-        text = reply.text
-        found = NO_ANSWER_MARKER not in text
-        text = text.replace(NO_ANSWER_MARKER, "").strip()
-        sources = [
-            Source(
-                ref=i,
-                title=c.file,
-                section="",
-                pages="",
-                citation=f"{c.file}:{c.start}-{c.end}@{c.sha}",
-            )
-            for i, c in enumerate(parse_code_citations(text), 1)
-        ]
-        result = QueryResult(
-            q.question,
-            text,
-            sources,
-            [],
-            found=found,
-            query_secs=round(time.perf_counter() - start, 1),
-            mode=AGENT_MODE,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            extra={"tool_calls": calls, "trace": trace, "budget_exhausted": exhausted},
+
+        async def run(name: str, args: dict[str, Any]) -> str:
+            return self.tools.run(name, args)
+
+        loop = await run_tool_loop(
+            self.chat,
+            messages,
+            TOOLS,
+            run,
+            max_tool_calls=self.max_tool_calls,
+            max_input_tokens=self.max_input_tokens,
+        )
+        result = loop_answer(
+            q.question, loop, mode=AGENT_MODE, secs=time.perf_counter() - start, extra={}
         )
         log.info(
             "[agent] %s: %d tool calls, %d in / %d out tokens%s",
             q.id,
-            calls,
-            tokens_in,
-            tokens_out,
-            " (budget exhausted)" if exhausted else "",
+            loop.calls,
+            loop.tokens_in,
+            loop.tokens_out,
+            " (budget exhausted)" if loop.exhausted else "",
         )
         if path:
             atomic_write_text(path, json.dumps(asdict(result), ensure_ascii=False))

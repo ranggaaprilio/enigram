@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 from code_fakes import FakeChat, FakeCodeGraph, fixture_graph, sym
+from git_fixture import git_repo as _git_repo
 
 from enigram.application import code_index
 from enigram.application.code_index import index_code, redact_graph, repo_limits
@@ -18,18 +19,6 @@ TREE = {
     "node_modules/pkg/index.ts": "export const y = 1;\n",
     "README.md": "# App\n",
 }
-
-
-def _git_repo(root, tree):
-    for rel, text in tree.items():
-        path = root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com"]
-    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
-    subprocess.run([*git, "add", "-f", "."], check=True)
-    subprocess.run([*git, "commit", "-q", "-m", "init"], check=True)
-    return root
 
 
 class FakeParser:

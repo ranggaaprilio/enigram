@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from enigram.application import indexing as index
+from enigram.application import repo_store
 from enigram.application import repo_sync as repos
 from enigram.application.files import file_sha256
 from enigram.application.indexing import IndexRun
@@ -150,7 +151,7 @@ def fake_sync(cfg, deps, monkeypatch):
 
     async def fake_index_code(cfg, deps, graph, root, url, ref, *, limit=None):
         fake.code.append((graph, url, ref, limit, (root / "tsconfig.json").exists()))
-        return {"symbols": 3, "summaries": {"flows": 1}}
+        return {"symbols": 3, "summaries": {"flows": 1}, "commit_sha": "a" * 40}
 
     def fake_clone(url, ref, dest):
         _tree(dest, fake.tree)
@@ -188,6 +189,9 @@ def fake_sync(cfg, deps, monkeypatch):
     monkeypatch.setattr(repos, "clone", fake_clone)
     monkeypatch.setattr(repos, "run_index", fake_run_index)
     monkeypatch.setattr(repos, "index_code", fake_index_code)
+    monkeypatch.setattr(
+        repo_store, "ensure_store", lambda cfg, url, ref, sha: cfg.repo_store / f"{sha[:4]}.git"
+    )
     deps.open_engine = fake_open_engine
     monkeypatch.setattr(repos, "delete_document", fake_delete)
     return fake
@@ -255,7 +259,12 @@ async def test_index_repo_typescript_only_indexes_code(cfg, deps, fake_sync):
     result = await repos.index_repo(cfg, deps, URL, "eval-v1", graph=graph, limit=2)
 
     assert fake_sync.code == [(graph, URL, "eval-v1", 2, True)]  # inside the clone
-    assert result["code"] == {"symbols": 3, "summaries": {"flows": 1}}
+    assert result["code"] == {
+        "symbols": 3,
+        "summaries": {"flows": 1},
+        "commit_sha": "a" * 40,
+        "store": str(cfg.repo_store / "aaaa.git"),
+    }
     assert (result["files"], result["indexed"], result["report"]) == (0, [], None)
     assert fake_sync.indexed == []  # no Markdown: run_index never runs
 
