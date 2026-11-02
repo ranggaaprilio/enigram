@@ -69,7 +69,12 @@ async def test_lists_tools_without_ctx_in_schema(cfg, fake_rag):
         "add_memory",
         "search_memory",
     ]
-    assert set(tools[0].input_schema["properties"]) == {"question", "include_context"}
+    assert set(tools[0].input_schema["properties"]) == {
+        "question",
+        "include_context",
+        "scope",
+        "repo",
+    }
     assert tools[1].input_schema.get("properties", {}) == {}
     assert set(tools[2].input_schema["properties"]) == {"text"}
     assert set(tools[3].input_schema["properties"]) == {"query", "limit"}
@@ -111,6 +116,17 @@ async def test_query_failure_is_a_tool_error(cfg, fake_rag):
 
     assert result.is_error
     assert "Connection error" in result.content[0].text
+
+
+async def test_code_scope_on_stdio_with_file_storage_is_a_tool_error(cfg, fake_rag):
+    async with Client(create_server(cfg), raise_exceptions=True) as client:
+        result = await client.call_tool(
+            "query_knowledge_base", {"question": "Who may call /users?", "scope": "code"}
+        )
+
+    assert result.is_error
+    assert "STORAGE_BACKEND=postgres" in result.content[0].text
+    assert fake_rag.params == []
 
 
 async def test_list_documents_reads_the_manifest(cfg, fake_rag):

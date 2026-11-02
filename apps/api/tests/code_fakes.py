@@ -4,7 +4,7 @@ import dataclasses
 import re
 from typing import Any
 
-from enigram.application.ports import ChatReply, ParsedGraph
+from enigram.application.ports import ChatReply, ParsedGraph, ToolCall
 from enigram.domain.code import (
     IDENTIFIER,
     IMPLEMENTATION_CALL,
@@ -331,3 +331,33 @@ class FakeChat:
             name = prompt.split('symbol="', 1)[1].split('"', 1)[0] if 'symbol="' in prompt else "?"
             text = f"summary of {name}"
         return ChatReply(text, [], "stop", self.tokens[0], self.tokens[1], 0.1)
+
+
+class ScriptedChat:
+    """Replies in order; records every call's messages and tools."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    async def chat(self, messages, *, tools=None, temperature=None, **kw):
+        self.calls.append(
+            {"messages": [dict(m) for m in messages], "tools": tools, "temperature": temperature}
+        )
+        return self.replies.pop(0)
+
+
+def tool_reply(*calls, tokens=(1000, 10)):
+    """A reply calling tools: (name, JSON arguments) pairs."""
+    return ChatReply(
+        "",
+        [ToolCall(f"c{i}", n, a) for i, (n, a) in enumerate(calls)],
+        "tool_calls",
+        tokens[0],
+        tokens[1],
+        0.1,
+    )
+
+
+def answer_reply(text, tokens=(1500, 40)):
+    return ChatReply(text, [], "stop", tokens[0], tokens[1], 0.1)

@@ -250,14 +250,12 @@ async def test_open_engine_without_index_raises(cfg):
             pass
 
 
-async def test_cli_query_scope_code_uses_graph(cfg, deps, monkeypatch, capsys):
-    from code_fakes import SHA, FakeChat, FakeCodeGraph, fixture_graph
+async def test_cli_query_scope_code_uses_the_agent(cfg, deps, monkeypatch, capsys):
+    from code_fakes import SHA, FakeCodeGraph, ScriptedChat, answer_reply, fixture_graph, tool_reply
 
     from enigram import bootstrap
-    from enigram.application.code_summary import build_summaries
 
     graph = FakeCodeGraph(fixture_graph())
-    await build_summaries(cfg, FakeChat(), graph, 1, SHA)
     closed = []
 
     class Store:
@@ -270,8 +268,15 @@ async def test_cli_query_scope_code_uses_graph(cfg, deps, monkeypatch, capsys):
     async def new_code_graph(store):
         return graph
 
+    final = f"It loads the user src/app.service.ts:10-15@{SHA[:12]}."
+    chat = ScriptedChat(
+        [
+            tool_reply(("find_symbol", '{"name": "AppService.find"}'), tokens=(400, 8)),
+            answer_reply(final, tokens=(500, 12)),
+        ]
+    )
     deps.open_store, deps.new_code_graph = open_store, new_code_graph
-    deps.generator = lambda: FakeChat("It loads the user [2].", tokens=(500, 12))
+    deps.generator = lambda: chat
     monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
     args = cli._build_parser().parse_args(
         ["query", "--scope", "code", "What does AppService.find do?"]
@@ -280,9 +285,10 @@ async def test_cli_query_scope_code_uses_graph(cfg, deps, monkeypatch, capsys):
     assert await cli._query(cfg, args) == 0
 
     out = capsys.readouterr().out
-    assert out.startswith("It loads the user [2].")
-    assert "[2] src/app.service.ts:10-15@70ae60dbb609 (AppService.find)" in out
-    assert "(code, " in out and "500 in / 12 out tokens)" in out
+    assert out.startswith(final)
+    assert f"[1] src/app.service.ts:10-15@{SHA[:12]} (src/app.service.ts)" in out
+    assert "(enigram-agent, " in out and "900 in / 20 out tokens, 1 tool calls)" in out
+    assert "AppService.find (method)" in chat.calls[1]["messages"][-1]["content"]
     assert closed == [True]
 
 

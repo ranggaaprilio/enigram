@@ -1,6 +1,7 @@
 import hashlib
 
 import pytest
+from code_fakes import FakeCodeGraph
 from fastapi.testclient import TestClient
 from test_query import FakeRag
 from test_server import FakeMemoryStore
@@ -9,8 +10,10 @@ from test_worker import FakeJobStore
 from enigram.adapters.driven import lightrag_engine
 from enigram.adapters.driving import http_api as api
 from enigram.application import indexing as index
+from enigram.application.code_agent import AGENT_MODE
 from enigram.bootstrap import build_deps
 from enigram.config import Config
+from enigram.domain.answer import QueryResult
 from enigram.domain.errors import EnigramError
 
 PDF = b"%PDF-1.4 fake paper"
@@ -25,7 +28,7 @@ def fake_memory():
 
 
 def _deps(cfg, store, built):
-    """The real adapters, with the job store and memory replaced by fakes."""
+    """The real adapters, with the job store, memory and code graph replaced by fakes."""
     deps = build_deps(cfg)
 
     async def open_store():
@@ -35,7 +38,10 @@ def _deps(cfg, store, built):
         built.append(FakeMemoryStore())
         return built[-1]
 
-    deps.open_store, deps.new_memory = open_store, new_memory
+    async def new_code_graph(store):
+        return FakeCodeGraph()
+
+    deps.open_store, deps.new_memory, deps.new_code_graph = open_store, new_memory, new_code_graph
     return deps
 
 
@@ -223,7 +229,38 @@ def test_query_failure_is_502_and_logged(env):
     assert "Connection error" in store.queries[0]["error"]
 
 
-@pytest.mark.parametrize("body", [{"question": ""}, {"question": "Q?", "mode": "hybrid"}])
+def test_query_scope_code_uses_the_agent(env, monkeypatch):
+    client, store, rag, _ = env
+    seen = {}
+
+    async def fake_agent(cfg, chat, graph, question, *, repo_url, model):
+        seen.update(graph=graph, question=question, repo_url=repo_url, model=model)
+        return QueryResult(question, "Only admins src/a.ts:1-2@abc1234.", [], [], mode=AGENT_MODE)
+
+    monkeypatch.setattr(api, "answer_with_agent", fake_agent)
+
+    body = {"question": "Who may call /users?", "scope": "code", "repo": "https://github.com/o/a"}
+    response = client.post("/query", json=body)
+
+    assert response.status_code == 200 and response.json()["mode"] == "enigram-agent"
+    assert isinstance(seen["graph"], FakeCodeGraph) and seen["repo_url"] == body["repo"]
+    assert rag.params == []  # the document index is not asked
+    assert store.queries[0]["mode"] == "enigram-agent"
+
+
+def test_query_scope_code_errors_are_502(env):
+    client, store, _, _ = env
+
+    response = client.post("/query", json={"question": "Q?", "scope": "code"})
+
+    assert response.status_code == 502 and "No repository indexed" in response.json()["detail"]
+    assert store.queries[0]["mode"] == "enigram-agent"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"question": ""}, {"question": "Q?", "mode": "hybrid"}, {"question": "Q?", "scope": "web"}],
+)
 def test_query_validates_input(env, body):
     client, store, _, _ = env
 

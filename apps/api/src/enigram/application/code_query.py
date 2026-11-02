@@ -25,7 +25,8 @@ CODE_QUERY_REACH_DEPTH = 2  # an entry point counts as related when a hit is thi
 CODE_MODE = "code"
 NO_SOURCES_ANSWER = "No indexed code matches this question."
 # The path may hold ":id" or a dot but never ends in one: "POST /auth/refresh: what…".
-_ROUTE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+(/(?:[\w/:.-]*[\w/])?)", re.IGNORECASE)
+ROUTE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+(/(?:[\w/:.-]*[\w/])?)", re.IGNORECASE)
+_ROUTE = ROUTE
 # Without these rules the model answered a yes/no question in its first sentence from what
 # applications usually do, then cited code showing the opposite (golden b03). "Not enforced" is
 # limited to code the sources show in full: a check that was simply not retrieved must not become
