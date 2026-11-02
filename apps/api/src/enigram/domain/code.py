@@ -30,6 +30,11 @@ EDGE_KINDS = (
     "extends",
     "implements",
     "reads_env",
+    "guarded_by",
+    "intercepted_by",
+    "module_imports",
+    "provides",
+    "provides_config",
 )
 ENTRYPOINT_KINDS = ("http_route", "cron", "event", "job", "cli_main")
 SUMMARY_KINDS = ("symbol", "flow")
@@ -52,6 +57,7 @@ class CodeSymbol:
     signature: str
     body: str
     parent: str = ""
+    decorators_text: tuple[str, ...] = ()  # each decorator's source text, in source order
 
 
 @dataclass(frozen=True)
@@ -149,14 +155,21 @@ def _choice(row: dict[str, Any], name: str, allowed: tuple[str, ...], what: str)
     return value
 
 
+def _str_list(row: dict[str, Any], name: str) -> list[str]:
+    """An optional list of strings (absent = empty)."""
+    value = row.get(name, [])
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise EnigramError(f"symbol {row.get('id')}: bad {name!r}")
+    return value
+
+
 def parse_symbol_row(row: dict[str, Any]) -> CodeSymbol:
     what = "symbol"
     start, end = _field(row, "line_start", int, what), _field(row, "line_end", int, what)
     if start < 1 or end < start:
         raise EnigramError(f"symbol {row.get('id')}: bad 'line_start'/'line_end' {start}-{end}")
-    decorators = row.get("decorators", [])
-    if not isinstance(decorators, list) or not all(isinstance(d, str) for d in decorators):
-        raise EnigramError(f"symbol {row.get('id')}: bad 'decorators'")
+    decorators = _str_list(row, "decorators")
+    decorators_text = _str_list(row, "decorators_text")
     return CodeSymbol(
         id=_field(row, "id", str, what),
         qualified_name=_field(row, "qualified_name", str, what),
@@ -170,6 +183,7 @@ def parse_symbol_row(row: dict[str, Any]) -> CodeSymbol:
         signature=_field(row, "signature", str, what),
         body=_field(row, "body", str, what),
         parent=row.get("parent") or "",
+        decorators_text=tuple(decorators_text),
     )
 
 

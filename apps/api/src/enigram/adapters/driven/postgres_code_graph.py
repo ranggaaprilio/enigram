@@ -90,6 +90,9 @@ CREATE TABLE IF NOT EXISTS code_summaries (
 );
 CREATE INDEX IF NOT EXISTS code_summaries_fts ON code_summaries
     USING GIN (to_tsvector('english', text));
+ALTER TABLE code_symbols ADD COLUMN IF NOT EXISTS decorators_text JSONB NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS code_symbols_fts ON code_symbols
+    USING GIN (to_tsvector('english', body));
 """
 
 # The question's stemmed words OR-ed: any word may match, ts_rank prefers more matches.
@@ -100,11 +103,16 @@ _OR_QUERY = (
 # "/api/v1/auth/refresh" asks for the route Nest declares as "/auth/refresh".
 _ROUTE_PREFIX = re.compile(r"^(/api)?(/v\d+)?(?=/)", re.IGNORECASE)
 NAME_MATCH_RANK = 1.0
+# A body hit ranks below a summary hit of the same words: bodies are noisier than summaries.
+BODY_MATCH_WEIGHT = 0.5
 _REPO_TABLES = ("code_files", "code_symbols", "code_edges", "code_entrypoints")
 _SYMBOL_COLUMNS = (
     "id, qualified_name, kind, file, line_start, line_end, body_hash, exported, decorators, "
-    "signature, body, parent"
+    "signature, body, parent, decorators_text"
 )
+# The joined symbol's columns as s_<column>, for _symbol(row, "s_").
+_JOINED_SYMBOL_COLUMNS = ", ".join(f"s.{c} AS s_{c}" for c in _SYMBOL_COLUMNS.split(", "))
+_EDGE_COLUMNS = "e.src, e.dst, e.kind AS e_kind, e.src_file, e.line, e.resolved"
 
 
 def _loads(value: str | None) -> Any:
@@ -131,6 +139,13 @@ def _symbol(row: asyncpg.Record, prefix: str = "") -> CodeSymbol:
         signature=row[f"{prefix}signature"],
         body=row[f"{prefix}body"],
         parent=row[f"{prefix}parent"],
+        decorators_text=tuple(_loads(row[f"{prefix}decorators_text"]) or ()),
+    )
+
+
+def _edge(row: asyncpg.Record) -> CodeEdge:
+    return CodeEdge(
+        row["src"], row["dst"], row["e_kind"], row["src_file"], row["line"], row["resolved"]
     )
 
 
@@ -194,7 +209,8 @@ class PostgresCodeGraph:
             )
             await conn.executemany(
                 f"INSERT INTO code_symbols (repo_id, commit_sha, {_SYMBOL_COLUMNS}) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)",
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, "
+                "$15::jsonb)",
                 [
                     (
                         repo_id,
@@ -211,6 +227,7 @@ class PostgresCodeGraph:
                         s.signature,
                         s.body,
                         s.parent,
+                        json.dumps(list(s.decorators_text)),
                     )
                     for s in graph.symbols
                 ],
@@ -301,12 +318,7 @@ class PostgresCodeGraph:
         self, repo_id: int, symbol_id: str
     ) -> list[tuple[CodeEdge, CodeSymbol | None]]:
         rows = await self.pool.fetch(
-            "SELECT e.src, e.dst, e.kind AS e_kind, e.src_file, e.line, e.resolved, "
-            "s.id AS s_id, s.qualified_name AS s_qualified_name, s.kind AS s_kind, "
-            "s.file AS s_file, s.line_start AS s_line_start, s.line_end AS s_line_end, "
-            "s.body_hash AS s_body_hash, s.exported AS s_exported, "
-            "s.decorators AS s_decorators, s.signature AS s_signature, s.body AS s_body, "
-            "s.parent AS s_parent FROM code_edges e "
+            f"SELECT {_EDGE_COLUMNS}, {_JOINED_SYMBOL_COLUMNS} FROM code_edges e "
             "LEFT JOIN code_symbols s ON s.repo_id = e.repo_id AND s.id = e.dst "
             "WHERE e.repo_id = $1 AND e.src = $2 AND e.kind IN ('calls', 'calls_external') "
             "ORDER BY e.line, e.dst",
@@ -315,9 +327,7 @@ class PostgresCodeGraph:
         )
         out: list[tuple[CodeEdge, CodeSymbol | None]] = []
         for r in rows:
-            edge = CodeEdge(
-                r["src"], r["dst"], r["e_kind"], r["src_file"], r["line"], r["resolved"]
-            )
+            edge = _edge(r)
             target = _symbol(r, "s_") if r["s_id"] else None
             out.append((edge, target))
             if target and target.parent and is_abstract(target):
@@ -336,6 +346,44 @@ class PostgresCodeGraph:
                         )
                     )
         return out
+
+    async def callers(self, repo_id: int, symbol_id: str) -> list[tuple[CodeEdge, CodeSymbol]]:
+        """`calls` edges into a symbol, and into the interface/abstract member it implements
+        (a caller reaches `SqlUserRepo.load` through `UserRepo.load`)."""
+        targets = [symbol_id]
+        file, _, qualified = symbol_id.partition("#")
+        owner, dot, name = qualified.rpartition(".")
+        if dot:
+            bases = await self.pool.fetch(
+                "SELECT DISTINCT dst FROM code_edges WHERE repo_id = $1 AND src = $2 "
+                "AND kind IN ('implements', 'extends') AND resolved ORDER BY dst",
+                repo_id,
+                f"{file}#{owner}",
+            )
+            targets += [f"{r['dst']}.{name}" for r in bases]
+        rows = await self.pool.fetch(
+            f"SELECT {_EDGE_COLUMNS}, {_JOINED_SYMBOL_COLUMNS} FROM code_edges e "
+            "JOIN code_symbols s ON s.repo_id = e.repo_id AND s.id = e.src "
+            "WHERE e.repo_id = $1 AND e.dst = ANY($2::text[]) AND e.kind = 'calls' "
+            "ORDER BY s.file, e.line, e.src",
+            repo_id,
+            targets,
+        )
+        return [(_edge(r), _symbol(r, "s_")) for r in rows]
+
+    async def edges_from(
+        self, repo_id: int, symbol_id: str, kinds: tuple[str, ...]
+    ) -> list[tuple[CodeEdge, CodeSymbol | None]]:
+        rows = await self.pool.fetch(
+            f"SELECT {_EDGE_COLUMNS}, {_JOINED_SYMBOL_COLUMNS} FROM code_edges e "
+            "LEFT JOIN code_symbols s ON s.repo_id = e.repo_id AND s.id = e.dst "
+            "WHERE e.repo_id = $1 AND e.src = $2 AND e.kind = ANY($3::text[]) "
+            "ORDER BY e.kind, e.line, e.dst",
+            repo_id,
+            symbol_id,
+            list(kinds),
+        )
+        return [(_edge(r), _symbol(r, "s_") if r["s_id"] else None) for r in rows]
 
     async def _implementations(self, repo_id: int, member: CodeSymbol) -> list[CodeSymbol]:
         """The same member on classes that implement or extend the member's interface/class."""
@@ -375,6 +423,20 @@ class PostgresCodeGraph:
             )
             for r in rows:
                 ranks[r["id"]] = max(ranks.get(r["id"], 0.0), NAME_MATCH_RANK)
+        # Modules and config factories have no summary (no entry point reaches them): their
+        # bodies are the only text that names `fileSize` or `registerAs`.
+        rows = await self.pool.fetch(
+            "SELECT id, ts_rank(to_tsvector('english', body), q) * $4 AS rank "
+            f"FROM code_symbols, {_OR_QUERY} "
+            "WHERE repo_id = $1 AND to_tsvector('english', body) @@ q "
+            "ORDER BY rank DESC, id LIMIT $3",
+            repo_id,
+            query,
+            limit,
+            BODY_MATCH_WEIGHT,
+        )
+        for r in rows:
+            ranks[r["id"]] = max(ranks.get(r["id"], 0.0), float(r["rank"]))
         return sorted(ranks.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
 
     async def save_summaries(

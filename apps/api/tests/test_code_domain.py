@@ -40,6 +40,9 @@ def test_parse_symbol_row_round_trip():
         "A",
     )
     assert s.decorators == ("Post",)
+    assert s.decorators_text == ()  # rows from before decorators_text parse unchanged
+    with_text = parse_symbol_row({**ROW, "decorators_text": ["@Post('run')"]})
+    assert with_text.decorators_text == ("@Post('run')",)
 
 
 @pytest.mark.parametrize(
@@ -51,6 +54,7 @@ def test_parse_symbol_row_round_trip():
         ({"line_start": True}, "'line_start'"),
         ({"exported": "yes"}, "'exported'"),
         ({"decorators": "Post"}, "'decorators'"),
+        ({"decorators_text": [1]}, "'decorators_text'"),
         ({"body": None}, "'body'"),
     ],
 )
@@ -64,6 +68,9 @@ def test_parse_edge_and_entrypoint_rows():
         {"src": "a", "dst": "b", "kind": "calls", "src_file": "x.ts", "line": 3, "resolved": True}
     )
     assert (edge.kind, edge.line, edge.resolved) == ("calls", 3, True)
+    for kind in ("guarded_by", "intercepted_by", "module_imports", "provides", "provides_config"):
+        row = {"src": "a", "dst": "b", "kind": kind, "src_file": "x.ts", "line": 1}
+        assert parse_edge_row({**row, "resolved": False}).kind == kind
     with pytest.raises(EnigramError, match="kind='jumps'"):
         parse_edge_row(
             {"src": "a", "dst": "b", "kind": "jumps", "src_file": "x", "line": 1, "resolved": True}

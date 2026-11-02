@@ -58,7 +58,7 @@ test("a package call without node_modules is an unresolved calls_external", () =
   // Number(...) is declared in TypeScript's lib: external but resolved.
   assert.equal(graph.edges.find((x) => x.dst === "Number").resolved, true);
   // Decorator calls are metadata, not behaviour.
-  assert.ok(!graph.edges.some((x) => ["Get", "Param", "Controller"].includes(x.dst)));
+  assert.ok(!graph.edges.some((x) => ["Get", "Param", "Controller", "UseGuards", "Roles"].includes(x.dst)));
 });
 
 test("env and config reads", () => {
@@ -74,12 +74,12 @@ test("imports are file to file inside the repository, bare specifiers outside", 
 test("spec files are skipped and counted", () => {
   assert.ok(!graph.symbols.some((s) => s.file.endsWith(".spec.ts")));
   assert.equal(graph.report.files_skipped.test, 1);
-  assert.equal(graph.report.files, 7);
+  assert.equal(graph.report.files, 11);
 });
 
 test("symbol rows carry lines, decorators, signature and body", () => {
   const find = symbol("AppController.find");
-  assert.deepEqual([find.line_start, find.line_end], [8, 11]);
+  assert.deepEqual([find.line_start, find.line_end], [13, 16]);
   assert.deepEqual(find.decorators, ["Get"]);
   assert.equal(find.signature, "find(id: string): string");
   assert.ok(find.body.startsWith("@Get(':id')"));
@@ -140,4 +140,47 @@ test("an abstract class method is a symbol, so a call through the abstract class
   assert.equal(symbol("SessionRepo.findById").parent, "SessionRepo");
   assert.ok(edge("calls", "SessionService.get", "SessionRepo.findById"));
   assert.ok(edge("extends", "SqlSessionRepo", "SessionRepo"));
+});
+
+test("decorators_text keeps each decorator's source text in order", () => {
+  assert.deepEqual(symbol("AppController").decorators_text, [
+    "@Roles('admin')",
+    "@UseGuards(AuthGuard('jwt'), RolesGuard)",
+    "@Controller('users')",
+  ]);
+  assert.deepEqual(symbol("AppController.find").decorators_text, ["@Get(':id')"]);
+  assert.deepEqual(symbol("AppService.helper").decorators_text, []);
+});
+
+test("@UseGuards gives guarded_by edges: repository guards resolved, package guards as text", () => {
+  const roles = edge("guarded_by", "AppController", "RolesGuard");
+  assert.equal(roles.dst, "src/roles.guard.ts#RolesGuard");
+  assert.equal(roles.resolved, true);
+  const auth = edge("guarded_by", "AppController", "AuthGuard");
+  assert.equal(auth.resolved, false);
+  assert.equal(graph.report.edges.guarded_by, 2);
+  assert.equal(graph.report.edges.intercepted_by, 0);
+});
+
+test("@Module imports follow forRoot calls and consts; providers follow useClass", () => {
+  const db = edge("module_imports", "AppModule", "database");
+  assert.equal(db.dst, "src/app.module.ts#database");
+  assert.equal(db.resolved, true);
+  const config = edge("module_imports", "AppModule", "ConfigModule");
+  assert.equal(config.resolved, false);
+  assert.equal(edge("provides", "AppModule", "AppService").dst, "src/app.service.ts#AppService");
+  assert.equal(edge("provides", "AppModule", "SqlUserRepo").dst, "src/repo.ts#SqlUserRepo");
+  assert.equal(graph.report.edges.module_imports, 2);
+  assert.equal(graph.report.edges.provides, 2);
+  // Controllers are not wiring edges.
+  assert.ok(!edge("provides", "AppModule", "AppController"));
+});
+
+test("registerAs gives a provides_config edge to the namespace", () => {
+  const e = edge("provides_config", "default", "auth");
+  assert.equal(e.src, "src/auth.config.ts#default");
+  assert.equal(e.resolved, true);
+  assert.equal(graph.report.edges.provides_config, 1);
+  assert.ok(edge("reads_env", "default", "AUTH_SECRET"));
+  assert.ok(edge("reads_env", "database", "DB"));
 });

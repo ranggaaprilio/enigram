@@ -34,6 +34,7 @@ def sym(qualified: str, kind: str = "method", file: str = "src/app.service.ts", 
         signature=kw.pop("signature", f"{qualified.rsplit('.', 1)[-1]}()"),
         body=body,
         parent=kw.pop("parent", parent),
+        decorators_text=tuple(kw.pop("decorators_text", ())),
     )
 
 
@@ -80,6 +81,63 @@ def fixture_graph() -> ParsedGraph:
     ]
     report = {"calls_resolved_share": 0.75, "adapters": {"nest": 2}, "edges": {"calls": 3}}
     return ParsedGraph(symbols, edges, entrypoints, report)
+
+
+def agent_graph() -> ParsedGraph:
+    """fixture_graph() plus what the agent reads besides calls: the guarded controller class, a
+    guard, a module with its wiring (and a multer limit only its body mentions) and a config
+    factory, as tools/ts-graph/test/fixture emits them."""
+    base = fixture_graph()
+    controller_cls = sym(
+        "AppController",
+        kind="class",
+        file="src/app.controller.ts",
+        lines=(7, 17),
+        parent="",
+        decorators=("Roles", "UseGuards", "Controller"),
+        decorators_text=(
+            "@Roles('admin')",
+            "@UseGuards(AuthGuard('jwt'), RolesGuard)",
+            "@Controller('users')",
+        ),
+        body="@Controller('users')\nexport class AppController { find(id) {} }",
+    )
+    guard = sym(
+        "RolesGuard",
+        kind="class",
+        file="src/roles.guard.ts",
+        lines=(1, 5),
+        parent="",
+        body="export class RolesGuard { canActivate(): boolean { return true; } }",
+    )
+    service_cls = sym("AppService", kind="class", lines=(1, 20), parent="")
+    module = sym(
+        "AppModule",
+        kind="class",
+        file="src/app.module.ts",
+        lines=(3, 9),
+        parent="",
+        decorators=("Module",),
+        body="@Module({ imports: [MulterModule.registerAsync({ limits: { fileSize: 5242880 } })],"
+        " providers: [AppService] })\nexport class AppModule {}",
+    )
+    config = sym(
+        "default",
+        kind="variable",
+        file="src/auth.config.ts",
+        lines=(3, 3),
+        parent="",
+        body="registerAs('auth', () => ({ secret: process.env.AUTH_SECRET }))",
+    )
+    edges = [
+        CodeEdge(controller_cls.id, guard.id, "guarded_by", controller_cls.file, 8, True),
+        CodeEdge(controller_cls.id, "AuthGuard", "guarded_by", controller_cls.file, 8, False),
+        CodeEdge(module.id, "MulterModule", "module_imports", module.file, 3, False),
+        CodeEdge(module.id, service_cls.id, "provides", module.file, 3, True),
+        CodeEdge(config.id, "auth", "provides_config", config.file, 3, True),
+    ]
+    symbols = [*base.symbols, controller_cls, guard, service_cls, module, config]
+    return ParsedGraph(symbols, [*base.edges, *edges], base.entrypoints, base.report)
 
 
 class FakeCodeGraph:
@@ -176,10 +234,37 @@ class FakeCodeGraph:
                             )
         return out
 
+    async def callers(self, repo_id, symbol_id):
+        symbols, graph = self._symbols(repo_id), self.graphs[repo_id]
+        targets = {symbol_id}
+        file, _, qualified = symbol_id.partition("#")
+        owner, dot, name = qualified.rpartition(".")
+        if dot:
+            targets |= {
+                f"{e.dst}.{name}"
+                for e in graph.edges
+                if e.kind in ("implements", "extends") and e.src == f"{file}#{owner}"
+            }
+        edges = [e for e in graph.edges if e.kind == "calls" and e.dst in targets]
+        return [
+            (e, symbols[e.src])
+            for e in sorted(edges, key=lambda e: (symbols[e.src].file, e.line, e.src))
+        ]
+
+    async def edges_from(self, repo_id, symbol_id, kinds):
+        symbols = self._symbols(repo_id)
+        edges = [e for e in self.graphs[repo_id].edges if e.src == symbol_id and e.kind in kinds]
+        return [
+            (e, symbols.get(e.dst)) for e in sorted(edges, key=lambda e: (e.kind, e.line, e.dst))
+        ]
+
     async def search(self, repo_id, query, limit=10):
         self.calls.append(("search", query))
         words = {w.lower() for w in re.findall(r"\w+", query) if len(w) > 3}
         ranks = {}
+        for s in self.graphs[repo_id].symbols:  # bodies, below summaries
+            if words & set(re.findall(r"\w+", s.body.lower())):
+                ranks[s.id] = 0.25
         for (rid, symbol_id, _), s in self.stored.items():
             if rid == repo_id and words & set(re.findall(r"\w+", s.text.lower())):
                 ranks[symbol_id] = 0.5

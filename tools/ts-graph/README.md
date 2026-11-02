@@ -39,6 +39,7 @@ the checker; they are counted in `report.files_skipped`.
 | `body_hash` | SHA-256 of the declaration's tokens joined by one space: whitespace and comments do not change it; literals, decorators and the signature do |
 | `exported` | own `export`, or the parent class's / interface's |
 | `decorators` | decorator names, e.g. `["Post", "HttpCode"]` |
+| `decorators_text` | each decorator's source text on one line, ≤ 200 chars, in source order, e.g. `["@UseGuards(AuthGuard('jwt'), RolesGuard)"]` |
 | `signature` | `name(param: Type): Return` without parameter decorators, or the declaration's first line |
 | `body` | the declaration text, decorators included, leading comments excluded |
 | `parent` | the class or interface name for members, else `""` |
@@ -58,6 +59,9 @@ through an interface has a target; the `implements` edges lead to the implementa
 | `extends`, `implements` | class/interface id → the base's id, or its text when outside the repository | `true` only for a repository target |
 | `imports` | file → file (`resolved: true`) or → the bare specifier (`false`) | |
 | `reads_env` | symbol id → `process.env.X` name, or the key of `configService.get("x")` / `getOrThrow("x")` | `true` |
+| `guarded_by`, `intercepted_by` | class/method id → each guard/interceptor of `@UseGuards(...)` / `@UseInterceptors(...)` (`AuthGuard('jwt')` → `AuthGuard`) | `true` only for a repository target; the text otherwise |
+| `module_imports`, `provides` | `@Module` class id → each entry of `imports` / `providers`, following `X.forRoot(...)`, `cond ? A : B`, spreads, consts and `{provide, useClass/useExisting}` | `true` only for a repository target; the text otherwise |
+| `provides_config` | function/variable id → the namespace string of `registerAs('<ns>', ...)` | `true` |
 
 Calls inside decorators (`@Post('login')`, `@Body()`) are metadata and are not edges. A call to the
 caller's own parameter or local function is not an edge either (counted in `report.calls_local`).

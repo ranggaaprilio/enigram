@@ -31,6 +31,13 @@ def test_sidecar_parses_the_fixture(cfg):
     env = {e.dst for e in graph.edges if e.kind == "reads_env"}
     assert {"LIMIT", "db.type"} <= env
     assert graph.report["files_skipped"]["test"] == 1
+    kinds = {(e.kind, e.src.split("#")[-1], e.dst.split("#")[-1]) for e in graph.edges}
+    assert ("guarded_by", "AppController", "RolesGuard") in kinds
+    assert ("module_imports", "AppModule", "database") in kinds
+    assert ("provides", "AppModule", "SqlUserRepo") in kinds
+    assert ("provides_config", "default", "auth") in kinds
+    controller = next(s for s in graph.symbols if s.qualified_name == "AppController")
+    assert "@UseGuards(AuthGuard('jwt'), RolesGuard)" in controller.decorators_text
 
 
 def test_sidecar_reports_the_last_stderr_line(cfg, tmp_path, monkeypatch):

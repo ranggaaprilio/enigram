@@ -68,7 +68,11 @@ def test_repo_limits_reject_large_repositories(tmp_path, monkeypatch, name, valu
 
 def test_redact_graph_drops_secret_files_and_redacts_bodies():
     graph = fixture_graph()
-    leaky = sym("Keys.load", body="load() { return 'AKIAABCDEFGHIJKLMNOP'; }")
+    leaky = sym(
+        "Keys.load",
+        body="load() { return 'AKIAABCDEFGHIJKLMNOP'; }",
+        decorators_text=("@Key('AKIAABCDEFGHIJKLMNOQ')",),
+    )
     secret = sym("creds", kind="variable", file="config/credentials.json", parent="")
     parsed = dataclasses.replace(graph, symbols=[*graph.symbols, leaky, secret])
 
@@ -76,8 +80,10 @@ def test_redact_graph_drops_secret_files_and_redacts_bodies():
 
     ids = {s.id for s in out.symbols}
     assert secret.id not in ids
-    assert "[REDACTED]" in next(s.body for s in out.symbols if s.id == leaky.id)
-    assert n == 2  # one value redacted + one symbol dropped
+    redacted = next(s for s in out.symbols if s.id == leaky.id)
+    assert "[REDACTED]" in redacted.body
+    assert "AKIA" not in redacted.decorators_text[0]
+    assert n == 3  # two values redacted + one symbol dropped
     assert len(out.symbols) == len(graph.symbols) + 1
 
 

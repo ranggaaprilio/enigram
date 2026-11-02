@@ -242,8 +242,20 @@ class CodeGraphRepository(Protocol):
         implementation."""
         ...
 
+    async def callers(self, repo_id: int, symbol_id: str) -> list[tuple["CodeEdge", "CodeSymbol"]]:
+        """calls edges into a symbol, and into the interface/abstract member it implements;
+        the symbol is the caller."""
+        ...
+
+    async def edges_from(
+        self, repo_id: int, symbol_id: str, kinds: tuple[str, ...]
+    ) -> list[tuple["CodeEdge", "CodeSymbol | None"]]:
+        """Edges of the given kinds out of a symbol, with the target symbol when resolved."""
+        ...
+
     async def search(self, repo_id: int, query: str, limit: int = 10) -> list[tuple[str, float]]:
-        """(symbol id, rank) by full-text search over summaries and by qualified name."""
+        """(symbol id, rank) by full-text search over summaries, by qualified name and (weighted
+        lower) over symbol bodies."""
         ...
 
     async def save_summaries(

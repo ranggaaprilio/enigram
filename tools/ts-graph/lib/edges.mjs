@@ -5,6 +5,9 @@ import { declKey } from "./symbols.mjs";
 const MAX_EXTERNAL_TEXT = 120;
 const FUNCTION_KINDS = new Set(["function", "method", "constructor", "accessor", "variable"]);
 const CONFIG_GETTERS = new Set(["get", "getOrThrow"]);
+const GUARD_DECORATORS = { UseGuards: "guarded_by", UseInterceptors: "intercepted_by" };
+const MODULE_LISTS = [["imports", "module_imports"], ["providers", "provides"]];
+const CONFIG_KINDS = new Set(["function", "variable"]);
 
 function resolveSymbol(node) {
   let sym = node.getSymbol();
@@ -63,6 +66,67 @@ function literal(node) {
     return node.getLiteralValue();
   }
   return null;
+}
+
+function property(obj, name) {
+  const prop = obj.getProperty(name);
+  return prop && Node.isPropertyAssignment(prop) ? prop.getInitializer() : undefined;
+}
+
+/** Identifiers a decorator or module list entry refers to: X, X.forRoot(...), c ? A : B, ...xs. */
+function moduleRefs(expr) {
+  if (!expr) return [];
+  if (Node.isIdentifier(expr)) return [expr];
+  if (Node.isCallExpression(expr) || Node.isPropertyAccessExpression(expr)) return moduleRefs(expr.getExpression());
+  if (Node.isConditionalExpression(expr)) return [...moduleRefs(expr.getWhenTrue()), ...moduleRefs(expr.getWhenFalse())];
+  if (Node.isSpreadElement(expr) || Node.isParenthesizedExpression(expr)) return moduleRefs(expr.getExpression());
+  return [];
+}
+
+function refEdge(ctx, row, file, kind, ref) {
+  const to = target(ctx, ref, row.id);
+  return {
+    src: row.id, dst: to.id ?? ref.getText().slice(0, MAX_EXTERNAL_TEXT), kind, src_file: file,
+    line: ref.getStartLineNumber(), resolved: Boolean(to.id),
+  };
+}
+
+/** @UseGuards(AuthGuard('jwt'), RolesGuard) / @UseInterceptors(...) on classes and methods. */
+function guardEdges(ctx, sym, file, edges) {
+  if (!Node.isDecoratable(sym.node)) return;
+  for (const decorator of sym.node.getDecorators()) {
+    const kind = GUARD_DECORATORS[decorator.getName()];
+    if (!kind) continue;
+    for (const arg of decorator.getArguments()) {
+      for (const ref of moduleRefs(arg)) edges.push(refEdge(ctx, sym.row, file, kind, ref));
+    }
+  }
+}
+
+/** @Module({ imports: [...], providers: [...] }); `{ provide, useClass }` points at the class. */
+function moduleEdges(ctx, sym, file, edges) {
+  if (!Node.isClassDeclaration(sym.node)) return;
+  const arg = sym.node.getDecorator("Module")?.getArguments()[0];
+  if (!arg || !Node.isObjectLiteralExpression(arg)) return;
+  for (const [prop, kind] of MODULE_LISTS) {
+    const init = property(arg, prop);
+    if (!init || !Node.isArrayLiteralExpression(init)) continue;
+    for (const el of init.getElements()) {
+      const expr = Node.isObjectLiteralExpression(el) ? (property(el, "useClass") ?? property(el, "useExisting")) : el;
+      for (const ref of moduleRefs(expr)) edges.push(refEdge(ctx, sym.row, file, kind, ref));
+    }
+  }
+}
+
+/** registerAs('auth', () => ...) → provides_config "auth" (only on functions and variables). */
+function configEdges(sym, file, edges) {
+  if (!CONFIG_KINDS.has(sym.row.kind)) return;
+  for (const call of sym.node.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const ns = call.getArguments()[0];
+    if (call.getExpression().getText() === "registerAs" && ns && literal(ns) !== null) {
+      edges.push({ src: sym.row.id, dst: literal(ns), kind: "provides_config", src_file: file, line: call.getStartLineNumber(), resolved: true });
+    }
+  }
 }
 
 /** Whether `receiver` (in `receiver.get("x")`) is a ConfigService, by its type or declared type. */
@@ -165,7 +229,8 @@ function importEdges(ctx, sf, edges) {
 }
 
 /**
- * calls / calls_external / injects / extends / implements / imports / reads_env rows.
+ * calls / calls_external / injects / extends / implements / imports / reads_env /
+ * guarded_by / intercepted_by / module_imports / provides / provides_config rows.
  * @returns {{edges: object[], local: number}} local = calls to the caller's own parameters/locals
  */
 export function buildEdges(ctx, symbols, files) {
@@ -179,6 +244,9 @@ export function buildEdges(ctx, symbols, files) {
     }
     heritageEdges(ctx, sym, file, edges);
     injectEdges(ctx, sym, file, edges);
+    guardEdges(ctx, sym, file, edges);
+    moduleEdges(ctx, sym, file, edges);
+    configEdges(sym, file, edges);
   }
   for (const sf of files) importEdges(ctx, sf, edges);
   return { edges, local: counts.local };

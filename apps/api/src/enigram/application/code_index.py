@@ -88,8 +88,8 @@ def git_blob_shas(root: Path) -> list[CodeFile]:
 
 
 def redact_graph(graph: ParsedGraph) -> tuple[ParsedGraph, int]:
-    """Drops symbols from secret-named files and redacts every body and signature; returns the
-    graph and the number of redactions."""
+    """Drops symbols from secret-named files and redacts every body, signature and decorator
+    text; returns the graph and the number of redactions."""
     dropped = {s.id for s in graph.symbols if is_secret_path(s.file)}
     redactions = 0
     symbols = []
@@ -98,8 +98,16 @@ def redact_graph(graph: ParsedGraph) -> tuple[ParsedGraph, int]:
             continue
         body, n_body = redact(s.body)
         signature, n_sig = redact(s.signature)
-        redactions += n_body + n_sig
-        symbols.append(dataclasses.replace(s, body=body, signature=signature))
+        decorators_text = [redact(d) for d in s.decorators_text]
+        redactions += n_body + n_sig + sum(n for _, n in decorators_text)
+        symbols.append(
+            dataclasses.replace(
+                s,
+                body=body,
+                signature=signature,
+                decorators_text=tuple(d for d, _ in decorators_text),
+            )
+        )
     edges = [e for e in graph.edges if e.src not in dropped and e.dst not in dropped]
     entrypoints = [e for e in graph.entrypoints if e.symbol not in dropped]
     if dropped:
