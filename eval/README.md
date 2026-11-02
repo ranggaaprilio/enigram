@@ -191,21 +191,26 @@ temperature 0, ≤ 30 tool calls, ≤ 120k cumulative input tokens) with the cod
 tools. Code: `application/code_agent.py`.
 
 - Graph tools: `search_code(query, repo?)` (full-text over flow summaries, symbol names and
-  bodies), `find_symbol(name, repo?)` (lines, signature, decorators, `guarded_by` /
-  `intercepted_by` / `module_imports` / `provides` / `provides_config`, the class's decorators and
-  guards, the summary), `callers` / `callees(symbol, repo)`, `entrypoint_flow(route, repo?)`,
-  `list_repos()`. Every row carries `repo=<name> Qualified.name (kind) file:start-end@sha12`.
+  bodies; ≤ 6 rows, 100-char snippets), `find_symbol(name, repo?)` (lines, signature,
+  decorators, `guarded_by` / `intercepted_by` / `module_imports` / `provides` /
+  `provides_config`, the class's decorators and guards, the summary),
+  `entrypoint_flow(route, repo?)` (≤ 3 entries, flows ≤ 1,200 chars). Every row carries
+  `repo=<name> Qualified.name (kind) file:start-end@sha12`. The indexed repositories (name and
+  sha) are listed in the system prompt. Iteration 1 of Phase 1b dropped `callers`, `callees` and
+  `list_repos`: every tool schema is resent on every turn (DeepSeek bills ~250 tokens of tool
+  preamble plus ~67 per tool), and they were used 1, 0 and 3 times in 10 questions.
 - Read tools: `read_file(repo, path, start?, end?)` and `grep(repo, pattern, glob?)`, served by
-  `git` from a bare partial clone at the indexed commit (`REPO_STORE`, default `data/repos/`,
+  `git` from a bare partial clone at the indexed commit (the agent clips `grep` to 20 hits) (`REPO_STORE`, default `data/repos/`,
   filled by `enigram repo`; `application/repo_store.py`). Secret files are not read and secret
   values are redacted, as in `agent+repo`.
 - Scope: read tools only work on a repository that appeared in a graph result this question, the
-  one the caller selected (`golden answer` selects the golden set's repository), or, while the
-  graph has found nothing, any repository `list_repos()` showed; at most 3 repositories per
+  one the caller selected (`golden answer` selects the golden set's repository), or, once a
+  graph tool ran and found nothing, any indexed repository; at most 3 repositories per
   question. Violations come back to the model as text.
 - Output: like `agent+repo` plus `diagnostics` per item: `graph_first` (the first tool was a
   graph tool), `graph_hits`, `read_calls`, `reads_on_graph_lines` (reads of a file a graph result
-  named), `repos_touched`. Cached per (question, indexed shas, repo, model) in
+  named), `repos_touched`, `turns` (model calls). Cached per (`AGENT_VERSION`, question,
+  indexed shas, repo, model) in
   `data/eval/enigram-agent-cache/`.
 - Citations stay `file:start-end@sha12` inline (no repository prefix): the sha identifies the
   indexed snapshot, and the blind normaliser and citation checker parse this form.

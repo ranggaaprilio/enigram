@@ -284,7 +284,7 @@ uv run enigram query --scope code "Can an unconfirmed user log in?"
 `enigram repo` also keeps a bare partial clone of the repository in `REPO_STORE` (default
 `DATA_DIR/repos`; blobs are fetched on first read). `query --scope code [--repo <url>]` answers
 with an agent whose first tools are the code graph (search, symbols with their decorators,
-guards and module wiring, callers/callees, entry-point flows); it then reads only the lines the
+guards and module wiring, entry-point flows); it then reads only the lines the
 graph pointed at, from that clone at the indexed commit, and cites `file:start-end@sha`. The
 `code` system of `enigram golden answer` (graph → one prompt) stays as a frozen ablation.
 

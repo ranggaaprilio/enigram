@@ -76,7 +76,7 @@ wrong, so `golden check` refuses to run when the clone is not at `pinned_sha`.
   (question, commit, model) in `data/eval/agent-cache/`, so a rerun costs nothing.
 - **`enigram-agent`** (Phase 1b) is Enigram's answerer: the `agent+repo` tool loop, but its
   first tools are the code graph (`search_code`, `find_symbol` with decorators, guards and module
-  wiring, `callers`/`callees`, `entrypoint_flow`). It reads source (`read_file`, `grep`) only in
+  wiring, `entrypoint_flow`). It reads source (`read_file`, `grep`) only in
   repositories a graph result pointed at, from a bare partial clone at the indexed commit
   (`REPO_STORE`). Per answer it records `diagnostics` (graph first, graph hits, reads on graph
   lines, repositories touched); cached in `data/eval/enigram-agent-cache/`. The `code` system stays

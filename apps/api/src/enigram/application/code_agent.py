@@ -1,11 +1,12 @@
 """`enigram-agent`: answer a code question with a tool loop whose first tools are the code graph
-(search_code, find_symbol, callers/callees, entrypoint_flow); source is read only in the
-repositories the graph pointed at, from the repository store at the indexed commit.
+(search_code, find_symbol, entrypoint_flow); source is read only in the repositories the graph
+pointed at, from the repository store at the indexed commit.
 
 Scope rule: read_file/grep work on a repository that appeared in a graph result this question, the
-repository the caller selected, or (only while the graph has found nothing) any repository from
-list_repos(); at most AGENT_MAX_REPOS repositories are read per question. Every violation comes
-back to the model as text."""
+repository the caller selected, or (only after a graph tool ran and found nothing) any indexed
+repository, which the system prompt lists; at most AGENT_MAX_REPOS repositories are read per
+question. Every violation comes back to the model as text. Callers/callees and list_repos were
+dropped from the tool set in Phase 1b iteration 1: each schema is resent on every turn."""
 
 import asyncio
 import json
@@ -26,30 +27,29 @@ from enigram.application.agent_loop import (
     run_tool_loop,
 )
 from enigram.application.code_query import CODE_IS_THE_TRUTH, ROUTE
+from enigram.application.code_summary import TRUNCATED
 from enigram.application.files import atomic_write_text
-from enigram.application.ports import ChatModel, CodeGraphRepository
+from enigram.application.ports import ChatModel, ChatReply, CodeGraphRepository
 from enigram.application.repo_store import GitTools, store_path
 from enigram.application.repo_sync import check_repo_url
 from enigram.config import Config
 from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult
-from enigram.domain.code import IMPLEMENTATION_CALL, CodeSymbol
+from enigram.domain.code import CodeSymbol
 from enigram.domain.errors import EnigramError
 from enigram.domain.secrets import redact
 
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
+AGENT_VERSION = "1b.1"  # bump when tool output or the prompt changes: busts the answer cache
 AGENT_MAX_REPOS = 3
-GRAPH_MAX_HITS = 10
-SNIPPET_CHARS = 160
-GRAPH_TOOL_NAMES = (
-    "search_code",
-    "find_symbol",
-    "callers",
-    "callees",
-    "entrypoint_flow",
-    "list_repos",
-)
+GRAPH_MAX_HITS = 10  # find_symbol candidates, callers/callees rows (×3)
+SEARCH_MAX_HITS = 6
+SNIPPET_CHARS = 100
+AGENT_GREP_MAX_HITS = 20
+FLOW_MAX_ENTRIES = 3
+FLOW_MAX_CHARS = 1200
+GRAPH_TOOL_NAMES = ("search_code", "find_symbol", "entrypoint_flow")
 READ_TOOL_NAMES = ("read_file", "grep")
 WIRING_KINDS = ("guarded_by", "intercepted_by", "module_imports", "provides", "provides_config")
 
@@ -69,69 +69,63 @@ def _tool(name: str, description: str, props: dict[str, str], required: list[str
 TOOLS = [
     _tool(
         "search_code",
-        "Full-text search over flow summaries, symbol names and source bodies of every indexed "
-        "repository (or one repo). Start here.",
+        "Search flow summaries, symbol names and source of the indexed repos. Start here.",
         {"query": "string", "repo": "string"},
         ["query"],
     ),
     _tool(
         "find_symbol",
-        "A symbol by qualified name (Class.method) or short name: file:lines@sha, signature, "
-        "decorators, guards, module imports/providers, config namespace, flow summary.",
+        "A symbol by name or Class.method: file:lines@sha, signature, decorators, guards, "
+        "module wiring, config namespace, summary.",
         {"name": "string", "repo": "string"},
         ["name"],
     ),
     _tool(
-        "callers",
-        "Symbols that call a symbol (also through the interface it implements).",
-        {"symbol": "string", "repo": "string"},
-        ["symbol", "repo"],
-    ),
-    _tool(
-        "callees",
-        "What a symbol calls: repository symbols (with implementations of interfaces) and "
-        "external package calls.",
-        {"symbol": "string", "repo": "string"},
-        ["symbol", "repo"],
-    ),
-    _tool(
         "entrypoint_flow",
-        "The step-by-step flow summary of an HTTP route ('POST /auth/refresh'), cron, event or "
-        "job.",
+        "Flow summary of a route ('POST /auth/refresh'), cron, event or job.",
         {"route": "string", "repo": "string"},
         ["route"],
     ),
     _tool(
-        "list_repos",
-        "Indexed repositories (name, url, sha). Only needed when the graph returns nothing.",
-        {},
-        [],
-    ),
-    _tool(
         "read_file",
-        "Source lines at the indexed commit (1-based, at most 200 per call); read the lines a "
-        "graph result pointed at.",
+        "Numbered source lines at the indexed commit (<= 200 per call).",
         {"repo": "string", "path": "string", "start": "integer", "end": "integer"},
         ["repo", "path"],
     ),
     _tool(
         "grep",
-        "Regex search in one repository's source (at most 50 hits as path:line:text); fallback "
-        "when the graph finds nothing.",
+        "Regex search in one repo (<= 20 hits); only when the graph found nothing.",
         {"repo": "string", "pattern": "string", "glob": "string"},
         ["repo", "pattern"],
     ),
 ]
-SYSTEM_PROMPT = (
-    "You are Enigram, answering a question about TypeScript repositories indexed as a code graph. "
-    "Work graph-first: call search_code / find_symbol / entrypoint_flow before reading files; a "
-    "graph result gives repo, file, lines and sha, so read_file exactly those lines. Use grep only "
-    "when the graph returned nothing useful. Read decorators, guards, module imports and config "
-    "factories when the question is about access, limits, configuration or wiring. Answer in 1-6 "
-    "sentences; every sentence ends with a citation `path:start-end@sha12` taken from a tool "
-    "result. " + CODE_IS_THE_TRUTH + "If the repositories do not answer the question, say so in "
-    f"one sentence ending with {NO_ANSWER_MARKER}."
-)
+
+
+def system_prompt(repo_lines: list[str]) -> str:
+    """The system message; `repo_lines` ("name sha12" per indexed repository) replace a
+    list_repos tool: the model learns what to pass as `repo` without a turn."""
+    return (
+        "You answer questions about indexed TypeScript repos (name sha): "
+        f"{'; '.join(repo_lines)}. Pass the name as `repo`.\n"
+        "Graph first: one search_code or entrypoint_flow (find_symbol for a named symbol or its "
+        "decorators, guards, module wiring, config), then read_file the lines it gave; do not "
+        "re-search with synonyms. Make independent tool calls in one turn. grep only if the "
+        "graph found nothing.\n"
+        "Answer in 1-6 sentences, each ending with a citation `path:start-end@sha12` from a tool "
+        "result. " + CODE_IS_THE_TRUTH + "If the repos do not answer it, say so in one sentence "
+        f"ending with {NO_ANSWER_MARKER}."
+    )
+
+
+class _CountingChat:
+    """Counts model turns; every call goes to the real ChatModel."""
+
+    def __init__(self, model: ChatModel) -> None:
+        self.model, self.turns = model, 0
+
+    async def chat(self, *args: Any, **kwargs: Any) -> ChatReply:
+        self.turns += 1
+        return await self.model.chat(*args, **kwargs)
 
 
 def repo_name(repo: dict[str, Any], hosts: tuple[str, ...]) -> str:
@@ -176,7 +170,7 @@ class CodeAgentTools:
         self.touched: set[int] = set()
         self.gits: dict[int, Any] = {}
         self.graph_lines: set[tuple[int, str]] = set()
-        self.graph_hits = self.read_calls = self.reads_on_graph = 0
+        self.graph_calls = self.graph_hits = self.read_calls = self.reads_on_graph = 0
         self.first_tool: str | None = None
 
     # -- helpers ------------------------------------------------------------------------------
@@ -204,11 +198,13 @@ class CodeAgentTools:
     def _allow(self, repo: dict[str, Any]) -> str | None:
         name = self.names[repo["id"]]
         if repo["id"] not in self.scope:
-            return (
-                f"repo {name} is not in scope for this question: it did not appear in a graph "
-                "result; call search_code/find_symbol first (or list_repos when the graph is "
-                "empty)"
-            )
+            if not (self.graph_calls and self.graph_hits == 0):
+                return (
+                    f"repo {name} is not in scope for this question: it did not appear in a graph "
+                    "result; call search_code/find_symbol/entrypoint_flow first (any indexed repo "
+                    "may be read once the graph has found nothing)"
+                )
+            self.scope.add(repo["id"])  # the graph found nothing: fall back to reading
         if repo["id"] not in self.touched and len(self.touched) >= AGENT_MAX_REPOS:
             reading = ", ".join(sorted(self.names[i] for i in self.touched))
             return f"at most {AGENT_MAX_REPOS} repositories per question; already reading {reading}"
@@ -261,14 +257,14 @@ class CodeAgentTools:
             return targets
         hits: list[tuple[float, str, dict[str, Any], CodeSymbol]] = []
         for r in targets:
-            ranked = await self.graph.search(r["id"], query, GRAPH_MAX_HITS)
+            ranked = await self.graph.search(r["id"], query, SEARCH_MAX_HITS)
             symbols = await self.graph.symbols_by_id(r["id"], [i for i, _ in ranked])
             hits += [(rank, i, r, symbols[i]) for i, rank in ranked if i in symbols]
         hits.sort(key=lambda h: (-h[0], self.names[h[2]["id"]], h[1]))
         if not hits:
-            return "no matches; try other words, find_symbol, or grep in a repo from list_repos()"
+            return "no matches; try other words or find_symbol, or grep an indexed repo"
         rows = []
-        for _, symbol_id, r, s in hits[:GRAPH_MAX_HITS]:
+        for _, symbol_id, r, s in hits[:SEARCH_MAX_HITS]:
             self._hit(r, s)
             snippet = _one_line(await self._summary(r, symbol_id) or s.signature)
             clipped = snippet[:SNIPPET_CHARS] + ("…" if len(snippet) > SNIPPET_CHARS else "")
@@ -321,43 +317,11 @@ class CodeAgentTools:
             lines.append(f"summary: {summary}")
         return "\n".join(lines)
 
-    async def callers(self, symbol: str, repo: Any = None) -> str:
-        r = self._repo(repo)
-        if isinstance(r, str):
-            return r
-        target = await self._resolve(r, symbol)
-        if isinstance(target, str):
-            return target
-        self._hit(r, target)
-        rows = []
-        for edge, caller in await self.graph.callers(r["id"], target.id):
-            self._hit(r, caller)
-            rows.append(f"{self._row(r, caller)} — calls at {edge.src_file}:{edge.line}")
-        return "\n".join(rows[: GRAPH_MAX_HITS * 3]) or f"no callers of {target.qualified_name}"
-
-    async def callees(self, symbol: str, repo: Any = None) -> str:
-        r = self._repo(repo)
-        if isinstance(r, str):
-            return r
-        source = await self._resolve(r, symbol)
-        if isinstance(source, str):
-            return source
-        self._hit(r, source)
-        rows = []
-        for edge, target in await self.graph.callees(r["id"], source.id):
-            if target is None:
-                rows.append(f"external: {edge.dst} (line {edge.line})")
-                continue
-            self._hit(r, target)
-            via = " via interface" if edge.kind == IMPLEMENTATION_CALL else ""
-            rows.append(f"{self._row(r, target)}{via} (line {edge.line})")
-        return "\n".join(rows[: GRAPH_MAX_HITS * 3]) or f"{source.qualified_name} calls nothing"
-
     async def entrypoint_flow(self, route: str, repo: Any = None) -> str:
         targets = self._targets(repo)
         if isinstance(targets, str):
             return targets
-        out = []
+        found = []
         m = ROUTE.search(route)
         for r in targets:
             if m:
@@ -368,18 +332,21 @@ class CodeAgentTools:
                     for e, s in await self.graph.entrypoints(r["id"])
                     if e.route == route.strip()
                 ]
-            for entry, s in entries:
-                self._hit(r, s)
-                flow = await self._summary(r, s.id)
-                out.append(f"{self._row(r, s)} [{entry.kind} {entry.route}]\nflow: {flow or '—'}")
+            found += [(r, entry, s) for entry, s in entries]
+        out = []
+        for r, entry, s in found[:FLOW_MAX_ENTRIES]:
+            self._hit(r, s)
+            flow = await self._summary(r, s.id)
+            if len(flow) > FLOW_MAX_CHARS:
+                flow = flow[:FLOW_MAX_CHARS] + TRUNCATED
+            out.append(f"{self._row(r, s)} [{entry.kind} {entry.route}]\nflow: {flow or '—'}")
+        if len(found) > FLOW_MAX_ENTRIES:
+            more = len(found) - FLOW_MAX_ENTRIES
+            out.append(f"… {more} more entry points match; pass a more specific route")
         return "\n\n".join(out) or f"no entry point matches {route!r}; try search_code"
 
-    def list_repos(self) -> str:
-        if self.graph_hits == 0:  # the graph found nothing: any repository may be read
-            self.scope |= {r["id"] for r in self.repos}
-        return "\n".join(
-            f"{self.names[r['id']]} {r['url']} {r['indexed_sha'][:12]}" for r in self.repos
-        )
+    def repo_lines(self) -> list[str]:
+        return [f"{self.names[r['id']]} {r['indexed_sha'][:12]}" for r in self.repos]
 
     # -- read tools ---------------------------------------------------------------------------
 
@@ -402,7 +369,15 @@ class CodeAgentTools:
             if (repo["id"], _norm_path(path)) in self.graph_lines:
                 self.reads_on_graph += 1
         rest = {k: v for k, v in args.items() if k != "repo"}
-        return await asyncio.to_thread(git.run, name, rest)
+        text = await asyncio.to_thread(git.run, name, rest)
+        if name == "grep":
+            hits = [line for line in text.splitlines() if not line.startswith("…")]
+            if len(hits) > AGENT_GREP_MAX_HITS:
+                more = len(hits) - AGENT_GREP_MAX_HITS
+                return "\n".join(hits[:AGENT_GREP_MAX_HITS]) + (
+                    f"\n… {more} more hits; narrow the pattern or add a glob"
+                )
+        return text
 
     # -- dispatch -----------------------------------------------------------------------------
 
@@ -412,18 +387,14 @@ class CodeAgentTools:
         try:
             if name in READ_TOOL_NAMES:
                 return await self.read(name, args)
+            if name in GRAPH_TOOL_NAMES:
+                self.graph_calls += 1
             if name == "search_code":
                 out = await self.search_code(args["query"], args.get("repo"))
             elif name == "find_symbol":
                 out = await self.find_symbol(args["name"], args.get("repo"))
-            elif name == "callers":
-                out = await self.callers(args["symbol"], args.get("repo"))
-            elif name == "callees":
-                out = await self.callees(args["symbol"], args.get("repo"))
             elif name == "entrypoint_flow":
                 out = await self.entrypoint_flow(args["route"], args.get("repo"))
-            elif name == "list_repos":
-                out = self.list_repos()
             else:
                 return f"unknown tool {name!r}"
         except KeyError as e:
@@ -467,19 +438,21 @@ async def answer_with_agent(
     path = None
     if cache_dir is not None:
         shas = ",".join(sorted(r["indexed_sha"] for r in repos))
-        key = sha256(f"{question}\n{shas}\n{repo_url or ''}\n{model}".encode()).hexdigest()
+        cache_key = f"{AGENT_VERSION}\n{question}\n{shas}\n{repo_url or ''}\n{model}"
+        key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
         if path.exists():
             log.info("[agent] enigram: cached")
             return result_from_json(json.loads(path.read_text(encoding="utf-8")))
     tools = CodeAgentTools(cfg, graph_repo, repos, selected=selected, open_git=open_git)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt(tools.repo_lines())},
         {"role": "user", "content": question},
     ]
     start = time.perf_counter()
+    counting = _CountingChat(chat)
     loop = await run_tool_loop(
-        chat,
+        counting,
         messages,
         TOOLS,
         tools.run,
@@ -492,7 +465,7 @@ async def answer_with_agent(
         mode=AGENT_MODE,
         secs=time.perf_counter() - start,
         extra={
-            "diagnostics": tools.diagnostics(),
+            "diagnostics": tools.diagnostics() | {"turns": counting.turns},
             "repos": {r["indexed_sha"][:12]: tools.names[r["id"]] for r in repos},
         },
     )

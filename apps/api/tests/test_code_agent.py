@@ -10,14 +10,18 @@ from code_fakes import (
     tool_reply,
 )
 
+from enigram.application import code_agent
 from enigram.application.code_agent import (
     AGENT_MAX_REPOS,
     TOOLS,
     CodeAgentTools,
     answer_with_agent,
+    system_prompt,
 )
+from enigram.application.code_query import count_tokens
+from enigram.application.code_summary import TRUNCATED
 from enigram.application.repo_store import store_path
-from enigram.domain.code import FlowSummary
+from enigram.domain.code import CodeEntrypoint, FlowSummary
 from enigram.domain.errors import EnigramError
 
 URL = "https://github.com/org/app"
@@ -88,8 +92,10 @@ async def test_graph_first_then_read_then_answer(cfg, graph):
         "read_calls": 1,
         "reads_on_graph_lines": 1,
         "repos_touched": ["org-app"],
+        "turns": 4,
     }
     assert result.extra["diagnostics"]["graph_hits"] >= 1
+    assert "org-app 70ae60dbb609" in chat.calls[0]["messages"][0]["content"]
     assert result.extra["repos"] == {SHA[:12]: "org-app"}
     assert git.opened == [(store_path(cfg, URL, None), SHA)]
     search_out = chat.calls[1]["messages"][-1]["content"]
@@ -110,16 +116,19 @@ async def test_read_before_a_graph_hit_is_refused_and_the_loop_goes_on(cfg, grap
 
     refusal = chat.calls[1]["messages"][-1]["content"]
     assert refusal.startswith("repo org-app is not in scope for this question")
-    assert "call search_code/find_symbol first" in refusal
+    assert "call search_code/find_symbol/entrypoint_flow first" in refusal
     assert result.extra["diagnostics"]["graph_first"] is False
     assert result.extra["diagnostics"]["read_calls"] == 0
 
 
-async def test_list_repos_opens_the_scope_only_while_the_graph_found_nothing(cfg, graph):
+async def test_an_empty_graph_result_opens_every_repo_for_reading(cfg, graph):
     tools = _tools(cfg, graph, open_git=FakeGit())
+    path = {"repo": "org-app", "path": "src/app.controller.ts"}
 
-    assert await tools.run("list_repos", {}) == f"org-app {URL} {SHA[:12]}"
-    out = await tools.run("read_file", {"repo": "org-app", "path": "src/app.controller.ts"})
+    assert "not in scope" in await tools.run("read_file", path)  # no graph call yet
+    assert (await tools.run("search_code", {"query": "zzzz qqqq"})).startswith("no matches")
+    out = await tools.run("read_file", path)
+
     assert out.startswith("1: @Roles('admin')")
     assert tools.diagnostics()["reads_on_graph_lines"] == 0  # no graph result pointed there
 
@@ -140,7 +149,7 @@ async def test_at_most_three_repositories_are_read(cfg):
         store_path(cfg, url, None).mkdir(parents=True)
         (store_path(cfg, url, None) / "HEAD").write_text("x")
     tools = _tools(cfg, graph, open_git=FakeGit())
-    await tools.run("list_repos", {})
+    await tools.run("search_code", {"query": "zzzz qqqq"})  # the graph finds nothing
 
     outs = [await tools.run("grep", {"repo": f"org-{n}", "pattern": "x"}) for n in "abcd"]
 
@@ -170,18 +179,13 @@ async def test_find_symbol_prints_decorators_guards_and_wiring(cfg, graph):
     assert (1, "src/roles.guard.ts") in tools.graph_lines  # reading the guard counts as on-graph
 
 
-async def test_entrypoint_flow_and_callers_callees(cfg, graph):
+async def test_entrypoint_flow(cfg, graph):
     tools = _tools(cfg, graph)
 
     flow = await tools.run("entrypoint_flow", {"route": "What does GET /users/:id do?"})
-    callers = await tools.run("callers", {"symbol": "SqlUserRepo.load", "repo": "org-app"})
-    callees = await tools.run("callees", {"symbol": "AppService.find"})
 
     assert "[http_route GET /users/:id]" in flow
     assert "flow: GET /users/:id loads one of the users" in flow
-    assert "AppService.find (method)" in callers and "calls at src/app.service.ts:14" in callers
-    assert "SqlUserRepo.load (method)" in callees and "via interface" in callees
-    assert "external: bcrypt.compare (line 13)" in callees
     assert (await tools.run("entrypoint_flow", {"route": "nightly"})).startswith(
         "no entry point matches"
     )
@@ -196,7 +200,6 @@ async def test_ambiguous_and_unknown_names(cfg, graph):
     assert await tools.run("find_symbol", {"name": "Nope", "repo": "org-app"}) == (
         "no symbol named Nope in org-app"
     )
-    assert (await tools.run("callers", {"symbol": "Nope"})) == "no symbol named Nope in org-app"
     assert (await tools.run("search_code", {"query": "zzzz qqqq"})).startswith("no matches")
     assert (await tools.run("find_symbol", {"name": "x", "repo": "org-other"})).startswith(
         "no indexed repository 'org-other'"
@@ -266,3 +269,96 @@ async def test_unknown_repo_or_empty_graph_raise_before_any_model_call(cfg, grap
         )
     with pytest.raises(EnigramError, match="No repository indexed"):
         await answer_with_agent(cfg, ScriptedChat([]), FakeCodeGraph(), "q")
+
+
+def test_tool_set_schemas_and_prompt_stay_small():
+    names = [t["function"]["name"] for t in TOOLS]
+    assert names == ["search_code", "find_symbol", "entrypoint_flow", "read_file", "grep"]
+    # Resent on every turn: tiktoken before this iteration 677 (8 tools) and 233.
+    assert count_tokens(json.dumps(TOOLS)) <= 440
+    assert count_tokens(system_prompt([f"org-app {SHA[:12]}"])) <= 250
+
+
+async def test_system_prompt_lists_the_indexed_repos(cfg, graph):
+    await graph.replace_repo(URL, "dev", "b" * 40, [], agent_graph())
+    chat = ScriptedChat([answer_reply(FINAL)])
+
+    await answer_with_agent(cfg, chat, graph, "q")
+
+    system = chat.calls[0]["messages"][0]["content"]
+    assert f"org-app {SHA[:12]}; org-app@dev bbbbbbbbbbbb" in system
+
+
+async def test_removed_tools_are_unknown(cfg, graph):
+    tools = _tools(cfg, graph)
+    for name in ("callers", "callees", "list_repos"):
+        assert await tools.run(name, {"symbol": "x"}) == f"unknown tool {name!r}"
+
+
+async def test_search_code_returns_at_most_six_short_rows(cfg):
+    from code_fakes import sym
+
+    base = agent_graph()
+    many = [
+        sym(f"Users{i}.load", body="users " * 60, signature="load(): " + "x" * 200)
+        for i in range(8)
+    ]
+    graph = FakeCodeGraph(base.__class__(many, [], [], {}))
+
+    out = await _tools(cfg, graph).run("search_code", {"query": "users"})
+
+    rows = out.splitlines()
+    assert len(rows) == code_agent.SEARCH_MAX_HITS == 6
+    assert all(len(r.split(" — ", 1)[1]) <= code_agent.SNIPPET_CHARS + 1 for r in rows)
+
+
+async def test_grep_is_clipped_to_twenty_hits(cfg, graph):
+    class ManyHits(FakeGit):
+        def run(self, name, args):
+            hits = [f"src/a.ts:{n}:x" for n in range(1, int(args["pattern"]) + 1)]
+            return "\n".join(hits) + ("\n… stopped at 50 hits" if len(hits) > 20 else "")
+
+    tools = _tools(cfg, graph, selected=graph.repos[1], open_git=ManyHits())
+
+    many = await tools.run("grep", {"pattern": "30"})
+    few = await tools.run("grep", {"pattern": "3"})
+
+    assert many.splitlines()[-1] == "… 10 more hits; narrow the pattern or add a glob"
+    assert len(many.splitlines()) == 21
+    assert few == "src/a.ts:1:x\nsrc/a.ts:2:x\nsrc/a.ts:3:x"
+
+
+async def test_entrypoint_flow_clips_long_flows_and_many_entries(cfg, graph):
+    graph.stored[(1, CONTROLLER, "flow")] = FlowSummary(CONTROLLER, "flow", "step " * 400, ())
+    base = graph.graphs[1]
+    extra = [CodeEntrypoint(CONTROLLER, "event", "users.sync", "nest") for _ in range(4)]
+    graph.graphs[1] = base.__class__(base.symbols, base.edges, [*base.entrypoints, *extra], {})
+    tools = _tools(cfg, graph)
+
+    one = await tools.run("entrypoint_flow", {"route": "GET /users/:id"})
+    many = await tools.run("entrypoint_flow", {"route": "users.sync"})
+
+    flow = one.split("flow: ", 1)[1]
+    assert flow.endswith(TRUNCATED.strip()) and len(flow) <= code_agent.FLOW_MAX_CHARS + 20
+    assert many.count("[event users.sync]") == 3
+    assert many.endswith("… 1 more entry points match; pass a more specific route")
+
+
+async def test_turns_are_counted_and_the_cache_key_is_versioned(cfg, graph, tmp_path, monkeypatch):
+    chat = ScriptedChat(
+        [
+            tool_reply(("search_code", _args(query="users"))),
+            tool_reply(("find_symbol", _args(name="AppController"))),
+            answer_reply(FINAL),
+        ]
+    )
+    cache = tmp_path / "cache"
+
+    first = await answer_with_agent(cfg, chat, graph, "q", cache_dir=cache)
+    monkeypatch.setattr(code_agent, "AGENT_VERSION", "other")
+    again = ScriptedChat([answer_reply("Other answer.")])
+    second = await answer_with_agent(cfg, again, graph, "q", cache_dir=cache)
+
+    assert first.extra["diagnostics"]["turns"] == 3
+    assert again.replies == [] and second.answer == "Other answer."  # a miss, not a hit
+    assert len(list(cache.iterdir())) == 2
