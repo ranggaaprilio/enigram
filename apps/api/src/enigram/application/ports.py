@@ -242,8 +242,18 @@ class CodeGraphRepository(Protocol):
         implementation."""
         ...
 
-    async def search(self, repo_id: int, query: str, limit: int = 10) -> list[tuple[str, float]]:
-        """(symbol id, rank) by full-text search over summaries and by qualified name."""
+    async def edges_from(
+        self, repo_id: int, symbol_id: str, kinds: tuple[str, ...]
+    ) -> list[tuple["CodeEdge", "CodeSymbol | None"]]:
+        """Edges of the given kinds out of a symbol, with the target symbol when resolved."""
+        ...
+
+    async def search(
+        self, repo_id: int, query: str, limit: int = 10, *, bodies: bool = False
+    ) -> list[tuple[str, float]]:
+        """(symbol id, rank) by full-text search over summaries and by qualified name; with
+        `bodies` (the agent) also over symbol bodies, weighted lower. The frozen `code` system
+        searches without bodies, as in Phase 1."""
         ...
 
     async def save_summaries(

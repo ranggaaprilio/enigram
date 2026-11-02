@@ -1,7 +1,8 @@
 """Answer golden questions with one system and write the answers plus a label sheet.
 
 Systems: `mix` and `naive` (the LightRAG document index), `code` (the code graph of the golden
-set's pinned repository) and `agent+repo` (a coding agent with read-only tools on the clone)."""
+set's pinned repository, one prompt), `agent+repo` (a coding agent with read-only tools on the
+clone) and `enigram-agent` (the graph-first agent over the repository store)."""
 
 import json
 import logging
@@ -12,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from enigram.application.code_agent import answer_with_agent
 from enigram.application.evaluation.claims import write_label_sheet
 from enigram.application.evaluation.golden import (
     BEHAVIOR,
@@ -34,8 +36,10 @@ from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
 
-SYSTEMS = (*QUERY_MODES, "code", "agent+repo")
-CODE_SYSTEMS = ("code", "agent+repo")
+SYSTEMS = (*QUERY_MODES, "code", "agent+repo", "enigram-agent")
+CODE_SYSTEMS = ("code", "agent+repo", "enigram-agent")
+# Answers that cite inline only (`path:line@sha`), never [n].
+AGENT_SYSTEMS = ("agent+repo", "enigram-agent")
 # behavior_annotation needs the annotations of Phase 2.
 CODE_SYSTEM_CATEGORIES = (BEHAVIOR, UNANSWERABLE, INJECTION)
 LOCKED_SPLITS = ("verdict", "reserve")
@@ -114,7 +118,7 @@ def answer_citations(
 ) -> list[dict[str, Any]]:
     """Every code citation an answer makes: its `[n]` refs resolved through the sources, then
     inline `path:line@sha` citations (ref None). A `[n]` with no source has file None.
-    `refs=False` for answers that cite inline only (agent+repo): their sources are those inline
+    `refs=False` for answers that cite inline only (AGENT_SYSTEMS): their sources are those inline
     citations, so a stray `[1]` would count the first one twice."""
     by_ref = {s.ref: s for s in sources}
     out: list[dict[str, Any]] = []
@@ -164,8 +168,9 @@ async def answer_golden(
                 tool_calls=result.extra.get("tool_calls"),
                 trace=result.extra.get("trace"),
                 budget_exhausted=result.extra.get("budget_exhausted"),
+                diagnostics=result.extra.get("diagnostics"),
                 citations=answer_citations(
-                    result.answer, result.sources, refs=system != "agent+repo"
+                    result.answer, result.sources, refs=system not in AGENT_SYSTEMS
                 ),
                 error=None,
             )
@@ -212,6 +217,22 @@ def write_golden_run(
     return answers_path, labels_path
 
 
+async def _pinned_repo(graph: Any, repo_spec: GoldenRepo) -> dict[str, Any]:
+    """The indexed repository of a code golden set, refused unless indexed at the pinned sha."""
+    repo = await graph.get_repo(repo_spec.url, repo_spec.ref)
+    if repo is None:
+        raise EnigramError(
+            f"{repo_spec.url} ({repo_spec.ref}) is not indexed; run "
+            f"`enigram repo {repo_spec.url} --ref {repo_spec.ref}`"
+        )
+    if repo["indexed_sha"] != repo_spec.pinned_sha:
+        raise EnigramError(
+            f"{repo_spec.url} is indexed at {repo['indexed_sha'][:12]}, golden pins "
+            f"{repo_spec.pinned_sha[:12]}; index the pinned ref again"
+        )
+    return repo
+
+
 async def _answer_code(
     cfg: Config, deps: Deps, golden: GoldenSet, questions: list[GoldenQuestion]
 ) -> tuple[list[dict[str, Any]], int]:
@@ -222,17 +243,7 @@ async def _answer_code(
     store = await deps.open_store()
     try:
         graph = await deps.new_code_graph(store)
-        repo = await graph.get_repo(repo_spec.url, repo_spec.ref)
-        if repo is None:
-            raise EnigramError(
-                f"{repo_spec.url} ({repo_spec.ref}) is not indexed; run "
-                f"`enigram repo {repo_spec.url} --ref {repo_spec.ref}`"
-            )
-        if repo["indexed_sha"] != repo_spec.pinned_sha:
-            raise EnigramError(
-                f"{repo_spec.url} is indexed at {repo['indexed_sha'][:12]}, golden pins "
-                f"{repo_spec.pinned_sha[:12]}; index the pinned ref again"
-            )
+        repo = await _pinned_repo(graph, repo_spec)
         chat = deps.generator()
 
         async def answer(q: GoldenQuestion) -> QueryResult:
@@ -241,6 +252,34 @@ async def _answer_code(
             )
 
         return await answer_golden(answer, questions, "code")
+    finally:
+        await store.close()
+
+
+async def _answer_enigram_agent(
+    cfg: Config, deps: Deps, golden: GoldenSet, questions: list[GoldenQuestion]
+) -> tuple[list[dict[str, Any]], int]:
+    repo_spec = golden.repo
+    assert repo_spec is not None
+    store = await deps.open_store()
+    try:
+        graph = await deps.new_code_graph(store)
+        await _pinned_repo(graph, repo_spec)
+        chat = deps.generator()
+
+        async def answer(q: GoldenQuestion) -> QueryResult:
+            return await answer_with_agent(
+                cfg,
+                chat,
+                graph,
+                q.question,
+                repo_url=repo_spec.url,
+                repo_ref=repo_spec.ref,
+                cache_dir=cfg.eval_dir / "enigram-agent-cache",
+                model=cfg.llm_model,
+            )
+
+        return await answer_golden(answer, questions, "enigram-agent")
     finally:
         await store.close()
 
@@ -278,6 +317,8 @@ async def run_golden(
 
     if system == "code":
         items, failed = await _answer_code(cfg, deps, golden, questions)
+    elif system == "enigram-agent":
+        items, failed = await _answer_enigram_agent(cfg, deps, golden, questions)
     elif system == "agent+repo":
         from enigram.application.evaluation.agent_repo import AgentRepoRunner
 

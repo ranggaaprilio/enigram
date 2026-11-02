@@ -4,7 +4,7 @@ API (`http_api.py`), which supplies its own knowledge engine and job store."""
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import Annotated, Literal
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
@@ -12,8 +12,15 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from enigram.application.code_agent import AGENT_MODE, answer_with_agent
 from enigram.application.documents import documents_overview
-from enigram.application.ports import Deps, JobRepository, KnowledgeEngine, MemoryRepository
+from enigram.application.ports import (
+    CodeGraphRepository,
+    Deps,
+    JobRepository,
+    KnowledgeEngine,
+    MemoryRepository,
+)
 from enigram.application.querying import answer_question
 from enigram.bootstrap import build_deps
 from enigram.config import Config
@@ -27,6 +34,7 @@ class AppContext:
     engine: KnowledgeEngine
     store: JobRepository | None = None  # set over HTTP: queries are logged, jobs show in documents
     memory: MemoryRepository | None = None  # set over HTTP: memories belong to an API key
+    code_graph: CodeGraphRepository | None = None  # needs STORAGE_BACKEND=postgres
 
 
 @dataclass
@@ -77,10 +85,19 @@ def create_server(
     lifespan: Callable[[MCPServer], AbstractAsyncContextManager[AppContext]] | None = None,
     deps: Deps | None = None,
 ) -> MCPServer:
+    deps = deps or build_deps(cfg)
+
     @asynccontextmanager
     async def open_index(server: MCPServer) -> AsyncIterator[AppContext]:
-        async with (deps or build_deps(cfg)).open_engine() as engine:
-            yield AppContext(engine=engine)
+        async with deps.open_engine() as engine:
+            if cfg.storage != "postgres":
+                yield AppContext(engine=engine)
+                return
+            store = await deps.open_store()  # only for the code graph: stdio logs no queries
+            try:
+                yield AppContext(engine=engine, code_graph=await deps.new_code_graph(store))
+            finally:
+                await store.close()
 
     mcp = MCPServer("enigram", lifespan=lifespan or open_index)
 
@@ -91,23 +108,45 @@ def create_server(
         include_context: Annotated[
             bool, Field(description="Also return the retrieved text chunks (large).")
         ] = False,
+        scope: Annotated[
+            Literal["docs", "code"],
+            Field(description="docs = the indexed documents; code = the indexed repositories."),
+        ] = "docs",
+        repo: Annotated[
+            str | None, Field(description="With scope=code: the repository URL to ask about.")
+        ] = None,
     ) -> AgentAnswer:
-        """Answer a question from the indexed journal papers (GraphRAG: knowledge graph + vector
-        search). The answer cites sources as [n]; `sources` maps each n to paper title, section
-        and pages. Takes 30-60 s on the local model. Ask one specific question per call."""
+        """Answer a question from the indexed documents (GraphRAG: knowledge graph + vector
+        search), citing sources as [n] (`sources` maps each n to title, section and pages); or,
+        with scope="code", from the indexed TypeScript repositories (an agent that reads the code
+        graph and the source), citing `path:start-end@sha` inline. Ask one specific question per
+        call."""
         app = ctx.request_context.lifespan_context
+        mode = AGENT_MODE if scope == "code" else QUERY_MODE
         try:
-            result = await answer_question(app.engine, question)
+            if scope == "code":
+                if app.code_graph is None:
+                    raise ToolError(
+                        "Code questions need STORAGE_BACKEND=postgres and an indexed repository"
+                    )
+                result = await answer_with_agent(
+                    cfg,
+                    deps.generator(),
+                    app.code_graph,
+                    question,
+                    repo_url=repo,
+                    model=cfg.llm_model,
+                )
+            else:
+                result = await answer_question(app.engine, question)
         except EnigramError as e:
             if app.store:
                 await app.store.log_query(
-                    "mcp", question, QUERY_MODE, error=str(e), api_key=_api_key(ctx)
+                    "mcp", question, mode, error=str(e), api_key=_api_key(ctx)
                 )
             raise ToolError(str(e)) from e
         if app.store:
-            await app.store.log_query(
-                "mcp", question, QUERY_MODE, result=result, api_key=_api_key(ctx)
-            )
+            await app.store.log_query("mcp", question, mode, result=result, api_key=_api_key(ctx))
         return AgentAnswer(
             answer=result.answer,
             sources=result.sources,

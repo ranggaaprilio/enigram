@@ -95,18 +95,23 @@ def collect_markdown(root: Path, repo: str) -> dict[str, Path]:
     return files
 
 
+def git_env(home: Path) -> dict[str, str]:
+    """Environment for git: no user config (HOME is `home`), credentials, prompts or LFS."""
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_LFS_SKIP_SMUDGE": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+
+
 def clone(url: str, ref: str | None, dest: Path) -> None:
     """Shallow clone without the user's git config, credentials or prompts."""
     command = ["git", "clone", "--depth", "1", "--single-branch", "--no-tags"]
     if ref:
         command += ["--branch", ref]
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": str(dest.parent),
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_LFS_SKIP_SMUDGE": "1",
-        "GIT_CONFIG_NOSYSTEM": "1",
-    }
+    env = git_env(dest.parent)
     try:
         done = subprocess.run(
             [*command, "--", url, str(dest)],
@@ -158,6 +163,13 @@ async def index_repo(
                     "Indexing a TypeScript repository needs STORAGE_BACKEND=postgres"
                 )
             code = await index_code(cfg, deps, graph, root, url, ref, limit=limit)
+            # The answering agent reads source from this store (repo_store imports this module).
+            from enigram.application import repo_store
+
+            store = await asyncio.to_thread(
+                repo_store.ensure_store, cfg, url, ref, code["commit_sha"]
+            )
+            code["store"] = str(store)
         else:
             code = {"skipped": "no tsconfig.json at the repository root"}
             if not files:

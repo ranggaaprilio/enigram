@@ -55,8 +55,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scope",
         choices=("docs", "code"),
         default="docs",
-        help="docs = the LightRAG index (default); code = the indexed TypeScript repository "
-        "(ignores --mode)",
+        help="docs = the LightRAG index (default); code = the graph-first agent over the "
+        "indexed TypeScript repositories (ignores --mode)",
     )
     query.add_argument("--repo", help="repository URL when more than one is indexed")
 
@@ -98,10 +98,11 @@ def _build_parser() -> argparse.ArgumentParser:
     # Literal copy of golden_run.SYSTEMS so parsing never imports LightRAG; a test keeps them equal.
     answer.add_argument(
         "--system",
-        choices=("mix", "naive", "code", "agent+repo"),
+        choices=("mix", "naive", "code", "agent+repo", "enigram-agent"),
         default="mix",
-        help="mix/naive = the document index; code = the code graph; agent+repo = a coding agent "
-        "reading the pinned clone",
+        help="mix/naive = the document index; code = the code graph (one prompt, frozen "
+        "ablation); agent+repo = a coding agent reading the pinned clone; enigram-agent = the "
+        "graph-first agent over the repository store",
     )
     answer.add_argument("--split", choices=("dev", "verdict", "reserve"), help="only this split")
     answer.add_argument(
@@ -209,30 +210,16 @@ async def _index(cfg: Config, args: argparse.Namespace) -> int:
     return 1 if run.any_failed else 0
 
 
-def _pick_repo(repos: list[dict], url: str | None) -> dict:
-    if url:
-        picked = [r for r in repos if r["url"] == url]
-        if not picked:
-            raise EnigramError(f"{url} is not indexed; run `enigram repo {url}`")
-        return picked[0]
-    if not repos:
-        raise EnigramError("No repository indexed; run `enigram repo <url>`")
-    if len(repos) > 1:
-        raise EnigramError("Several repositories are indexed; pass --repo <url>")
-    return repos[0]
-
-
 async def _query_code(cfg: Config, question: str, url: str | None) -> int:
-    from enigram.application.code_query import answer_code_question
+    from enigram.application.code_agent import answer_with_agent
     from enigram.bootstrap import build_deps
 
     deps = build_deps(cfg)
     store = await deps.open_store()
     try:
         graph = await deps.new_code_graph(store)
-        repo = _pick_repo(await graph.list_repos(), url)
-        result = await answer_code_question(
-            cfg, deps.generator(), graph, repo["id"], repo["indexed_sha"], question
+        result = await answer_with_agent(
+            cfg, deps.generator(), graph, question, repo_url=url, model=cfg.llm_model
         )
     finally:
         await store.close()
@@ -243,7 +230,8 @@ async def _query_code(cfg: Config, question: str, url: str | None) -> int:
             print(f"  [{s.ref}] {s.citation} ({s.title})")
     print(
         f"({result.mode}, {result.query_secs:.1f}s, "
-        f"{result.tokens_in} in / {result.tokens_out} out tokens)"
+        f"{result.tokens_in} in / {result.tokens_out} out tokens, "
+        f"{result.extra.get('tool_calls', 0)} tool calls)"
     )
     return 0 if result.found else 1
 

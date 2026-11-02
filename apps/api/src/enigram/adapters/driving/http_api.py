@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from enigram.adapters.driving.mcp_server import AppContext, create_server
+from enigram.application.code_agent import AGENT_MODE, answer_with_agent
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
 from enigram.application.ports import Deps, JobRepository
@@ -39,7 +40,9 @@ OPEN_PATHS = frozenset({"/health"})
 
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
-    mode: Literal["mix", "naive"] = QUERY_MODE
+    mode: Literal["mix", "naive"] = QUERY_MODE  # docs only
+    scope: Literal["docs", "code"] = "docs"  # code: the graph-first agent, `mode` is ignored
+    repo: str | None = None  # code only: the repository URL to ask about
 
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -164,9 +167,14 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
     @asynccontextmanager
     async def mcp_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
         # Entered once by session_manager.run() below, after app.state is set.
-        yield AppContext(engine=app.state.engine, store=app.state.store, memory=app.state.memory)
+        yield AppContext(
+            engine=app.state.engine,
+            store=app.state.store,
+            memory=app.state.memory,
+            code_graph=app.state.code_graph,
+        )
 
-    mcp = create_server(cfg, lifespan=mcp_lifespan)
+    mcp = create_server(cfg, lifespan=mcp_lifespan, deps=deps)
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,
@@ -186,6 +194,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             log.warning("[api] ENIGRAM_API_KEYS is not set: every route is open")
         store = await deps.open_store()
         app.state.memory = await deps.new_memory(store)
+        app.state.code_graph = await deps.new_code_graph(store)
         try:
             # require_index=False: a fresh deployment has no index yet and must still start.
             async with deps.open_engine(query_cache=False, require_index=False) as engine:
@@ -304,15 +313,26 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
     @app.post("/query")
     async def query(request: Request, body: QueryRequest) -> dict[str, Any]:
         store = store_of(request)
+        mode = AGENT_MODE if body.scope == "code" else body.mode
         try:
-            result = await answer_question(request.app.state.engine, body.question, body.mode)
+            if body.scope == "code":
+                result = await answer_with_agent(
+                    cfg,
+                    deps.generator(),
+                    request.app.state.code_graph,
+                    body.question,
+                    repo_url=body.repo,
+                    model=cfg.llm_model,
+                )
+            else:
+                result = await answer_question(request.app.state.engine, body.question, body.mode)
         except EnigramError as e:
             await store.log_query(
-                "api", body.question, body.mode, error=str(e), api_key=_key_name(request)
+                "api", body.question, mode, error=str(e), api_key=_key_name(request)
             )
             raise HTTPException(502, str(e)) from e
         query_id = await store.log_query(
-            "api", body.question, body.mode, result=result, api_key=_key_name(request)
+            "api", body.question, mode, result=result, api_key=_key_name(request)
         )
         return {"id": query_id, **asdict(result)}
 

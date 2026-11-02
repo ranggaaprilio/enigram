@@ -97,6 +97,8 @@ class Config:
     api_keys: tuple[tuple[str, str], ...] = field(repr=False)
     repo_hosts: tuple[str, ...]
     data_dir: Path
+    # Bare partial clones the code agent reads source from (application/repo_store.py).
+    repo_store: Path
     log_level: str
     # The ts-morph sidecar (tools/ts-graph) that parses TypeScript repositories.
     ts_graph_dir: Path
@@ -104,6 +106,7 @@ class Config:
     @classmethod
     def from_env(cls, dotenv_path: Path | None = None) -> "Config":
         load_dotenv(dotenv_path)
+        data_dir = Path(os.environ.get("DATA_DIR", "./data")).expanduser()
         thinking_mode = os.environ.get("THINKING_MODE", "off").strip() or "off"
         if thinking_mode not in THINKING_MODES:
             raise EnigramError(
@@ -171,7 +174,10 @@ class Config:
                 h.strip().lower() for h in os.environ.get("REPO_HOSTS", "").split(",") if h.strip()
             )
             or DEFAULT_REPO_HOSTS,
-            data_dir=Path(os.environ.get("DATA_DIR", "./data")).expanduser(),
+            data_dir=data_dir,
+            repo_store=Path(
+                os.environ.get("REPO_STORE", "").strip() or data_dir / "repos"
+            ).expanduser(),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             # parents[4] of apps/api/src/enigram/config.py: the repository root (/app in Docker).
             ts_graph_dir=Path(

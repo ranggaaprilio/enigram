@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import asyncpg
 import pytest
-from code_fakes import SHA, fixture_graph
+from code_fakes import SHA, agent_graph, fixture_graph
 
 from enigram.adapters.driven.postgres_code_graph import PostgresCodeGraph
 from enigram.domain.code import IMPLEMENTATION_CALL, CodeFile, FlowSummary
@@ -89,6 +89,32 @@ async def test_search_matches_summary_words_and_names(graph):
     named = dict(await graph.search(repo_id, "What calls SqlUserRepo?"))
     assert named["src/repo.ts#SqlUserRepo"] == 1.0
     assert await graph.search(repo_id, "the of a") == []  # only stop words: no query
+
+
+async def test_search_ranks_bodies_below_summaries(graph):
+    repo_id = await graph.replace_repo(URL, None, SHA, [], agent_graph())
+
+    hits = dict(await graph.search(repo_id, "What is the fileSize limit?", bodies=True))
+    plain = dict(await graph.search(repo_id, "What is the fileSize limit?"))
+
+    module = "src/app.module.ts#AppModule"
+    assert 0 < hits[module] <= 0.5  # 0.5 * ts_rank: below any name match (1.0)
+    assert module not in plain  # the frozen `code` system searches as in Phase 1
+
+
+async def test_edges_from_and_decorators_text_round_trip(graph):
+    repo_id = await graph.replace_repo(URL, None, SHA, [], agent_graph())
+    controller = "src/app.controller.ts#AppController"
+
+    guards = await graph.edges_from(repo_id, controller, ("guarded_by",))
+    stored = (await graph.symbols_by_id(repo_id, [controller]))[controller]
+
+    assert [(e.dst, t.qualified_name if t else None) for e, t in guards] == [
+        ("AuthGuard", None),
+        ("src/roles.guard.ts#RolesGuard", "RolesGuard"),
+    ]
+    assert stored.decorators_text[1] == "@UseGuards(AuthGuard('jwt'), RolesGuard)"
+    await graph.ensure_schema()  # the DDL re-runs on an existing schema
 
 
 async def test_delete_summaries_except(graph):

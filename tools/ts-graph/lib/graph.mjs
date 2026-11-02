@@ -62,7 +62,10 @@ export function buildGraph(root, { tsconfig = "tsconfig.json", diagnostics = tru
     files_skipped: skipped,
     symbols: symbols.length,
     edges: Object.fromEntries(
-      ["calls", "calls_external", "injects", "imports", "extends", "implements", "reads_env"].map((k) => [k, count(k)]),
+      [
+        "calls", "calls_external", "injects", "imports", "extends", "implements", "reads_env",
+        "guarded_by", "intercepted_by", "module_imports", "provides", "provides_config",
+      ].map((k) => [k, count(k)]),
     ),
     // Share of call sites whose callee has a declaration (repository or TypeScript lib); the rest
     // are names nothing declares, typically package APIs without node_modules.

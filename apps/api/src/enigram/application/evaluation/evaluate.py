@@ -49,7 +49,13 @@ METRICS = (
 PHASE1_DEV_QUESTIONS = 10
 PHASE1_MIN_CORRECT = 7  # of the 10 dev questions
 PHASE1_AGENT_MARGIN = 1  # code ≥ agent+repo − 1
+PHASE1_BASELINE = "agent+repo"
 PHASE1_UNRESOLVED_MAX = 0.5
+# Phase 1b (enigram-agent): ≥ 9/10 on dev, not worse than agent+repo − 1, and cheaper.
+PHASE1B_SYSTEM = "enigram-agent"
+PHASE1B_BASELINE = "agent+repo"
+PHASE1B_MIN_CORRECT = 9
+DIAGNOSTIC_KEYS = ("graph_first", "graph_hits", "read_calls", "reads_on_graph_lines")
 PHASE7_MIN_VERDICT = 40
 MAX_LISTED_FAILURES = 50
 FAILURE_PREVIEW_CHARS = 160
@@ -184,6 +190,7 @@ def _system_stats(items: list[dict[str, Any]], citations: dict[str, Any] | None)
     leaked = [i["id"] for i in injections if i.get("marker") and i["marker"] in i.get("answer", "")]
     secs = [i["query_secs"] for i in answered if i.get("query_secs") is not None]
     tool_calls = [i["tool_calls"] for i in answered if i.get("tool_calls") is not None]
+    diagnostics = [i["diagnostics"] for i in answered if i.get("diagnostics")]
     tokens_in = [i.get("tokens_in") or 0 for i in answered]
     tokens_out = [i.get("tokens_out") or 0 for i in answered]
     return {
@@ -232,7 +239,26 @@ def _system_stats(items: list[dict[str, Any]], citations: dict[str, Any] | None)
             "p95": _percentile(secs, 0.95),
         },
         "tool_calls_mean": sum(tool_calls) / len(tool_calls) if tool_calls else None,
+        **_diagnostics(diagnostics),
         "failed": len(items) - len(answered),
+    }
+
+
+def _diagnostics(diags: list[dict[str, Any]]) -> dict[str, Any]:
+    """Means of the enigram-agent per-answer diagnostics; empty for other systems."""
+    if not diags:
+        return {}
+    means: dict[str, float | None] = {}
+    for key in DIAGNOSTIC_KEYS:
+        values = [float(d[key]) for d in diags if d.get(key) is not None]
+        means[key] = sum(values) / len(values) if values else None
+    means["repos_touched"] = sum(len(d.get("repos_touched") or []) for d in diags) / len(diags)
+    reads = sum(d.get("read_calls") or 0 for d in diags)
+    on_graph = sum(d.get("reads_on_graph_lines") or 0 for d in diags)
+    return {
+        "diagnostics_n": len(diags),
+        "diagnostics_mean": means,
+        "reads_on_graph_share": on_graph / reads if reads else None,
     }
 
 
@@ -271,59 +297,110 @@ def _dev(items: list[dict[str, Any]]) -> dict[str, bool]:
     }
 
 
+def _paired(
+    runs: dict[str, dict[str, Any]], a: str, b: str
+) -> tuple[dict[str, bool], dict[str, bool], list[str]]:
+    """Dev labels of two systems and the question ids both have labels for."""
+    x = _dev(runs[a]["items"]) if a in runs else {}
+    y = _dev(runs[b]["items"]) if b in runs else {}
+    return x, y, sorted(x.keys() & y.keys())
+
+
+def _dev_accuracy(runs: dict[str, dict[str, Any]], system: str, minimum: int) -> dict[str, Any]:
+    labels = _dev(runs[system]["items"]) if system in runs else {}
+    correct = sum(labels.values())
+    return {
+        "target": f"{system} ≥ {minimum}/{PHASE1_DEV_QUESTIONS} on split dev",
+        "result": correct if labels else None,
+        "n": len(labels),
+        "verdict": _verdict(
+            labels or None,
+            # A share, not a count: 7 correct of 20 labelled is 35%, not a pass.
+            correct * PHASE1_DEV_QUESTIONS >= minimum * len(labels),
+            len(labels) >= PHASE1_DEV_QUESTIONS,
+        ),
+        "note": "blind labels, behaviour questions of split dev",
+    }
+
+
+def _not_worse(runs: dict[str, dict[str, Any]], system: str, baseline: str) -> dict[str, Any]:
+    x, y, both = _paired(runs, system, baseline)
+    x_both, y_both = sum(x[q] for q in both), sum(y[q] for q in both)
+    margin = x_both - y_both if both else None
+    return {
+        "target": f"{system} ≥ {baseline} − {PHASE1_AGENT_MARGIN} on the same dev questions",
+        "result": margin,
+        "n": len(both),
+        "verdict": _verdict(
+            margin,
+            margin is not None and margin >= -PHASE1_AGENT_MARGIN,
+            len(both) >= PHASE1_DEV_QUESTIONS,
+        ),
+        "note": (
+            f"{system} {x_both}, {baseline} {y_both} correct (result = difference)"
+            if both
+            else "needs labelled dev answers from both systems"
+        ),
+    }
+
+
+def _cheaper(runs: dict[str, dict[str, Any]], system: str, baseline: str) -> dict[str, Any]:
+    """Mean input tokens of `system` over `baseline` on the same labelled dev questions."""
+    _, _, both = _paired(runs, system, baseline)
+
+    def means(name: str) -> tuple[float, float | None]:
+        items = {i["id"]: i for i in runs[name]["items"]} if name in runs else {}
+        tokens = [items[q].get("tokens_in") or 0 for q in both]
+        calls = [items[q]["tool_calls"] for q in both if items[q].get("tool_calls") is not None]
+        return sum(tokens) / len(tokens), (sum(calls) / len(calls) if calls else None)
+
+    if not both:
+        ratio, note = None, "needs labelled dev answers from both systems"
+    else:
+        (x_in, x_calls), (y_in, y_calls) = means(system), means(baseline)
+        ratio = x_in / y_in if y_in else None
+        note = (
+            f"mean input tokens {system} {x_in:.0f}, {baseline} {y_in:.0f}; tool calls "
+            f"{_fmt(x_calls)} vs {_fmt(y_calls)} (result = ratio)"
+        )
+    return {
+        "target": f"mean input tokens of {system} < {baseline} on the same dev questions",
+        "result": ratio,
+        "n": len(both),
+        "verdict": _verdict(
+            ratio, ratio is not None and ratio < 1.0, len(both) >= PHASE1_DEV_QUESTIONS
+        ),
+        "note": note,
+    }
+
+
+def _citations_valid(systems: dict[str, dict[str, Any]], system: str) -> dict[str, Any]:
+    cites = (systems.get(system) or {}).get("citations")
+    return {
+        "target": f"every {system} answer fully valid",
+        "result": (cites["answers_fully_valid"] / cites["answers"])
+        if cites and cites["answers"]
+        else None,
+        "n": cites["answers"] if cites else 0,
+        "verdict": _verdict(
+            cites or None,
+            bool(cites) and cites["answers_fully_valid"] == cites["answers"],
+            bool(cites) and cites["answers"] > 0,
+        ),
+        "note": "structural check (golden citations): sha, file, lines, symbol in range",
+    }
+
+
 def _hypothesis(
     runs: dict[str, dict[str, Any]],
     systems: dict[str, dict[str, Any]],
     unresolved_share: float | None,
 ) -> dict[str, dict[str, Any]]:
-    code = _dev(runs["code"]["items"]) if "code" in runs else {}
-    agent = _dev(runs["agent+repo"]["items"]) if "agent+repo" in runs else {}
-    both = sorted(code.keys() & agent.keys())
-    code_both, agent_both = sum(code[q] for q in both), sum(agent[q] for q in both)
-    margin = code_both - agent_both if both else None
-    cites = (systems.get("code") or {}).get("citations")
     verdict_labelled = (systems.get("code") or {}).get("by_split", {}).get("verdict", {})
-    return {
-        "phase1_dev_accuracy": {
-            "target": f"code ≥ {PHASE1_MIN_CORRECT}/{PHASE1_DEV_QUESTIONS} on split dev",
-            "result": sum(code.values()) if code else None,
-            "n": len(code),
-            "verdict": _verdict(
-                code or None,
-                # A share, not a count: 7 correct of 20 labelled is 35%, not a pass.
-                sum(code.values()) * PHASE1_DEV_QUESTIONS >= PHASE1_MIN_CORRECT * len(code),
-                len(code) >= PHASE1_DEV_QUESTIONS,
-            ),
-            "note": "blind labels, behaviour questions of split dev",
-        },
-        "phase1_not_worse_than_agent": {
-            "target": f"code ≥ agent+repo − {PHASE1_AGENT_MARGIN} on the same dev questions",
-            "result": margin,
-            "n": len(both),
-            "verdict": _verdict(
-                margin,
-                margin is not None and margin >= -PHASE1_AGENT_MARGIN,
-                len(both) >= PHASE1_DEV_QUESTIONS,
-            ),
-            "note": (
-                f"code {code_both}, agent+repo {agent_both} correct (result = difference)"
-                if both
-                else "needs labelled dev answers from both systems"
-            ),
-        },
-        "phase1_citations_valid": {
-            "target": "every code answer fully valid",
-            "result": (cites["answers_fully_valid"] / cites["answers"])
-            if cites and cites["answers"]
-            else None,
-            "n": cites["answers"] if cites else 0,
-            "verdict": _verdict(
-                cites or None,
-                bool(cites) and cites["answers_fully_valid"] == cites["answers"],
-                bool(cites) and cites["answers"] > 0,
-            ),
-            "note": "structural check (golden citations): sha, file, lines, symbol in range",
-        },
+    out = {
+        "phase1_dev_accuracy": _dev_accuracy(runs, "code", PHASE1_MIN_CORRECT),
+        "phase1_not_worse_than_agent": _not_worse(runs, "code", PHASE1_BASELINE),
+        "phase1_citations_valid": _citations_valid(systems, "code"),
         "phase1_unresolved_share": {
             "target": f"unresolved calls in flows ≤ {PHASE1_UNRESOLVED_MAX}",
             "result": unresolved_share,
@@ -343,6 +420,14 @@ def _hypothesis(
             "note": "paired one-sided CI (margin 15) is added in Phase 7",
         },
     }
+    if PHASE1B_SYSTEM in runs:
+        out |= {
+            "phase1b_dev_accuracy": _dev_accuracy(runs, PHASE1B_SYSTEM, PHASE1B_MIN_CORRECT),
+            "phase1b_not_worse_than_agent": _not_worse(runs, PHASE1B_SYSTEM, PHASE1B_BASELINE),
+            "phase1b_cheaper_than_agent": _cheaper(runs, PHASE1B_SYSTEM, PHASE1B_BASELINE),
+            "phase1b_citations_valid": _citations_valid(systems, PHASE1B_SYSTEM),
+        }
+    return out
 
 
 async def _unresolved_share(
@@ -712,6 +797,28 @@ def render_markdown(data: dict[str, Any]) -> str:
             f"| {_fmt(lat['mean'])} / {_fmt(lat['p50'])} / {_fmt(lat['p95'])} "
             f"| {_fmt(s['tool_calls_mean'])} |"
         )
+    with_diagnostics = {k: s for k, s in systems.items() if s.get("diagnostics_mean")}
+    if with_diagnostics:
+        lines += [
+            "",
+            "## Agent diagnostics",
+            "",
+            "| System | Tool calls / answer | Graph first | Graph hits / answer | Reads on graph "
+            "lines | Repos / answer |",
+            "|---|---|---|---|---|---|",
+        ]
+        for system, s in with_diagnostics.items():
+            m = s["diagnostics_mean"]
+            lines.append(
+                f"| {system} | {_fmt(s['tool_calls_mean'])} | {_fmt(m['graph_first'])} "
+                f"| {_fmt(m['graph_hits'])} | {_fmt(s['reads_on_graph_share'])} "
+                f"| {_fmt(m['repos_touched'])} |"
+            )
+        lines += [
+            "",
+            "Graph first: share of answers whose first tool was a graph tool. Reads on graph "
+            "lines: share of read_file/grep calls on a file a graph result named.",
+        ]
     lines += ["", "## Judge agreement", ""]
     agreement = data["agreement"]
     if agreement is None:

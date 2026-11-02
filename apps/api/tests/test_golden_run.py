@@ -192,6 +192,55 @@ async def test_code_system_needs_the_pinned_index(cfg, deps, tmp_path):
         await run_golden(cfg, deps, _code_set(tmp_path), "code", split="dev")
 
 
+@pytest.mark.usefixtures("fake_repo")
+async def test_enigram_agent_system_answers_from_the_graph(cfg, deps, tmp_path, monkeypatch):
+    graph = FakeCodeGraph(fixture_graph())
+    graph.repos[1].update(url=CODE_URL, ref="eval-v1", indexed_sha=PINNED)
+    closed = _fake_graph_deps(deps, graph)
+    deps.generator = lambda: FakeChat("unused")
+    seen = {}
+    diagnostics = {"graph_first": True, "graph_hits": 3, "read_calls": 1}
+
+    async def fake_agent(cfg_, chat, graph_, question, *, repo_url, repo_ref, cache_dir, model):
+        seen.update(
+            graph=graph_, repo_url=repo_url, repo_ref=repo_ref, cache_dir=cache_dir, model=model
+        )
+        text = f"It checks the hash [1] src/auth/auth.service.ts:2-4@{PINNED[:12]}."
+        citation = f"src/auth/auth.service.ts:2-4@{PINNED[:12]}"
+        return QueryResult(
+            question,
+            text,
+            [Source(1, "src/auth/auth.service.ts", "", "", citation)],
+            [],
+            mode="enigram-agent",
+            tokens_in=3000,
+            tokens_out=50,
+            extra={"tool_calls": 3, "trace": [], "diagnostics": diagnostics},
+        )
+
+    monkeypatch.setattr(golden_run, "answer_with_agent", fake_agent)
+
+    run = await run_golden(cfg, deps, _code_set(tmp_path), "enigram-agent", split="dev")
+
+    data = json.loads(run.answers_path.read_text())
+    assert data["system"] == "enigram-agent"
+    assert seen == {
+        "graph": graph,
+        "repo_url": CODE_URL,
+        "repo_ref": "eval-v1",
+        "cache_dir": cfg.eval_dir / "enigram-agent-cache",
+        "model": cfg.llm_model,
+    }
+    (item,) = data["items"]
+    assert item["diagnostics"] == diagnostics and item["tool_calls"] == 3
+    assert [c["ref"] for c in item["citations"]] == [None]  # inline only: [1] is not a ref
+    assert closed == [True]
+
+    graph.repos[1].update(indexed_sha="b" * 40)
+    with pytest.raises(EnigramError, match="golden pins"):
+        await run_golden(cfg, deps, _code_set(tmp_path), "enigram-agent", split="dev")
+
+
 async def test_code_system_refuses_a_document_set(cfg, deps, golden_env):
     path, _ = golden_env
     with pytest.raises(EnigramError, match="code golden set"):

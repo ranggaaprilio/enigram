@@ -1,6 +1,9 @@
 import json
 
 import pytest
+from code_fakes import ScriptedChat
+from code_fakes import answer_reply as _answer
+from code_fakes import tool_reply as _tool_reply
 
 from enigram.application.evaluation.agent_repo import (
     BUDGET_MESSAGE,
@@ -9,7 +12,6 @@ from enigram.application.evaluation.agent_repo import (
     RepoTools,
 )
 from enigram.application.evaluation.golden import GoldenQuestion
-from enigram.application.ports import ChatReply, ToolCall
 
 SHA = "70ae60dbb6090ef75009845a914a140a2a5b9f30"
 Q = GoldenQuestion("b01", "behavior", "Can an unconfirmed user log in?", "No.", ())
@@ -30,35 +32,6 @@ def repo(tmp_path):
     (root / ".env").write_text("AUTH_JWT_SECRET=abc123def456ghi\n")
     (root / "src/auth/config.ts").write_text("const clientSecret = 'abc123def456ghi';\n")
     return root
-
-
-class ScriptedChat:
-    """Replies in order; records every call's messages and tools."""
-
-    def __init__(self, replies):
-        self.replies = list(replies)
-        self.calls = []
-
-    async def chat(self, messages, *, tools=None, temperature=None, **kw):
-        self.calls.append(
-            {"messages": [dict(m) for m in messages], "tools": tools, "temperature": temperature}
-        )
-        return self.replies.pop(0)
-
-
-def _tool_reply(*calls, tokens=(1000, 10)):
-    return ChatReply(
-        "",
-        [ToolCall(f"c{i}", n, a) for i, (n, a) in enumerate(calls)],
-        "tool_calls",
-        tokens[0],
-        tokens[1],
-        0.1,
-    )
-
-
-def _answer(text, tokens=(1500, 40)):
-    return ChatReply(text, [], "stop", tokens[0], tokens[1], 0.1)
 
 
 FINAL = f"No: validateLogin checks the status src/auth/auth.service.ts:2-4@{SHA[:12]}."

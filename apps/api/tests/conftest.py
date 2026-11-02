@@ -27,6 +27,7 @@ CONFIG_ENV = (
     "ENIGRAM_API_KEYS",
     "REPO_HOSTS",
     "TS_GRAPH_DIR",
+    "REPO_STORE",
 )
 
 

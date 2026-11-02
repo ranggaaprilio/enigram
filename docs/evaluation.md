@@ -17,7 +17,7 @@ a fixed set of questions whose correct answers were written down in advance.
 |---|---|---|
 | Golden set | `eval/golden.yaml` | 90 questions about one repository, each with an answer key |
 | Pinned repository | `repo:` block of the golden set | `ranggaaprilio/nestjs-boilerplate`, tag `eval-v1`, commit `70ae60dbb609…` |
-| Systems | `golden_run.py` | the things being compared: `code`, `agent+repo` (and `mix`/`naive` for documents) |
+| Systems | `golden_run.py` | the things being compared: `code`, `agent+repo`, `enigram-agent` (and `mix`/`naive` for documents) |
 | Answers file | `data/eval/answers-<system>-<ts>.json` | every answer a system gave, with sources, citations, tokens and time |
 | Blind sheet | `data/eval/blind-<ts>.md` + `.key.json` | all systems' answers mixed and anonymised for a human to mark |
 | Citation report | `<answers>.citations.json` | an automatic check of every `file:line@sha` the answers cite |
@@ -74,6 +74,13 @@ wrong, so `golden check` refuses to run when the clone is not at `pinned_sha`.
 - **`agent+repo`** uses the same model, but it reads the repository like a developer would. It
   gets the same answer rules and a generous budget. Its answers are cached per
   (question, commit, model) in `data/eval/agent-cache/`, so a rerun costs nothing.
+- **`enigram-agent`** (Phase 1b) is Enigram's answerer: the `agent+repo` tool loop, but its
+  first tools are the code graph (`search_code`, `find_symbol` with decorators, guards and module
+  wiring, `entrypoint_flow`). It reads source (`read_file`, `grep`) only in
+  repositories a graph result pointed at, from a bare partial clone at the indexed commit
+  (`REPO_STORE`). Per answer it records `diagnostics` (graph first, graph hits, reads on graph
+  lines, repositories touched); cached in `data/eval/enigram-agent-cache/`. The `code` system stays
+  as a frozen ablation.
 - **`mix` / `naive`** answer from the document index (Markdown/PDF) and are used with
   `eval/golden-docs.yaml`. They take part in the code comparison only on questions marked
   `in_docs`.
@@ -107,6 +114,7 @@ refused while the check reports problems.
 ```bash
 enigram golden answer --system code --split dev
 enigram golden answer --system agent+repo --split dev
+enigram golden answer --system enigram-agent --split dev
 enigram golden answer --system code --category unanswerable --category injection
 ```
 
@@ -195,7 +203,15 @@ INSUFFICIENT DATA when there are too few labels to decide; it is never silently 
 | `phase1_not_worse_than_agent` | on the same `dev` questions, `code` gets at most 1 fewer correct than `agent+repo` |
 | `phase1_citations_valid` | every `code` answer is fully valid |
 | `phase1_unresolved_share` | ≤ 50% of the calls inside flows could not be resolved to repository code (read from the index report) |
+| `phase1b_dev_accuracy` | `enigram-agent` is correct on ≥ 90% (9/10) of the labelled `dev` behaviour questions, with at least 10 labelled |
+| `phase1b_not_worse_than_agent` | on the same `dev` questions, `enigram-agent` gets at most 1 fewer correct than `agent+repo` |
+| `phase1b_cheaper_than_agent` | mean input tokens of `enigram-agent` / `agent+repo` on the same labelled `dev` questions is < 1 |
+| `phase1b_citations_valid` | every `enigram-agent` answer is fully valid |
 | `phase7_paired_accuracy` | always INSUFFICIENT DATA until Phase 7 adds the paired test on the 40 `verdict` questions |
+
+The `phase1b_*` rows appear only when an `enigram-agent` answers file is scored; the report then
+also has an "Agent diagnostics" table (tool calls, graph-first share, graph hits, share of reads
+on files a graph result named, repositories per answer).
 
 `phase1_unresolved_share` measures the graph, not the answers. If most calls in a flow lead
 nowhere, the flow summaries are guesses, and that is a kill criterion for the approach.
@@ -240,6 +256,9 @@ dev questions are rechecked after every change.
 | `apps/api/src/enigram/application/evaluation/golden.py` | loading and checking the golden set |
 | `…/evaluation/golden_run.py` | answering with one system, extracting citations |
 | `…/evaluation/agent_repo.py` | the `agent+repo` baseline and its tools |
+| `…/application/agent_loop.py` | the tool loop and budgets both agents share |
+| `…/application/code_agent.py` | `enigram-agent`: graph tools, scope rule, diagnostics |
+| `…/application/repo_store.py` | bare partial clones (`REPO_STORE`) and the git-backed read tools |
 | `…/evaluation/citations.py` | the citation checker |
 | `…/evaluation/blind.py` | blind sheets, labels and unblinding |
 | `…/evaluation/evaluate.py` | scoring, verdicts and the report |

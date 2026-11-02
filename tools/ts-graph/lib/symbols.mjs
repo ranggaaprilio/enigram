@@ -3,6 +3,7 @@ import { bodyHash } from "./hash.mjs";
 import { relPath } from "./project.mjs";
 
 const MAX_SIGNATURE_CHARS = 300;
+const MAX_DECORATOR_CHARS = 200;
 
 /** Map key of a declaration node: its file and start offset. */
 export function declKey(node) {
@@ -11,6 +12,13 @@ export function declKey(node) {
 
 function decoratorNames(node) {
   return Node.isDecoratable(node) ? node.getDecorators().map((d) => d.getName()) : [];
+}
+
+/** Each decorator's source text on one line, clipped: `@UseGuards(AuthGuard('jwt'), RolesGuard)`. */
+function decoratorTexts(node) {
+  return Node.isDecoratable(node)
+    ? node.getDecorators().map((d) => d.getText().replace(/\s+/g, " ").slice(0, MAX_DECORATOR_CHARS))
+    : [];
 }
 
 function headLine(node) {
@@ -62,6 +70,7 @@ export function fileSymbols(root, sf) {
         body_hash: bodyHash(node.getText()),
         exported,
         decorators: decoratorNames(node),
+        decorators_text: decoratorTexts(node),
         signature: signature(node, short),
         body: node.getText(),
         parent,
