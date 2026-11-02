@@ -326,3 +326,97 @@ def test_dev_accuracy_is_a_share_of_the_labelled_questions(correct, verdict):
     ]
     hypothesis = evaluate._hypothesis({"code": {"items": items}}, {}, None)
     assert hypothesis["phase1_dev_accuracy"]["verdict"] == verdict
+
+
+def _diag(**kw):
+    return {
+        "graph_first": True,
+        "graph_hits": 4,
+        "read_calls": 2,
+        "reads_on_graph_lines": 1,
+        "repos_touched": ["org-app"],
+    } | kw
+
+
+@pytest.fixture
+def agent_systems(cfg):
+    """enigram-agent (6,000 input tokens, 3 tool calls) against agent+repo (12,000, 6)."""
+
+    def items(tokens_in, tool_calls, diagnostics):
+        out = []
+        for q in DEV:
+            item = _item(q, tokens_in=tokens_in, tool_calls=tool_calls)
+            if diagnostics:
+                item["diagnostics"] = _diag(graph_first=q != "b01")
+            out.append(item)
+        return out
+
+    ours = _answers(cfg, "enigram-agent", items(6000, 3, True))
+    agent = _answers(cfg, "agent+repo", items(12000, 6, False))
+    for path in (ours, agent):
+        path.with_suffix(".citations.json").write_text(
+            json.dumps(
+                {
+                    "answers": 10,
+                    "answers_fully_valid": 10,
+                    "citations": 20,
+                    "citations_valid": 20,
+                    "sentences_without_citation": 0,
+                }
+            )
+        )
+    sheet = write_blind_sheet(cfg, [ours, agent], seed=3).sheet_path
+    return ours, agent, sheet
+
+
+async def test_phase1b_passes_at_nine_and_cheaper(cfg, deps, agent_systems):
+    ours, agent, sheet = agent_systems
+    correct = {("enigram-agent", q): i < 9 for i, q in enumerate(DEV)}  # 9/10
+    correct |= {("agent+repo", q): True for q in DEV}
+    _label(sheet, correct)
+
+    run = await evaluate.run_eval(cfg, deps, [ours, agent], [sheet])
+
+    assert {k: v for k, v in run.verdicts.items() if k.startswith("phase1b")} == {
+        "phase1b_dev_accuracy": "PASS",
+        "phase1b_not_worse_than_agent": "PASS",
+        "phase1b_cheaper_than_agent": "PASS",
+        "phase1b_citations_valid": "PASS",
+    }
+    assert run.verdicts["phase1_dev_accuracy"] == "INSUFFICIENT DATA"  # no code answers
+    data = json.loads(run.report_path.with_suffix(".json").read_text())
+    cheaper = data["hypothesis"]["phase1b_cheaper_than_agent"]
+    assert cheaper["result"] == 0.5
+    assert "enigram-agent 6000, agent+repo 12000" in cheaper["note"]
+    ours_stats = data["systems"]["enigram-agent"]
+    assert ours_stats["diagnostics_mean"]["graph_first"] == 0.9
+    assert ours_stats["diagnostics_mean"]["repos_touched"] == 1.0
+    assert ours_stats["reads_on_graph_share"] == 0.5
+    assert "diagnostics_mean" not in data["systems"]["agent+repo"]
+    md = run.report_path.read_text()
+    assert "## Agent diagnostics" in md
+    assert "| enigram-agent | 3.000 | 0.900 | 4.000 | 0.500 | 1.000 |" in md
+
+
+async def test_phase1b_fails_at_eight_or_when_not_cheaper(cfg, deps, agent_systems):
+    ours, agent, sheet = agent_systems
+    correct = {("enigram-agent", q): i < 8 for i, q in enumerate(DEV)}  # 8/10
+    correct |= {("agent+repo", q): True for q in DEV}
+    _label(sheet, correct)
+    run = await evaluate.run_eval(cfg, deps, [ours, agent], [sheet])
+    assert run.verdicts["phase1b_dev_accuracy"] == "FAIL"
+    assert run.verdicts["phase1b_not_worse_than_agent"] == "FAIL"  # 8 < 10 − 1
+
+    data = json.loads(ours.read_text())
+    for item in data["items"]:
+        item["tokens_in"] = 13200  # 1.1 × agent+repo
+    ours.write_text(json.dumps(data))
+    run = await evaluate.run_eval(cfg, deps, [ours, agent], [sheet])
+    assert run.verdicts["phase1b_cheaper_than_agent"] == "FAIL"
+
+
+async def test_phase1b_criteria_only_with_an_enigram_agent_run(cfg, deps, two_systems):
+    code, agent, sheet = two_systems
+    run = await evaluate.run_eval(cfg, deps, [code, agent], [sheet])
+    assert not any(k.startswith("phase1b") for k in run.verdicts)
+    assert "## Agent diagnostics" not in run.report_path.read_text()

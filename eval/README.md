@@ -128,13 +128,16 @@ Commits between them only touch dependencies, i18n JSON or docs.
 
 1. Answer the `dev` questions with each system; each run writes
    `data/eval/answers-<system>-<ts>.json`:
-   `uv run enigram golden answer --system code --split dev` and
-   `uv run enigram golden answer --system agent+repo --split dev`. Add `--category injection` or
+   `uv run enigram golden answer --system code --split dev`,
+   `uv run enigram golden answer --system agent+repo --split dev` and (Phase 1b)
+   `uv run enigram golden answer --system enigram-agent --split dev`. Add `--category injection` or
    `--category unanswerable` (without `--split`) for those categories. `verdict` and `reserve`
    are refused without `--allow-verdict`.
 2. `uv run enigram golden blind data/eval/answers-code-….json data/eval/answers-agent+repo-….json`
    writes `data/eval/blind-<ts>.md` (answers normalized, letters shuffled per question) and the
-   sealed `blind-<ts>.key.json`. Do not open the key.
+   sealed `blind-<ts>.key.json`. Do not open the key. Phase 1b pairs the new run with the cached
+   baseline: `golden blind data/eval/answers-enigram-agent-….json
+   data/eval/answers-agent+repo-20261101-202727.json`.
 3. Mark each answer `[x]` correct or `[-]` wrong against the ground truth.
 4. `uv run enigram golden unblind data/eval/blind-<ts>.md` opens the key and scores each system.
 
@@ -151,8 +154,11 @@ holds; an abstention may cite nothing.
 
 `uv run enigram eval --answers <answers-code> <answers-agent+repo> --blind <blind-sheet>` scores
 the labelled answers (accuracy per split and category, citations, abstention, injection, tokens,
-latency, tool calls) and gives the Phase-1 criteria a verdict. `--judge` adds Ragas and the LLM
-claim judge.
+latency, tool calls) and gives the Phase-1 criteria a verdict. With an `enigram-agent` answers
+file it also scores the Phase-1b criteria (`phase1b_dev_accuracy` ≥ 9/10,
+`phase1b_not_worse_than_agent`, `phase1b_cheaper_than_agent` = mean input tokens against
+`agent+repo` on the same labelled dev questions, `phase1b_citations_valid`) and adds an "Agent
+diagnostics" table. `--judge` adds Ragas and the LLM claim judge.
 
 Normalization removes `[n]` citations, `file:line@sha` citations, headings, the References
 section, emphasis and the origin tags. Contract for Phase 2: answers render a sentence's origin as
@@ -177,3 +183,29 @@ The baseline a developer would use instead of Enigram: a coding agent reading th
   `budget_exhausted` per item; cached per (question, sha, model) in `data/eval/agent-cache/`, so
   a rerun is free. Code: `application/evaluation/agent_repo.py`.
 - Reported: accuracy (blind labels), citation validity, tokens, latency, tool calls.
+
+## `enigram-agent` (Phase 1b)
+
+Enigram's own answerer: the `agent+repo` tool loop (`application/agent_loop.py`, same model,
+temperature 0, ≤ 30 tool calls, ≤ 120k cumulative input tokens) with the code graph as its first
+tools. Code: `application/code_agent.py`.
+
+- Graph tools: `search_code(query, repo?)` (full-text over flow summaries, symbol names and
+  bodies), `find_symbol(name, repo?)` (lines, signature, decorators, `guarded_by` /
+  `intercepted_by` / `module_imports` / `provides` / `provides_config`, the class's decorators and
+  guards, the summary), `callers` / `callees(symbol, repo)`, `entrypoint_flow(route, repo?)`,
+  `list_repos()`. Every row carries `repo=<name> Qualified.name (kind) file:start-end@sha12`.
+- Read tools: `read_file(repo, path, start?, end?)` and `grep(repo, pattern, glob?)`, served by
+  `git` from a bare partial clone at the indexed commit (`REPO_STORE`, default `data/repos/`,
+  filled by `enigram repo`; `application/repo_store.py`). Secret files are not read and secret
+  values are redacted, as in `agent+repo`.
+- Scope: read tools only work on a repository that appeared in a graph result this question, the
+  one the caller selected (`golden answer` selects the golden set's repository), or, while the
+  graph has found nothing, any repository `list_repos()` showed; at most 3 repositories per
+  question. Violations come back to the model as text.
+- Output: like `agent+repo` plus `diagnostics` per item: `graph_first` (the first tool was a
+  graph tool), `graph_hits`, `read_calls`, `reads_on_graph_lines` (reads of a file a graph result
+  named), `repos_touched`. Cached per (question, indexed shas, repo, model) in
+  `data/eval/enigram-agent-cache/`.
+- Citations stay `file:start-end@sha12` inline (no repository prefix): the sha identifies the
+  indexed snapshot, and the blind normaliser and citation checker parse this form.

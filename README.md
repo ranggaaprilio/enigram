@@ -117,6 +117,9 @@ The server loads the index once at startup: after `enigram index`, reconnect it
 (`/mcp` → enigram → Reconnect). If long calls time out, start `claude` with a higher
 `MCP_TOOL_TIMEOUT` (milliseconds).
 
+`query_knowledge_base` also takes `scope="code"` (and `repo=<url>`) to ask the code agent about the
+indexed repositories; it needs `STORAGE_BACKEND=postgres`.
+
 A second tool, `list_documents()`, lists the documents and their indexing status.
 
 ### Over HTTP (another machine)
@@ -173,7 +176,7 @@ write the same index.
 | `DELETE /documents/{book}` | Queue deleting a document: its index entries, parsed files and uploaded file (202; 404 unknown; 409 while it has a job) |
 | `POST /repos` `{"url", "ref"?}` | Queue indexing (or re-syncing) a Git repository's Markdown (202; 422 bad URL; 409 already queued) |
 | `GET /jobs/{id}` | One indexing job: status, result (chunks, timings, report), error |
-| `POST /query` `{"question", "mode": "mix"\|"naive"}` | Answer with sources, chunks, entities and relations, plus its stored `id` |
+| `POST /query` `{"question", "mode": "mix"\|"naive", "scope": "docs"\|"code", "repo"?}` | Answer with sources, chunks, entities and relations, plus its stored `id`; `scope: "code"` asks the code agent (`mode` ignored, `repo` = a repository URL) |
 | `GET /queries?limit=50` | Recent queries, newest first, without their traces (`limit` 1-200) |
 | `GET /queries/{id}` | The stored trace of an earlier query |
 | `POST /mcp` | MCP over streamable HTTP (see [Over HTTP](#over-http-another-machine)) |
@@ -278,8 +281,12 @@ uv run enigram query --scope code "Can an unconfirmed user log in?"
 
 `enigram repo` indexes one repository without the API and writes the result to
 `data/reports/repo-index-<ts>.json`; `--limit N` summarises only the first N entry points.
-`query --scope code` answers from the flow summaries and the source, citing
-`file:start-end@sha`.
+`enigram repo` also keeps a bare partial clone of the repository in `REPO_STORE` (default
+`DATA_DIR/repos`; blobs are fetched on first read). `query --scope code [--repo <url>]` answers
+with an agent whose first tools are the code graph (search, symbols with their decorators,
+guards and module wiring, callers/callees, entry-point flows); it then reads only the lines the
+graph pointed at, from that clone at the indexed commit, and cites `file:start-end@sha`. The
+`code` system of `enigram golden answer` (graph → one prompt) stays as a frozen ablation.
 
 ### Correcting the graph
 
