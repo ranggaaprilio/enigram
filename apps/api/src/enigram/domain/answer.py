@@ -24,6 +24,12 @@ class Source:
     section: str
     pages: str  # "3-4", "" if unknown
     citation: str  # the raw LightRAG file_path, always present
+    # Where the sentence citing it comes from: "code", "summary", "human" or "document" ("" for
+    # sources built before Phase 2, e.g. cached answers).
+    origin: str = ""
+    # "<repo_id>:<symbol_id>" for a code source resolved to a graph hit, the annotation id for a
+    # human source, else "".
+    target: str = ""
 
 
 @dataclass(frozen=True)
@@ -74,4 +80,6 @@ def parse_citation(ref: int, citation: str) -> Source:
     pages = next((p.removeprefix("p.") for p in parts[1:] if p.startswith("p.")), "")
     # A truncated citation loses its middle fields, so only a full one has a trustworthy section.
     section = parts[1] if len(parts) == 4 else ""
-    return Source(ref=ref, title=parts[0], section=section, pages=pages, citation=citation)
+    return Source(
+        ref=ref, title=parts[0], section=section, pages=pages, citation=citation, origin="document"
+    )

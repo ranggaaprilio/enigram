@@ -93,6 +93,16 @@ CREATE INDEX IF NOT EXISTS code_summaries_fts ON code_summaries
 ALTER TABLE code_symbols ADD COLUMN IF NOT EXISTS decorators_text JSONB NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS code_symbols_fts ON code_symbols
     USING GIN (to_tsvector('english', body));
+ALTER TABLE code_repos ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+CREATE TABLE IF NOT EXISTS code_symbol_changes (
+    repo_id BIGINT NOT NULL REFERENCES code_repos(id) ON DELETE CASCADE,
+    symbol_id TEXT NOT NULL,
+    old_hash TEXT,
+    new_hash TEXT,
+    sha TEXT NOT NULL,
+    at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS code_symbol_changes_repo ON code_symbol_changes (repo_id, at);
 """
 
 # The question's stemmed words OR-ed: any word may match, ts_rank prefers more matches.
@@ -167,6 +177,8 @@ def _repo(row: asyncpg.Record) -> dict[str, Any]:
         "indexed_sha": row["indexed_sha"],
         "indexed_at": row["indexed_at"],
         "report": _loads(row["report"]),
+        # The secret itself only through webhook_secret().
+        "webhook": row["webhook_secret"] is not None,
     }
 
 
@@ -486,3 +498,77 @@ class PostgresCodeGraph:
             f"{_escape_like(verb.upper())} {_escape_like(path)}",
         )
         return [(_entrypoint(r), _symbol(r)) for r in rows]
+
+    async def get_repo_by_id(self, repo_id: int) -> dict[str, Any] | None:
+        row = await self.pool.fetchrow(
+            "SELECT * FROM code_repos WHERE workspace = $1 AND id = $2", self.workspace, repo_id
+        )
+        return _repo(row) if row else None
+
+    async def webhook_secret(self, repo_id: int) -> str | None:
+        return await self.pool.fetchval(
+            "SELECT webhook_secret FROM code_repos WHERE workspace = $1 AND id = $2",
+            self.workspace,
+            repo_id,
+        )
+
+    async def set_webhook_secret(self, repo_id: int, secret: str) -> None:
+        await self.pool.execute(
+            "UPDATE code_repos SET webhook_secret = $3 WHERE workspace = $1 AND id = $2",
+            self.workspace,
+            repo_id,
+            secret,
+        )
+
+    async def delete_repo(self, repo_id: int) -> None:
+        await self.pool.execute(
+            "DELETE FROM code_repos WHERE workspace = $1 AND id = $2", self.workspace, repo_id
+        )
+
+    async def symbol_hashes(self, repo_id: int) -> dict[str, str]:
+        rows = await self.pool.fetch(
+            "SELECT id, body_hash FROM code_symbols WHERE repo_id = $1", repo_id
+        )
+        return {r["id"]: r["body_hash"] for r in rows}
+
+    async def files(self, repo_id: int) -> list[CodeFile]:
+        rows = await self.pool.fetch(
+            "SELECT path, blob_sha FROM code_files WHERE repo_id = $1 ORDER BY path", repo_id
+        )
+        return [CodeFile(r["path"], r["blob_sha"]) for r in rows]
+
+    async def import_edges(self, repo_id: int) -> list[tuple[str, str]]:
+        # src and dst of an `imports` edge are file paths, not symbol ids.
+        rows = await self.pool.fetch(
+            "SELECT DISTINCT src, dst FROM code_edges "
+            "WHERE repo_id = $1 AND kind = 'imports' AND resolved ORDER BY src, dst",
+            repo_id,
+        )
+        return [(r["src"], r["dst"]) for r in rows]
+
+    async def record_symbol_changes(
+        self, repo_id: int, sha: str, changes: list[tuple[str, str | None, str | None]]
+    ) -> None:
+        await self.pool.executemany(
+            "INSERT INTO code_symbol_changes (repo_id, symbol_id, old_hash, new_hash, sha) "
+            "VALUES ($1, $2, $3, $4, $5)",
+            [(repo_id, symbol_id, old, new, sha) for symbol_id, old, new in changes],
+        )
+
+    async def symbol_changes(self, repo_id: int) -> list[dict[str, Any]]:
+        """Recorded changes, oldest first (tests and Phase 5's what_changed_since)."""
+        rows = await self.pool.fetch(
+            "SELECT symbol_id, old_hash, new_hash, sha, at FROM code_symbol_changes "
+            "WHERE repo_id = $1 ORDER BY at, symbol_id",
+            repo_id,
+        )
+        return [dict(r) for r in rows]
+
+    async def symbols_by_hash(self, repo_id: int, body_hashes: list[str]) -> list[CodeSymbol]:
+        rows = await self.pool.fetch(
+            f"SELECT {_SYMBOL_COLUMNS} FROM code_symbols "
+            "WHERE repo_id = $1 AND body_hash = ANY($2::text[]) ORDER BY file, line_start",
+            repo_id,
+            list(body_hashes),
+        )
+        return [_symbol(r) for r in rows]

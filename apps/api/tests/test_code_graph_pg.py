@@ -7,7 +7,7 @@ import pytest
 from code_fakes import SHA, agent_graph, fixture_graph
 
 from enigram.adapters.driven.postgres_code_graph import PostgresCodeGraph
-from enigram.domain.code import IMPLEMENTATION_CALL, CodeFile, FlowSummary
+from enigram.domain.code import IMPLEMENTATION_CALL, CodeEdge, CodeFile, FlowSummary
 
 pytestmark = pytest.mark.postgres
 URL = "https://github.com/org/app"
@@ -135,3 +135,50 @@ async def test_workspaces_are_isolated(graph, pool):
         assert await other.list_repos() == []
     finally:
         await pool.execute("DELETE FROM code_repos WHERE workspace = $1", other.workspace)
+
+
+async def test_secret_hashes_files_imports_changes_and_delete(graph, pool):
+    parsed = dataclasses.replace(
+        fixture_graph(),
+        edges=[
+            *fixture_graph().edges,
+            CodeEdge(
+                "src/app.controller.ts",
+                "src/app.service.ts",
+                "imports",
+                "src/app.controller.ts",
+                1,
+                True,
+            ),
+            CodeEdge("src/app.service.ts", "bcrypt", "imports", "src/app.service.ts", 1, False),
+        ],
+    )
+    files = [CodeFile("src/app.service.ts", "a" * 40), CodeFile("src/app.controller.ts", "b" * 40)]
+    repo_id = await graph.replace_repo(URL, None, SHA, files, parsed)
+
+    assert (await graph.get_repo_by_id(repo_id))["webhook"] is False
+    await graph.set_webhook_secret(repo_id, "s3cret")
+    assert await graph.webhook_secret(repo_id) == "s3cret"
+    assert (await graph.get_repo_by_id(repo_id))["webhook"] is True
+    assert (await graph.symbol_hashes(repo_id))[SERVICE] == "h-AppService.find"
+    assert [f.path for f in await graph.files(repo_id)] == [
+        "src/app.controller.ts",
+        "src/app.service.ts",
+    ]
+    assert await graph.import_edges(repo_id) == [("src/app.controller.ts", "src/app.service.ts")]
+    (same,) = await graph.symbols_by_hash(repo_id, ["h-AppService.find"])
+    assert same.id == SERVICE
+
+    await graph.record_symbol_changes(repo_id, SHA, [(SERVICE, "old", "new")])
+    assert [(c["symbol_id"], c["new_hash"]) for c in await graph.symbol_changes(repo_id)] == [
+        (SERVICE, "new")
+    ]
+    other = PostgresCodeGraph(pool, f"test_{uuid4().hex[:8]}")
+    assert await other.get_repo_by_id(repo_id) is None
+    assert await other.webhook_secret(repo_id) is None
+    await other.delete_repo(repo_id)  # another workspace: nothing happens
+    assert await graph.get_repo_by_id(repo_id) is not None
+
+    await graph.delete_repo(repo_id)
+    assert await graph.get_repo_by_id(repo_id) is None
+    assert await graph.symbol_changes(repo_id) == []  # cascade

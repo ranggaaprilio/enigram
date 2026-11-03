@@ -28,6 +28,8 @@ CONFIG_ENV = (
     "REPO_HOSTS",
     "TS_GRAPH_DIR",
     "REPO_STORE",
+    "ANNOTATION_VERIFIERS",
+    "REPO_POLL_SECS",
 )
 
 

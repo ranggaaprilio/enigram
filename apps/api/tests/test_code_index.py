@@ -97,7 +97,7 @@ async def test_index_code_stores_graph_blobs_and_summaries(cfg, deps, tmp_path):
     stored = graph_repo.repos[result["repo_id"]]
     assert stored["indexed_sha"] == head
     assert stored["report"]["summaries"]["flows"] == 2  # merged into the stored report
-    blobs = {f.path for f in graph_repo.files[result["repo_id"]]}
+    blobs = {f.path for f in graph_repo.blobs[result["repo_id"]]}
     # Every TypeScript blob at HEAD, the baseline for a later diff.
     assert blobs == {
         "src/app.service.ts",
@@ -105,7 +105,7 @@ async def test_index_code_stores_graph_blobs_and_summaries(cfg, deps, tmp_path):
         "src/types.d.ts",
         "node_modules/pkg/index.ts",
     }
-    assert all(len(f.blob_sha) == 40 for f in graph_repo.files[result["repo_id"]])
+    assert all(len(f.blob_sha) == 40 for f in graph_repo.blobs[result["repo_id"]])
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")

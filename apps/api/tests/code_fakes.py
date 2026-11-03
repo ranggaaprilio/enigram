@@ -2,9 +2,11 @@
 
 import dataclasses
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from enigram.application.ports import ChatReply, ParsedGraph, ToolCall
+from enigram.domain.annotation import ACTIVE_STATUSES, CITED_STATUSES, Annotation, AnnotationEvent
 from enigram.domain.code import (
     IDENTIFIER,
     IMPLEMENTATION_CALL,
@@ -14,6 +16,7 @@ from enigram.domain.code import (
     FlowSummary,
     is_abstract,
 )
+from enigram.domain.errors import NotFound
 
 SHA = "70ae60dbb609" + "0" * 28
 
@@ -146,10 +149,12 @@ class FakeCodeGraph:
     def __init__(self, graph: ParsedGraph | None = None):
         self.repos: dict[int, dict[str, Any]] = {}
         self.graphs: dict[int, ParsedGraph] = {}
-        self.files: dict[int, list] = {}
+        self.blobs: dict[int, list] = {}  # repo id -> CodeFile list (the port's files())
         self.stored: dict[tuple[int, str, str], FlowSummary] = {}
         self.saved_batches: list[int] = []
         self.calls: list[tuple[str, Any]] = []
+        self.secrets: dict[int, str] = {}
+        self.changes: list[tuple[int, str, str, str | None, str | None]] = []
         if graph:
             self.repos[1] = {
                 "id": 1,
@@ -176,7 +181,7 @@ class FakeCodeGraph:
             "report": graph.report,
         }
         self.graphs[repo_id] = graph
-        self.files[repo_id] = files
+        self.blobs[repo_id] = files
         return repo_id
 
     async def set_report(self, repo_id, report):
@@ -283,6 +288,178 @@ class FakeCodeGraph:
             for e, s in await self.entrypoints(repo_id)
             if e.kind == "http_route" and e.route.lower() == want
         ]
+
+    async def get_repo_by_id(self, repo_id):
+        repo = self.repos.get(repo_id)
+        return {**repo, "webhook": repo_id in self.secrets} if repo else None
+
+    async def webhook_secret(self, repo_id):
+        return self.secrets.get(repo_id) if repo_id in self.repos else None
+
+    async def set_webhook_secret(self, repo_id, secret):
+        self.secrets[repo_id] = secret
+
+    async def delete_repo(self, repo_id):
+        for table in (self.repos, self.graphs, self.blobs, self.secrets):
+            table.pop(repo_id, None)
+        self.stored = {k: v for k, v in self.stored.items() if k[0] != repo_id}
+        self.changes = [c for c in self.changes if c[0] != repo_id]
+
+    async def symbol_hashes(self, repo_id):
+        return {s.id: s.body_hash for s in self.graphs[repo_id].symbols}
+
+    async def files(self, repo_id):
+        return list(self.blobs.get(repo_id, []))
+
+    async def import_edges(self, repo_id):
+        return sorted(
+            {
+                (e.src, e.dst)
+                for e in self.graphs[repo_id].edges
+                if e.kind == "imports" and e.resolved
+            }
+        )
+
+    async def record_symbol_changes(self, repo_id, sha, changes):
+        self.changes.extend((repo_id, sha, *c) for c in changes)
+
+    async def symbols_by_hash(self, repo_id, body_hashes):
+        wanted = set(body_hashes)
+        return [s for s in self.graphs[repo_id].symbols if s.body_hash in wanted]
+
+
+class FakeAnnotations:
+    """AnnotationRepository in memory: same filters and event rules as Postgres."""
+
+    def __init__(self):
+        self.notes: dict[int, Annotation] = {}
+        self.events_: list[AnnotationEvent] = []
+        self._clock = datetime(2026, 11, 1, tzinfo=UTC)
+
+    def _now(self) -> datetime:
+        # Strictly increasing, so `version` changes on every update.
+        self._clock += timedelta(seconds=1)
+        return self._clock
+
+    async def ensure_schema(self):
+        pass
+
+    def _log(self, note_id, actor, action, old, new):
+        self.events_.append(
+            AnnotationEvent(len(self.events_) + 1, note_id, actor, action, old, new, self._now())
+        )
+
+    async def create(self, fields, actor):
+        now = self._now()
+        defaults = {
+            "repo_id": None,
+            "scope": "deps",
+            "by": "",
+            "reason": None,
+            "conflict": False,
+            "target_hash": None,
+            "deps_hash": None,
+            "candidates": (),
+            "verified_by": None,
+            "verified_at": None,
+            "verify_by": None,
+        }
+        values = {**defaults, **fields}
+        values["candidates"] = tuple(values["candidates"])
+        note = Annotation(id=len(self.notes) + 1, created_at=now, updated_at=now, **values)
+        self.notes[note.id] = note
+        self._log(note.id, actor, "created", None, {k: fields[k] for k in fields})
+        return note
+
+    async def get(self, annotation_id):
+        return self.notes.get(annotation_id)
+
+    async def list(
+        self, *, status=None, target_kind=None, repo_id=None, target_ref=None, limit=200
+    ):
+        out = [
+            n
+            for n in sorted(self.notes.values(), key=lambda n: -n.id)
+            if (status is None and n.status != "rejected" or n.status == status)
+            and (target_kind is None or n.target_kind == target_kind)
+            and (repo_id is None or n.repo_id == repo_id)
+            and (target_ref is None or n.target_ref == target_ref)
+        ]
+        return out[:limit]
+
+    async def for_symbols(self, repo_id, symbol_ids):
+        out: dict[str, list[Annotation]] = {}
+        for n in sorted(self.notes.values(), key=lambda n: n.id):
+            if (
+                n.target_kind == "symbol"
+                and n.repo_id == repo_id
+                and n.target_ref in symbol_ids
+                and n.status in CITED_STATUSES
+            ):
+                out.setdefault(n.target_ref, []).append(n)
+        return out
+
+    async def search_text(self, question, kinds, limit=5):
+        words = {w.lower() for w in re.findall(r"\w+", question) if len(w) >= 4}
+        hits = []
+        for n in sorted(self.notes.values(), key=lambda n: n.id):
+            if n.target_kind not in kinds or n.status not in ACTIVE_STATUSES:
+                continue
+            named = n.target_ref.lower() in question.lower()
+            shared = words & {w.lower() for w in re.findall(r"\w+", n.text)}
+            if named or shared:
+                hits.append((not named, -len(shared), n.id, n))
+        return [h[-1] for h in sorted(hits, key=lambda h: h[:3])][:limit]
+
+    async def update(self, annotation_id, changes, actor, action):
+        before = self.notes.get(annotation_id)
+        if before is None:
+            raise NotFound(f"No annotation {annotation_id}")
+        values = dict(changes)
+        if "candidates" in values:
+            values["candidates"] = tuple(values["candidates"])
+        after = dataclasses.replace(before, **values, updated_at=self._now())
+        self.notes[annotation_id] = after
+        keys = list(changes)
+        self._log(
+            annotation_id,
+            actor,
+            action,
+            {k: getattr(before, k) for k in keys},
+            {k: getattr(after, k) for k in keys},
+        )
+        return after
+
+    async def events(self, annotation_id):
+        return [e for e in self.events_ if e.annotation_id == annotation_id]
+
+    async def expire(self, now, actor):
+        due = [
+            n.id
+            for n in self.notes.values()
+            if n.status == "verified" and n.verify_by is not None and n.verify_by < now
+        ]
+        changes = {"status": "needs_verification", "reason": "verify_by"}
+        return [await self.update(i, changes, actor, "flagged") for i in sorted(due)]
+
+    async def orphan_repo(self, repo_id, actor):
+        ids = sorted(
+            n.id
+            for n in self.notes.values()
+            if n.target_kind == "symbol"
+            and n.repo_id == repo_id
+            and n.status not in ("rejected", "orphaned")
+        )
+        for i in ids:
+            await self.update(i, {"status": "orphaned", "reason": "orphan"}, actor, "orphaned")
+        return len(ids)
+
+    async def version(self, repo_ids):
+        notes = [
+            n for n in self.notes.values() if n.target_kind == "symbol" and n.repo_id in repo_ids
+        ]
+        latest = max((n.updated_at for n in notes), default=None)
+        return f"{len(notes)}:{latest.isoformat() if latest else ''}"
 
 
 class FakeChat:

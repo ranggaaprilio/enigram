@@ -11,13 +11,20 @@ from enigram.adapters.driven.lightrag_engine import (
     open_engine,
 )
 from enigram.adapters.driven.openai_llm import OpenAIChatModel, check_providers
+from enigram.adapters.driven.postgres_annotations import PostgresAnnotations
 from enigram.adapters.driven.postgres_code_graph import PostgresCodeGraph
 from enigram.adapters.driven.postgres_jobs import PostgresJobStore, open_store
 from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
 from enigram.adapters.driven.ragas_scorer import RagasScorer
 from enigram.adapters.driven.ts_graph_sidecar import TsGraphSidecar
 from enigram.adapters.driven.voyage_embedding import make_embedding_func
-from enigram.application.ports import CodeGraphRepository, Deps, JobRepository, MemoryRepository
+from enigram.application.ports import (
+    AnnotationRepository,
+    CodeGraphRepository,
+    Deps,
+    JobRepository,
+    MemoryRepository,
+)
 from enigram.config import Config
 
 
@@ -40,6 +47,14 @@ async def _new_code_graph(cfg: Config, store: JobRepository) -> CodeGraphReposit
     return graph
 
 
+async def _new_annotations(cfg: Config, store: JobRepository) -> AnnotationRepository:
+    # Like _new_memory: the annotation tables share the job store's pool.
+    assert isinstance(store, PostgresJobStore)
+    notes = PostgresAnnotations(store.pool, cfg.workspace)
+    await notes.ensure_schema()
+    return notes
+
+
 def build_deps(cfg: Config) -> Deps:
     return Deps(
         open_engine=partial(open_engine, cfg),
@@ -51,6 +66,7 @@ def build_deps(cfg: Config) -> Deps:
         generator=partial(OpenAIChatModel, cfg),
         code_parser=partial(TsGraphSidecar, cfg),
         new_code_graph=partial(_new_code_graph, cfg),
+        new_annotations=partial(_new_annotations, cfg),
         judge=partial(OpenAIChatModel, cfg.judge),
         answer_scorer=partial(RagasScorer, cfg),
         query_budget={

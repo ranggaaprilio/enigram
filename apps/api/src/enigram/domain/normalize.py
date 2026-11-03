@@ -11,6 +11,7 @@ _CITATION = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")  # [1], [1, 2]
 _CODE_CITATION = re.compile(
     r"\s*\(?[\w./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|cts|mts|json|md):\d+(?:-\d+)?@[0-9a-f]{7,40}\)?"
 )
+_NOTE_CITATION = re.compile(r"\s*note#\d+")  # annotation citations
 # Per-sentence origin tags as answers render them (contract in eval/README.md).
 _ORIGIN_TAG = re.compile(r"\s*\[(?:code|summary|human|document|unsupported)\]", re.IGNORECASE)
 _EMPHASIS = re.compile(r"\*\*|__|`")
@@ -27,7 +28,7 @@ def normalize_answer(text: str) -> str:
         if _HEADING.match(line):
             continue
         line = _LIST_MARKER.sub("", line)
-        for pattern in (_CITATION, _CODE_CITATION, _ORIGIN_TAG, _EMPHASIS):
+        for pattern in (_CITATION, _CODE_CITATION, _NOTE_CITATION, _ORIGIN_TAG, _EMPHASIS):
             line = pattern.sub("", line)
         lines.append(_SPACE_BEFORE_PUNCT.sub("", _SPACES.sub(" ", line)).strip())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
