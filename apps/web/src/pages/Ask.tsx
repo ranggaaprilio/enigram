@@ -6,7 +6,8 @@ import { formatSecs } from '../format'
 
 export default function Ask() {
   const [question, setQuestion] = useState('')
-  const [mode, setMode] = useState<Mode>('mix')
+  // 'code' asks the graph-first code agent (scope code); the others the document index.
+  const [mode, setMode] = useState<Mode | 'code'>('mix')
   const [pending, setPending] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [result, setResult] = useState<(QueryResult & { id: number }) | null>(null)
@@ -28,7 +29,8 @@ export default function Ask() {
     setError(null)
     setResult(null)
     try {
-      setResult(await ask(question.trim(), mode))
+      const q = question.trim()
+      setResult(await (mode === 'code' ? ask(q, 'mix', 'code') : ask(q, mode)))
     } catch (e) {
       setError(messageOf(e))
     } finally {
@@ -55,9 +57,14 @@ export default function Ask() {
         />
         <div className="ask-controls">
           <label htmlFor="mode">Mode</label>
-          <select id="mode" value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
+          <select
+            id="mode"
+            value={mode}
+            onChange={(e) => setMode(e.target.value as Mode | 'code')}
+          >
             <option value="mix">GraphRAG (mix)</option>
             <option value="naive">Vector only (naive)</option>
+            <option value="code">Code (agent)</option>
           </select>
           <button type="submit" disabled={pending || !question.trim()}>
             Ask

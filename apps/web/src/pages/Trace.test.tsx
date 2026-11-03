@@ -70,14 +70,14 @@ describe('Trace', () => {
     expect(await screen.findByText('Mira Okafor designed the protocol.')).toBeInTheDocument()
     expect(screen.getByText('chunk-abc')).toBeInTheDocument()
     expect(screen.getAllByText('Lighthouse Protocol').length).toBeGreaterThan(0)
-    // Names open the graph editor on that name.
+    // Names open the Annotations page with a note on that entity prefilled.
     expect(screen.getByRole('link', { name: 'Mira Okafor' })).toHaveAttribute(
       'href',
-      '/graph?q=Mira%20Okafor',
+      '/annotations?target_kind=entity&target_ref=Mira%20Okafor',
     )
     expect(screen.getAllByRole('link', { name: 'Lighthouse Protocol' })[0]).toHaveAttribute(
       'href',
-      '/graph?q=Lighthouse%20Protocol',
+      '/annotations?target_kind=entity&target_ref=Lighthouse%20Protocol',
     )
     expect(screen.getByText('Chunks (1)')).toBeInTheDocument()
   })
