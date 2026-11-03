@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 
 import pytest
 from code_fakes import FakeAnnotations, FakeCodeGraph
@@ -638,3 +639,203 @@ def test_documents_show_their_repository(env, pg_cfg):
     [row] = client.get("/documents").json()
 
     assert row["repo"] == "https://github.com/org/handbook"
+
+
+# --- annotations, repositories, webhook --------------------------------------------------------
+
+
+@pytest.fixture
+def notes_env(pg_cfg, clean_env, fake_memory, monkeypatch):
+    """Keyed app over one shared FakeCodeGraph(agent_graph()) and FakeAnnotations; yields
+    (client, store, graph, notes, make) where make(verifiers) rebuilds the app with
+    ANNOTATION_VERIFIERS set."""
+    from code_fakes import agent_graph
+
+    monkeypatch.setenv("ENIGRAM_API_KEYS", f"laptop-a:{LAPTOP_KEY},web:{WEB_KEY}")
+    store, graph, notes = FakeJobStore(), FakeCodeGraph(agent_graph()), FakeAnnotations()
+    monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: FakeRag())
+
+    def build(verifiers=""):
+        monkeypatch.setenv("ANNOTATION_VERIFIERS", verifiers)
+        cfg = Config.from_env(clean_env)
+        deps = _deps(cfg, store, fake_memory)
+
+        async def new_code_graph(s):
+            return graph
+
+        async def new_annotations(s):
+            return notes
+
+        deps.new_code_graph, deps.new_annotations = new_code_graph, new_annotations
+        return TestClient(api.create_app(cfg, deps))
+
+    with build() as client:
+        yield client, store, graph, notes, build
+
+
+SYMBOL_NOTE = {
+    "target_kind": "symbol",
+    "target_ref": "AppService.find",
+    "repo": 1,
+    "text": "Find also writes an audit row.",
+}
+
+
+def test_annotation_create_list_patch_and_history(notes_env):
+    client, _, _, _, _ = notes_env
+    web = _bearer(WEB_KEY)
+
+    created = client.post("/annotations", json={**SYMBOL_NOTE, "by": "Alice"}, headers=web)
+    assert created.status_code == 201
+    note = created.json()
+    assert (note["author"], note["owner"], note["status"], note["by"]) == (
+        "web",
+        "web",
+        "verified",
+        "Alice",
+    )
+    assert note["target_ref"] == "src/app.service.ts#AppService.find"
+    entity = {"target_kind": "entity", "target_ref": "Login", "text": "x", "owner": "laptop-a"}
+    assert client.post("/annotations", json=entity, headers=web).json()["status"] == "proposed"
+
+    listed = client.get("/annotations", params={"status": "verified"}, headers=web).json()
+    assert [n["id"] for n in listed] == [note["id"]]
+    patched = client.patch(f"/annotations/{note['id']}", json={"conflict": True}, headers=web)
+    assert patched.status_code == 200 and patched.json()["conflict"] is True
+
+    detail = client.get(f"/annotations/{note['id']}", headers=web).json()
+    assert [e["action"] for e in detail["events"]] == ["created", "conflict"]
+    assert detail["events"][1]["actor"] == "web"
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        ({**SYMBOL_NOTE, "text": "  "}, 422),
+        ({**SYMBOL_NOTE, "text": "x" * 4001}, 422),
+        ({"target_kind": "entity", "target_ref": "E", "text": "t", "repo": 1}, 422),
+        ({**SYMBOL_NOTE, "verify_by": "2027-01-01T00:00:00"}, 422),
+        ({**SYMBOL_NOTE, "target_ref": "find"}, 422),  # two symbols match
+        ({**SYMBOL_NOTE, "repo": 9}, 404),
+    ],
+)
+def test_annotation_create_rejects(notes_env, body, status):
+    client = notes_env[0]
+    assert client.post("/annotations", json=body, headers=_bearer(WEB_KEY)).status_code == status
+
+
+def test_verifier_rule_per_api_key(notes_env):
+    client, _, _, _, build = notes_env
+    body = {**SYMBOL_NOTE, "owner": "laptop-a"}
+    note = client.post("/annotations", json=body, headers=_bearer(WEB_KEY)).json()
+    path = f"/annotations/{note['id']}"
+
+    refused = client.patch(path, json={"status": "verified"}, headers=_bearer(WEB_KEY))
+    assert refused.status_code == 403 and "ANNOTATION_VERIFIERS" in refused.json()["detail"]
+    ok = client.patch(path, json={"status": "verified"}, headers=_bearer(LAPTOP_KEY))
+    assert ok.status_code == 200 and ok.json()["verified_by"] == "laptop-a"
+
+    with build("web") as trusted:
+        again = trusted.patch(path, json={"status": "rejected"}, headers=_bearer(WEB_KEY))
+        assert again.status_code == 200 and again.json()["status"] == "rejected"
+
+    assert (
+        client.patch(
+            "/annotations/99", json={"conflict": True}, headers=_bearer(WEB_KEY)
+        ).status_code
+        == 404
+    )
+    assert client.patch(path, json={}, headers=_bearer(WEB_KEY)).status_code == 422
+    assert client.get("/annotations/99", headers=_bearer(WEB_KEY)).status_code == 404
+
+
+def test_repos_symbols_secret_and_delete(notes_env):
+    client, store, _, _, _ = notes_env
+    web = _bearer(WEB_KEY)
+
+    (repo,) = client.get("/repos", headers=web).json()
+    assert (repo["id"], repo["name"], repo["webhook"]) == (1, "org-app", False)
+    secret = client.post("/repos/1/secret", headers=web).json()["secret"]
+    assert len(secret) == 64 and client.get("/repos", headers=web).json()[0]["webhook"] is True
+    assert client.post("/repos/9/secret", headers=web).status_code == 404
+
+    symbols = client.get("/repos/1/symbols", params={"q": "find"}, headers=web).json()
+    assert {s["qualified_name"] for s in symbols} == {"AppController.find", "AppService.find"}
+
+    assert client.delete("/repos/9", headers=web).status_code == 404
+    accepted = client.delete("/repos/1", headers=web)
+    assert accepted.status_code == 202
+    assert store.jobs[-1].kind == "delete_repo"
+    assert store.jobs[-1].payload == {
+        "repo_id": 1,
+        "url": "https://github.com/org/app",
+        "ref": None,
+        "api_key": "web",
+    }
+    assert client.delete("/repos/1", headers=web).status_code == 409  # its job is queued
+
+
+def _push(after="b" * 40, ref="refs/heads/main"):
+    import json as _json
+
+    return _json.dumps(
+        {"ref": ref, "after": after, "head_commit": {"timestamp": "2026-11-03T03:00:00Z"}}
+    ).encode()
+
+
+def _signed(body, secret):
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return {"x-hub-signature-256": f"sha256={digest}", "content-type": "application/json"}
+
+
+def test_webhook_is_open_but_signed(notes_env):
+    client, store, graph, _, _ = notes_env
+    assert client.post("/repos/1/webhook", content=_push()).status_code == 404  # no secret yet
+    secret = client.post("/repos/1/secret", headers=_bearer(WEB_KEY)).json()["secret"]
+    body = _push()
+
+    assert (
+        client.post("/repos/1/webhook", content=body, headers=_signed(body, "x")).status_code == 401
+    )
+    accepted = client.post("/repos/1/webhook", content=body, headers=_signed(body, secret))
+
+    assert accepted.status_code == 202  # no Bearer: the middleware lets the path through
+    job = store.jobs[-1]
+    assert (job.kind, job.payload["trigger"], job.payload["expected_sha"]) == (
+        "index_repo",
+        "webhook",
+        "b" * 40,
+    )
+    assert job.payload["pushed_at"] == "2026-11-03T03:00:00Z" and job.payload["received_at"]
+    queued = client.post("/repos/1/webhook", content=body, headers=_signed(body, secret))
+    assert queued.status_code == 200 and queued.json()["job"]["id"] == job.id
+    assert len(store.jobs) == 1
+
+    same = _push(after=graph.repos[1]["indexed_sha"])
+    ignored = client.post("/repos/1/webhook", content=same, headers=_signed(same, secret))
+    assert ignored.json()["ignored"].startswith("already indexed")
+    gone = _push(after="0" * 40)
+    assert (
+        "ignored"
+        in client.post("/repos/1/webhook", content=gone, headers=_signed(gone, secret)).json()
+    )
+    gitlab = _push(after="c" * 40)
+    store.jobs.clear()
+    ok = client.post("/repos/1/webhook", content=gitlab, headers={"x-gitlab-token": secret})
+    assert ok.status_code == 202
+    bad = client.post("/repos/1/webhook", content=b"{}", headers={"x-gitlab-token": secret})
+    assert bad.status_code == 400
+
+
+def test_webhook_ignores_another_branch(notes_env):
+    client, store, graph, _, _ = notes_env
+    graph.repos[1]["ref"] = "main"
+    secret = client.post("/repos/1/secret", headers=_bearer(WEB_KEY)).json()["secret"]
+    body = _push(ref="refs/heads/feature")
+
+    response = client.post("/repos/1/webhook", content=body, headers=_signed(body, secret))
+
+    assert response.json() == {"ignored": "ref feature"} and store.jobs == []
+    main = _push()
+    client.post("/repos/1/webhook", content=main, headers=_signed(main, secret))
+    assert store.jobs[-1].payload["ref"] == "main"

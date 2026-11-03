@@ -187,13 +187,17 @@ class FakeCodeGraph:
     async def set_report(self, repo_id, report):
         self.repos[repo_id]["report"] = report
 
+    def _repo_row(self, r):
+        return {**r, "webhook": r["id"] in self.secrets}
+
     async def get_repo(self, url, ref):
         return next(
-            (dict(r) for r in self.repos.values() if (r["url"], r["ref"]) == (url, ref)), None
+            (self._repo_row(r) for r in self.repos.values() if (r["url"], r["ref"]) == (url, ref)),
+            None,
         )
 
     async def list_repos(self):
-        return [dict(r) for r in self.repos.values()]
+        return [self._repo_row(r) for r in self.repos.values()]
 
     def _symbols(self, repo_id) -> dict[str, CodeSymbol]:
         return {s.id: s for s in self.graphs[repo_id].symbols}
@@ -291,7 +295,7 @@ class FakeCodeGraph:
 
     async def get_repo_by_id(self, repo_id):
         repo = self.repos.get(repo_id)
-        return {**repo, "webhook": repo_id in self.secrets} if repo else None
+        return self._repo_row(repo) if repo else None
 
     async def webhook_secret(self, repo_id):
         return self.secrets.get(repo_id) if repo_id in self.repos else None

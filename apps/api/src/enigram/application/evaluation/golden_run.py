@@ -13,6 +13,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from enigram.application.annotations import (
+    NewAnnotation,
+    change_annotation,
+    create_annotation,
+    resolve_symbol,
+)
 from enigram.application.code_agent import answer_with_agent
 from enigram.application.evaluation.claims import write_label_sheet
 from enigram.application.evaluation.golden import (
@@ -27,8 +33,9 @@ from enigram.application.evaluation.golden import (
     checkout_pinned,
 )
 from enigram.application.files import atomic_write_text, file_sha256
-from enigram.application.ports import Deps
+from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps
 from enigram.config import Config
+from enigram.domain.annotation import Annotation
 from enigram.domain.answer import QUERY_MODES, QueryResult, Source
 from enigram.domain.claims import split_claims
 from enigram.domain.code import parse_code_citations
@@ -40,8 +47,10 @@ SYSTEMS = (*QUERY_MODES, "code", "agent+repo", "enigram-agent")
 CODE_SYSTEMS = ("code", "agent+repo", "enigram-agent")
 # Answers that cite inline only (`path:line@sha`), never [n].
 AGENT_SYSTEMS = ("agent+repo", "enigram-agent")
-# behavior_annotation needs the annotations of Phase 2.
+# behavior_annotation needs annotations: only enigram-agent has them (Phase 2).
 CODE_SYSTEM_CATEGORIES = (BEHAVIOR, UNANSWERABLE, INJECTION)
+ENIGRAM_AGENT_CATEGORIES = (BEHAVIOR, BEHAVIOR_ANNOTATION, UNANSWERABLE, INJECTION)
+GOLDEN_ACTOR = "golden"
 LOCKED_SPLITS = ("verdict", "reserve")
 # Not after a name or a closing bracket: `roles[0]` and `args[1]` index arrays, they cite nothing.
 _REFS = re.compile(r"(?<![\w\])])\[(\d+(?:\s*,\s*\d+)*)\]")
@@ -169,6 +178,9 @@ async def answer_golden(
                 trace=result.extra.get("trace"),
                 budget_exhausted=result.extra.get("budget_exhausted"),
                 diagnostics=result.extra.get("diagnostics"),
+                # Phase 2: the cited notes ({id, status, reason, conflict}) and origin counts.
+                notes=result.extra.get("notes"),
+                origins=result.extra.get("origins"),
                 citations=answer_citations(
                     result.answer, result.sources, refs=system not in AGENT_SYSTEMS
                 ),
@@ -256,6 +268,28 @@ async def _answer_code(
         await store.close()
 
 
+async def _setup_annotation(
+    cfg: Config,
+    graph: CodeGraphRepository,
+    notes: AnnotationRepository,
+    repo: dict[str, Any],
+    setup: dict[str, Any],
+) -> Annotation:
+    """The question's annotation, created once (same target and text are reused); `conflict:
+    true` marks it as conflicting with the code."""
+    symbol = await resolve_symbol(graph, repo["id"], str(setup["target"]))
+    text = str(setup["text"]).strip()
+    existing = await notes.list(target_kind="symbol", repo_id=repo["id"], target_ref=symbol.id)
+    note = next((n for n in existing if n.text == text), None)
+    if note is None:
+        new = NewAnnotation("symbol", symbol.id, text, repo_id=repo["id"], by="golden set")
+        note = await create_annotation(cfg, graph, notes, new, GOLDEN_ACTOR)
+    if bool(setup.get("conflict")) != note.conflict:
+        changes = {"conflict": bool(setup.get("conflict"))}
+        note = await change_annotation(cfg, graph, notes, note.id, changes, GOLDEN_ACTOR)
+    return note
+
+
 async def _answer_enigram_agent(
     cfg: Config, deps: Deps, golden: GoldenSet, questions: list[GoldenQuestion]
 ) -> tuple[list[dict[str, Any]], int]:
@@ -264,10 +298,13 @@ async def _answer_enigram_agent(
     store = await deps.open_store()
     try:
         graph = await deps.new_code_graph(store)
-        await _pinned_repo(graph, repo_spec)
+        repo = await _pinned_repo(graph, repo_spec)
+        notes = await deps.new_annotations(store)
         chat = deps.generator()
 
         async def answer(q: GoldenQuestion) -> QueryResult:
+            if setup := q.setup.get("annotation"):
+                await _setup_annotation(cfg, graph, notes, repo, setup)
             return await answer_with_agent(
                 cfg,
                 chat,
@@ -277,6 +314,7 @@ async def _answer_enigram_agent(
                 repo_ref=repo_spec.ref,
                 cache_dir=cfg.eval_dir / "enigram-agent-cache",
                 model=cfg.llm_model,
+                notes=notes,
             )
 
         return await answer_golden(answer, questions, "enigram-agent")
@@ -301,12 +339,16 @@ async def run_golden(
     if system in CODE_SYSTEMS:
         if golden.repo is None:
             raise EnigramError(f"{system} answers a code golden set (one with `repo:`)")
-        if categories is None:
+        if categories is None and system == "enigram-agent":
+            categories = ENIGRAM_AGENT_CATEGORIES
+        elif categories is None:
             categories = CODE_SYSTEM_CATEGORIES
             skipped = sum(q.category == BEHAVIOR_ANNOTATION for q in golden.questions)
             if skipped:
                 log.info(
-                    "[golden] %d %s questions left out (Phase 2)", skipped, BEHAVIOR_ANNOTATION
+                    "[golden] %d %s questions left out (only enigram-agent has annotations)",
+                    skipped,
+                    BEHAVIOR_ANNOTATION,
                 )
     questions = select_questions(
         golden.questions, split=split, categories=categories, allow_verdict=allow_verdict

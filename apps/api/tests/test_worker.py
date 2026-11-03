@@ -343,3 +343,99 @@ async def test_repo_job_exception_fails_the_job(cfg, store, deps, monkeypatch):
 
     failed = await store.get_job(job.id)
     assert (failed.status, failed.error) == ("failed", "git clone failed: repository not found")
+
+
+async def test_delete_repo_job_runs_and_reports(cfg, store, deps, monkeypatch):
+    calls = []
+
+    async def fake_delete(cfg, graph, notes, repo_id):
+        calls.append((graph, notes, repo_id))
+        return {"repo_id": repo_id, "annotations_orphaned": 2}
+
+    monkeypatch.setattr(worker, "delete_repo_job", fake_delete)
+    job = await store.enqueue("delete_repo", {"repo_id": 3, "url": "u", "ref": None})
+
+    await worker.process_next(cfg, store, deps, "graph", "notes")
+
+    done = await store.get_job(job.id)
+    assert (done.status, done.result) == ("done", {"repo_id": 3, "annotations_orphaned": 2})
+    assert calls == [("graph", "notes", 3)]
+
+
+async def test_delete_repo_job_needs_the_code_graph(cfg, store, deps):
+    job = await store.enqueue("delete_repo", {"repo_id": 3})
+    await worker.process_next(cfg, store, deps)
+    failed = await store.get_job(job.id)
+    assert failed.status == "failed" and "postgres" in failed.error
+
+
+async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplog):
+    from code_fakes import SHA, FakeCodeGraph, fixture_graph
+
+    graph = FakeCodeGraph(fixture_graph())
+    for i, (url, ref) in enumerate(
+        [
+            ("https://github.com/org/same", None),
+            ("https://github.com/org/busy", "dev"),
+            ("https://github.com/org/down", None),
+            ("https://github.com/org/moved", "main"),
+        ],
+        start=2,
+    ):
+        graph.repos[i] = {"id": i, "url": url, "ref": ref, "indexed_sha": SHA, "report": {}}
+    await store.enqueue("index_repo", {"url": "https://github.com/org/busy"})
+    heads = {
+        "https://github.com/org/app": None,  # nothing matches the ref any more
+        "https://github.com/org/same": SHA,
+        "https://github.com/org/moved": "f" * 40,
+    }
+
+    def fake_remote_head(url, ref):
+        if url.endswith("down"):
+            raise EnigramError("git ls-remote failed: unreachable")
+        return heads[url]
+
+    monkeypatch.setattr(worker, "remote_head", fake_remote_head)
+
+    assert await worker.poll_repos(cfg, store, graph) == 1
+
+    job = store.jobs[-1]
+    assert (job.kind, job.payload["url"], job.payload["ref"]) == (
+        "index_repo",
+        "https://github.com/org/moved",
+        "main",
+    )
+    assert (job.payload["trigger"], job.payload["expected_sha"]) == ("poll", "f" * 40)
+    assert "unreachable" in caplog.text
+
+
+async def test_repo_job_records_trigger_metadata(cfg, store, deps, monkeypatch):
+    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None):
+        return {"failed": []}
+
+    monkeypatch.setattr(worker, "index_repo", fake_index_repo)
+    payload = {
+        "url": "https://github.com/org/h",
+        "trigger": "webhook",
+        "pushed_at": "2026-11-03T03:00:00Z",
+        "received_at": "2026-11-03T03:00:02Z",
+        "expected_sha": "a" * 40,
+        "api_key": None,
+    }
+    job = await store.enqueue("index_repo", payload)
+
+    await worker.process_next(cfg, store, deps)
+
+    result = (await store.get_job(job.id)).result
+    assert {k: result[k] for k in ("trigger", "pushed_at", "received_at", "expected_sha")} == {
+        k: payload[k] for k in ("trigger", "pushed_at", "received_at", "expected_sha")
+    }
+
+
+async def test_poll_tick_never_raises(cfg, store, monkeypatch, caplog):
+    async def boom(*a):
+        raise RuntimeError("database gone")
+
+    monkeypatch.setattr(worker, "poll_repos", boom)
+    await worker._poll_tick(cfg, store, object(), object())
+    assert "poll tick failed" in caplog.text

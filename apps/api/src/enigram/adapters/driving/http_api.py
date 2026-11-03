@@ -4,14 +4,18 @@ import hashlib
 import hmac
 import logging
 import os
+import re
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -19,23 +23,34 @@ from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from enigram.adapters.driving.mcp_server import AppContext, create_server
-from enigram.application.code_agent import AGENT_MODE, answer_with_agent
+from enigram.application.annotations import (
+    NewAnnotation,
+    change_annotation,
+    create_annotation,
+)
+from enigram.application.code_agent import AGENT_MODE, answer_with_agent, repo_name
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
 from enigram.application.ports import Deps, JobRepository
 from enigram.application.querying import answer_question
 from enigram.application.repo_sync import check_ref, check_repo_url
+from enigram.application.webhooks import parse_push, verify_webhook
 from enigram.bootstrap import build_deps
 from enigram.config import Config
+from enigram.domain.annotation import ANNOTATION_MAX_CHARS, Annotation
 from enigram.domain.answer import QUERY_MODE
 from enigram.domain.chunk import SOURCE_SUFFIXES, book_name
-from enigram.domain.errors import EnigramError
+from enigram.domain.errors import EnigramError, Forbidden, NotFound
 
 log = logging.getLogger(__name__)
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 OPEN_PATHS = frozenset({"/health"})
+# Outside Bearer auth: the push webhook carries its own signature (per-repository secret).
+OPEN_PATH_PATTERNS = (re.compile(r"^/repos/\d+/webhook$"),)
+SYMBOL_LOOKUP_MAX = 50
+ANNOTATION_LIST_MAX = 500
 
 
 class QueryRequest(BaseModel):
@@ -87,6 +102,38 @@ class EntityMerge(BaseModel):
         return self
 
 
+NoteText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=ANNOTATION_MAX_CHARS)
+]
+
+
+class AnnotationCreate(BaseModel):
+    target_kind: Literal["symbol", "entity", "document"]
+    target_ref: Name  # symbol id or qualified name; entity name; document name
+    text: NoteText
+    repo: int | None = None  # code_repos.id, symbol targets only
+    by: str = ""
+    owner: Name | None = None
+    scope: Literal["deps", "body"] = "deps"
+    verify_by: datetime | None = None
+
+
+class AnnotationPatch(BaseModel):
+    status: Literal["verified", "rejected", "needs_verification"] | None = None
+    text: NoteText | None = None
+    owner: Name | None = None
+    verify_by: datetime | None = None
+    conflict: bool | None = None
+    target_ref: Name | None = None
+    by: str | None = None
+
+    @model_validator(mode="after")
+    def _changes_something(self) -> "AnnotationPatch":
+        if not self.model_fields_set:
+            raise ValueError("Give at least one field to change")
+        return self
+
+
 class RepoRequest(BaseModel):
     url: Name
     ref: str | None = None  # branch or tag; the repository's default branch when missing
@@ -133,7 +180,12 @@ class ApiKeyMiddleware:
         return name
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["path"] in OPEN_PATHS:
+        path = scope.get("path", "")
+        if (
+            scope["type"] != "http"
+            or path in OPEN_PATHS
+            or any(p.match(path) for p in OPEN_PATH_PATTERNS)
+        ):
             await self.app(scope, receive, send)
             return
         headers = dict(scope["headers"])
@@ -153,6 +205,23 @@ class ApiKeyMiddleware:
 
 def _key_name(request: Request) -> str | None:
     return getattr(request.state, "api_key", None)
+
+
+def _actor(request: Request) -> str:
+    """Who writes an annotation: the API key name ("web" for the UI), "anonymous" without keys."""
+    return _key_name(request) or "anonymous"
+
+
+def _note_json(note: Annotation) -> dict[str, Any]:
+    return jsonable_encoder(asdict(note))
+
+
+def _raise_http(e: EnigramError) -> HTTPException:
+    if isinstance(e, Forbidden):
+        return HTTPException(403, str(e))
+    if isinstance(e, NotFound):
+        return HTTPException(404, str(e))
+    return HTTPException(422, str(e))
 
 
 def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
@@ -305,6 +374,170 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         job = await store.enqueue("index_repo", payload)
         log.info("[api] queued job %d: repository %s", job.id, body.url)
         return {"repo": body.url, "job": asdict(job)}
+
+    async def _repo_or_404(request: Request, repo_id: int) -> dict[str, Any]:
+        repo = await request.app.state.code_graph.get_repo_by_id(repo_id)
+        if repo is None:
+            raise HTTPException(404, f"No repository {repo_id}")
+        return repo
+
+    @app.get("/repos")
+    async def list_repos(request: Request) -> list[dict[str, Any]]:
+        repos = await request.app.state.code_graph.list_repos()
+        return jsonable_encoder(
+            [
+                {
+                    "id": r["id"],
+                    "url": r["url"],
+                    "ref": r["ref"],
+                    "name": repo_name(r, cfg.repo_hosts),
+                    "indexed_sha": r["indexed_sha"],
+                    "indexed_at": r.get("indexed_at"),
+                    "webhook": bool(r.get("webhook")),
+                }
+                for r in repos
+            ]
+        )
+
+    @app.get("/repos/{repo_id}/symbols")
+    async def repo_symbols(
+        request: Request, repo_id: int, q: Annotated[str, Query(min_length=1)]
+    ) -> list[dict[str, Any]]:
+        """Exact qualified names or names ending in ".<q>" (`find`, `AuthService.logout`)."""
+        await _repo_or_404(request, repo_id)
+        found = await request.app.state.code_graph.find_symbols(repo_id, [q.strip()])
+        keys = ("id", "qualified_name", "kind", "file", "line_start", "line_end")
+        return [{k: getattr(s, k) for k in keys} for s in found[:SYMBOL_LOOKUP_MAX]]
+
+    @app.post("/repos/{repo_id}/secret")
+    async def rotate_webhook_secret(request: Request, repo_id: int) -> dict[str, str]:
+        """A new webhook secret, returned once; the previous one stops working."""
+        await _repo_or_404(request, repo_id)
+        secret = secrets.token_hex(32)
+        await request.app.state.code_graph.set_webhook_secret(repo_id, secret)
+        log.info("[api] webhook secret set for repository %d by %s", repo_id, _actor(request))
+        return {"secret": secret}
+
+    @app.delete("/repos/{repo_id}", status_code=202)
+    async def delete_repo_route(request: Request, repo_id: int) -> Any:
+        repo = await _repo_or_404(request, repo_id)
+        store = store_of(request)
+        if any(j.payload.get("url") == repo["url"] for j in await store.active_jobs()):
+            raise HTTPException(409, f"{repo['url']} has a queued or running job")
+        payload = {
+            "repo_id": repo_id,
+            "url": repo["url"],
+            "ref": repo["ref"],
+            "api_key": _key_name(request),
+        }
+        job = await store.enqueue("delete_repo", payload)
+        log.info("[api] queued job %d: delete repository %d", job.id, repo_id)
+        return {"repo": repo_id, "job": jsonable_encoder(asdict(job))}
+
+    @app.post("/repos/{repo_id}/webhook")
+    async def repo_webhook(request: Request, repo_id: int) -> Any:
+        graph = request.app.state.code_graph
+        repo = await graph.get_repo_by_id(repo_id)
+        secret = await graph.webhook_secret(repo_id) if repo else None
+        if repo is None or secret is None:
+            raise HTTPException(404, "No repository or no webhook secret")  # one answer for both
+        raw = await request.body()
+        if not verify_webhook(dict(request.headers), raw, secret):
+            log.warning("[api] webhook for repository %d: bad signature", repo_id)
+            raise HTTPException(401, "Webhook signature does not match")
+        try:
+            event = parse_push(raw)
+        except EnigramError as e:
+            raise HTTPException(400, str(e)) from e
+        received_at = datetime.now(UTC).isoformat()
+        if event.deleted or (repo["ref"] and event.ref_name != repo["ref"]):
+            return {"ignored": f"ref {event.ref_name}"}
+        if event.after == repo["indexed_sha"]:
+            return {"ignored": f"already indexed {event.after[:12]}"}
+        store = store_of(request)
+        active = next(
+            (j for j in await store.active_jobs() if j.payload.get("url") == repo["url"]), None
+        )
+        if active:
+            return {"job": jsonable_encoder(asdict(active))}
+        payload = {
+            "url": repo["url"],
+            "trigger": "webhook",
+            "expected_sha": event.after,
+            "pushed_at": event.pushed_at,
+            "received_at": received_at,
+            "api_key": None,
+        }
+        if repo["ref"]:
+            payload["ref"] = repo["ref"]
+        job = await store.enqueue("index_repo", payload)
+        log.info("[api] queued job %d: webhook for repository %d", job.id, repo_id)
+        return JSONResponse({"job": jsonable_encoder(asdict(job))}, status_code=202)
+
+    @app.get("/annotations")
+    async def list_annotations(
+        request: Request,
+        status: str | None = None,
+        target_kind: str | None = None,
+        repo: int | None = None,
+        target_ref: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=ANNOTATION_LIST_MAX)] = 200,
+    ) -> list[dict[str, Any]]:
+        notes = await request.app.state.notes.list(
+            status=status,
+            target_kind=target_kind,
+            repo_id=repo,
+            target_ref=target_ref,
+            limit=limit,
+        )
+        return [_note_json(n) for n in notes]
+
+    @app.post("/annotations", status_code=201)
+    async def create_annotation_route(request: Request, body: AnnotationCreate) -> Any:
+        new = NewAnnotation(
+            target_kind=body.target_kind,
+            target_ref=body.target_ref,
+            text=body.text,
+            repo_id=body.repo,
+            by=body.by,
+            owner=body.owner,
+            scope=body.scope,
+            verify_by=body.verify_by,
+        )
+        try:
+            note = await create_annotation(
+                cfg, request.app.state.code_graph, request.app.state.notes, new, _actor(request)
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return _note_json(note)
+
+    @app.get("/annotations/{annotation_id}")
+    async def get_annotation(request: Request, annotation_id: int) -> dict[str, Any]:
+        notes = request.app.state.notes
+        note = await notes.get(annotation_id)
+        if note is None:
+            raise HTTPException(404, f"No annotation {annotation_id}")
+        events = jsonable_encoder([asdict(e) for e in await notes.events(annotation_id)])
+        return {**_note_json(note), "events": events}
+
+    @app.patch("/annotations/{annotation_id}")
+    async def patch_annotation(
+        request: Request, annotation_id: int, body: AnnotationPatch
+    ) -> dict[str, Any]:
+        changes = body.model_dump(exclude_unset=True)
+        try:
+            note = await change_annotation(
+                cfg,
+                request.app.state.code_graph,
+                request.app.state.notes,
+                annotation_id,
+                changes,
+                _actor(request),
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return _note_json(note)
 
     @app.get("/jobs/{job_id}")
     async def get_job(request: Request, job_id: int) -> dict[str, Any]:

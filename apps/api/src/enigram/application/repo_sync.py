@@ -17,7 +17,7 @@ from enigram.application.code_index import SKIP_DIRS, index_code, is_ts_repo
 from enigram.application.files import file_sha256
 from enigram.application.indexing import delete_document, load_manifest, run_index, save_manifest
 from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps
-from enigram.application.staleness import expire_verify_by
+from enigram.application.staleness import WORKER_ACTOR, expire_verify_by
 from enigram.config import Config
 from enigram.domain.chunk import MARKDOWN_SUFFIXES, book_name
 from enigram.domain.errors import EnigramError
@@ -29,6 +29,7 @@ REPO_MAX_FILE_BYTES = 1_000_000
 REPO_CLONE_TIMEOUT_SECS = 300
 # Cannot start with "-", so a ref is never read as a git option.
 REF_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")
+_SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def check_repo_url(url: str, hosts: tuple[str, ...]) -> str:
@@ -133,6 +134,66 @@ def clone(url: str, ref: str | None, dest: Path) -> None:
             )
         lines = done.stderr.strip().splitlines()
         raise EnigramError(f"git clone failed: {lines[-1] if lines else done.returncode}")
+
+
+def remote_head(url: str, ref: str | None) -> str | None:
+    """The commit `ref` points at on the remote (`git ls-remote`, no clone): HEAD for the default
+    branch, else the branch, the peeled annotated tag, or the tag. None when nothing matches."""
+    refspecs = (
+        ["HEAD"]
+        if ref is None
+        else [f"refs/heads/{ref}", f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}"]
+    )
+    with tempfile.TemporaryDirectory() as home:
+        try:
+            done = subprocess.run(
+                ["git", "ls-remote", "--exit-code", "--", url, *refspecs],
+                capture_output=True,
+                text=True,
+                timeout=REPO_CLONE_TIMEOUT_SECS,
+                env=git_env(Path(home)),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise EnigramError(f"git ls-remote took longer than {REPO_CLONE_TIMEOUT_SECS} s") from e
+    if done.returncode == 2:  # --exit-code: no matching ref
+        return None
+    if done.returncode != 0:
+        lines = done.stderr.strip().splitlines()
+        raise EnigramError(f"git ls-remote failed: {lines[-1] if lines else done.returncode}")
+    rows = (line.split("\t", 1) for line in done.stdout.splitlines() if "\t" in line)
+    found = {name: sha for sha, name in rows}  # "<sha>\t<ref>" per line
+    for spec in refspecs:
+        if (sha := found.get(spec)) and _SHA.fullmatch(sha):
+            return sha
+    return None
+
+
+async def delete_repo_job(
+    cfg: Config,
+    graph: CodeGraphRepository,
+    notes: AnnotationRepository,
+    repo_id: int,
+) -> dict[str, Any]:
+    """Orphan the repository's annotations (never delete them), remove its store and its code
+    graph. Its Markdown documents stay; DELETE /documents/{book} removes those."""
+    from enigram.application.repo_store import store_path  # repo_store imports this module
+
+    repo = await graph.get_repo_by_id(repo_id)
+    if repo is None:
+        raise EnigramError(f"No repository {repo_id}")
+    orphaned = await notes.orphan_repo(repo_id, WORKER_ACTOR)
+    store = store_path(cfg, repo["url"], repo["ref"])
+    removed = store.exists()
+    shutil.rmtree(store, ignore_errors=True)
+    await graph.delete_repo(repo_id)
+    log.info("[repo] deleted repository %d (%s): %d notes orphaned", repo_id, repo["url"], orphaned)
+    return {
+        "repo_id": repo_id,
+        "url": repo["url"],
+        "annotations_orphaned": orphaned,
+        "store_removed": removed,
+    }
 
 
 async def index_repo(

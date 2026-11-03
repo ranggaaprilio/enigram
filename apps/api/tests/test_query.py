@@ -385,3 +385,53 @@ async def test_docs_path_without_matching_notes_only_tags():
 
     assert "Team notes:" not in rag.params[0].user_prompt
     assert result.answer == "Mira Okafor [1] [document]." and result.extra["notes"] == []
+
+
+async def test_cli_annotations_seed(cfg, deps, monkeypatch, tmp_path, capsys):
+    from code_fakes import FakeAnnotations, FakeCodeGraph, fixture_graph
+
+    from enigram import bootstrap
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+
+    class Store:
+        async def close(self):
+            pass
+
+    async def open_store():
+        return Store()
+
+    async def new_code_graph(store):
+        return graph
+
+    async def new_annotations(store):
+        return notes
+
+    deps.open_store, deps.new_code_graph, deps.new_annotations = (
+        open_store,
+        new_code_graph,
+        new_annotations,
+    )
+    monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
+    seeds = tmp_path / "seeds.yaml"
+    seeds.write_text(
+        "annotations:\n"
+        "  - {target: AppService.find, text: Finds one user.}\n"
+        "  - {target: Ghost.run, text: Missing.}\n"
+    )
+    args = cli._build_parser().parse_args(
+        ["annotations", "seed", str(seeds), "--repo", "https://github.com/org/app"]
+    )
+
+    assert await cli._annotations_seed(cfg, args) == 1
+    assert "created 1, skipped 0" in capsys.readouterr().out
+    assert [n.author for n in notes.notes.values()] == ["cli"]
+
+    other = cli._build_parser().parse_args(
+        ["annotations", "seed", str(seeds), "--repo", "https://github.com/org/x"]
+    )
+    with pytest.raises(EnigramError, match="is not indexed"):
+        await cli._annotations_seed(cfg, other)
+    seeds.write_text("annotations: [{target: x}]\n")
+    with pytest.raises(EnigramError, match="expected `annotations:`"):
+        await cli._annotations_seed(cfg, args)
