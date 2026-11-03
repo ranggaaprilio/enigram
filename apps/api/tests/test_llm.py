@@ -75,6 +75,22 @@ def test_config_repo_hosts_default_and_override(cfg, clean_env, monkeypatch):
     assert Config.from_env(clean_env).repo_hosts == ("github.com", "git.example.org")
 
 
+def test_config_annotation_verifiers_and_poll(cfg, clean_env, monkeypatch):
+    assert (cfg.annotation_verifiers, cfg.repo_poll_secs) == ((), 120)
+
+    monkeypatch.setenv("ANNOTATION_VERIFIERS", " web , laptop-a,")
+    monkeypatch.setenv("REPO_POLL_SECS", "0")
+    loaded = Config.from_env(clean_env)
+    assert (loaded.annotation_verifiers, loaded.repo_poll_secs) == (("web", "laptop-a"), 0)
+
+
+@pytest.mark.parametrize(("value", "match"), [("abc", "must be an integer"), ("-1", "0 \\(off\\)")])
+def test_config_rejects_bad_poll_interval(cfg, clean_env, monkeypatch, value, match):
+    monkeypatch.setenv("REPO_POLL_SECS", value)
+    with pytest.raises(EnigramError, match=match):
+        Config.from_env(clean_env)
+
+
 def test_config_rejects_unknown_thinking_mode(cfg, clean_env, monkeypatch):
     monkeypatch.setenv("THINKING_MODE", "maybe")
     with pytest.raises(EnigramError, match="THINKING_MODE"):

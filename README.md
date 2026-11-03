@@ -175,6 +175,15 @@ write the same index.
 | `GET /documents` | Indexed and queued documents with status |
 | `DELETE /documents/{book}` | Queue deleting a document: its index entries, parsed files and uploaded file (202; 404 unknown; 409 while it has a job) |
 | `POST /repos` `{"url", "ref"?}` | Queue indexing (or re-syncing) a Git repository's Markdown (202; 422 bad URL; 409 already queued) |
+| `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set |
+| `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50), for the annotation form |
+| `POST /repos/{id}/secret` | Create or rotate the repository's webhook secret; returned once, never again |
+| `POST /repos/{id}/webhook` | GitHub/GitLab push webhook: no Bearer key, signed with the repository's secret; queues a re-index (202), ignores other branches and commits already indexed |
+| `DELETE /repos/{id}` | Queue deleting a repository's code graph and clone; its annotations become `orphaned` (202; 404 unknown; 409 while it has a job) |
+| `GET /annotations?status=&target_kind=&repo=&target_ref=&limit=` | Annotations, newest first (`rejected` only when asked for) |
+| `POST /annotations` `{"target_kind", "target_ref", "text", "repo"?, "by"?, "owner"?, "scope"?, "verify_by"?}` | Create a note (201); see [Annotations](#annotations) |
+| `GET /annotations/{id}` | One note with its change history |
+| `PATCH /annotations/{id}` `{"status"?, "text"?, "owner"?, "verify_by"?, "conflict"?, "target_ref"?, "by"?}` | Verify, reject, edit, relink or flag a note (403 when the key may not verify) |
 | `GET /jobs/{id}` | One indexing job: status, result (chunks, timings, report), error |
 | `POST /query` `{"question", "mode": "mix"\|"naive", "scope": "docs"\|"code", "repo"?}` | Answer with sources, chunks, entities and relations, plus its stored `id`; `scope: "code"` asks the code agent (`mode` ignored, `repo` = a repository URL) |
 | `GET /queries?limit=50` | Recent queries, newest first, without their traces (`limit` 1-200) |
@@ -186,7 +195,7 @@ write the same index.
 | `POST /graph/entity/merge` `{"sources": [...], "target", "description"?}` | Queue a merge into `target` (new or existing) |
 | `DELETE /graph/entity/{name}` | Queue deleting an entity and its relations |
 | `DELETE /graph/relation?source=&target=` | Queue deleting one relation |
-| `GET /health` | Liveness; the only route without a key |
+| `GET /health` | Liveness; with `POST /repos/{id}/webhook` the only routes without a key |
 
 ```bash
 export AUTH="Authorization: Bearer <key>"   # skip -H "$AUTH" when no keys are set
@@ -210,7 +219,7 @@ ENIGRAM_WEB_KEY=<the web key>   # nginx sends it for the web UI
 API_BIND=0.0.0.0                # publish the API port on the LAN, e.g. for MCP over HTTP
 ```
 
-With keys set, every route except `GET /health` needs `Authorization: Bearer <key>`
+With keys set, every route except `GET /health` and the signed repository webhook needs `Authorization: Bearer <key>`
 (`curl -H "Authorization: Bearer $KEY" ...`); otherwise it answers 401. Without
 `ENIGRAM_API_KEYS` every route is open and the API logs a warning, so keep `API_BIND` at its
 default (`127.0.0.1`) until keys are set. Changing keys needs a restart (`docker compose up -d`).
@@ -220,15 +229,21 @@ Tailscale).
 ### Web UI
 
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
-API. It has three pages:
+API. It has four pages in its menu:
 
 - **Documents**: drop PDF or Markdown files to upload them; the table follows each job until it
   is indexed or failed.
-- **Ask**: a question in `mix` (GraphRAG) or `naive` (vector only) mode, answered with sources.
+- **Ask**: a question in `mix` (GraphRAG) or `naive` (vector only) mode, or `Code (agent)` for
+  the indexed repositories, answered with sources and per-sentence origin tags.
 - **Trace**: recent queries, and for each one the chunks, entities, relations and sources behind
-  the answer, at a link you can share (`/trace/12`). Entity names link to the Graph page.
-- **Graph**: find the entities and relations whose name or description contains a phrase, then
-  edit, merge or delete them (see [Correcting the graph](#correcting-the-graph)).
+  the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
+  code sources have an `Annotate` link, note sources open the note.
+- **Annotations**: team notes by status, with verify, reject, relink and history (see
+  [Annotations](#annotations)).
+
+The **Graph** page (`/graph`, linked from Annotations, no menu entry) finds entities and relations
+whose name or description contains a phrase, then edits, merges or deletes them (see [Correcting
+the graph](#correcting-the-graph)).
 
 The UI has no login: nginx adds `ENIGRAM_WEB_KEY` to every `/api` call, so the browser never
 sees a key, and the port stays bound to localhost. Open it as `http://localhost:3000` or `http://127.0.0.1:3000`: nginx
@@ -287,6 +302,75 @@ with an agent whose first tools are the code graph (search, symbols with their d
 guards and module wiring, entry-point flows); it then reads only the lines the
 graph pointed at, from that clone at the indexed commit, and cites `file:start-end@sha`. The
 `code` system of `enigram golden answer` (graph → one prompt) stays as a frozen ablation.
+
+#### Re-indexing on every commit
+
+Each index job compares the new commit with the previous index of the same URL and ref: it
+reports `files_changed` (blob SHA differs, added or removed), `files_affected` (those plus every
+file that imports them, transitively), `symbols_changed` (records them in `code_symbol_changes`)
+and runs the [annotation staleness check](#annotations). The parse itself is always a full one
+(seconds, no tokens); summaries are rebuilt only where a body hash changed. Two triggers start a
+job without anyone clicking:
+
+- **Webhook.** `POST /repos/{id}/secret` (with your key) returns a secret once. In GitHub
+  (Settings → Webhooks) add `https://<host>/repos/{id}/webhook`, content type `application/json`,
+  that secret, push events only; GitLab: the same URL as a push-event webhook with the secret as
+  its token. The path is open (no Bearer key) and checks `X-Hub-Signature-256` or
+  `X-Gitlab-Token` instead. A laptop needs a tunnel (`cloudflared tunnel --url
+  http://localhost:8080` or `ngrok http 8080`).
+- **Polling.** The worker runs `git ls-remote` on every indexed repository every `REPO_POLL_SECS`
+  seconds (default 120, `0` = off) while its queue is empty and queues a job when the head moved.
+
+Neither queues anything when the pushed head is already indexed or a job for that URL is queued.
+The job result records `trigger` (`manual`, `webhook` or `poll`), `pushed_at`, `received_at`,
+`expected_sha`, `code.commit_at` and `code.staleness`. Automatic re-indexing spends summary tokens
+on every changed flow and there is no token cap yet: leave `REPO_POLL_SECS=0` and set no webhook
+for manual indexing only. What is sent to DeepSeek and Voyage does not change.
+
+`DELETE /repos/{id}` removes the code graph and the clone; the repository's annotations become
+`orphaned`, never deleted. Its Markdown documents stay (delete them with `DELETE
+/documents/{book}`).
+
+### Annotations
+
+An annotation is a team note on a code symbol (`target_kind: symbol`, with the repository id), a
+LightRAG entity or a document. Notes live in their own tables, so they survive re-indexing, and
+they rank above code summaries and documents in every answer (web, REST, MCP, CLI): the code
+agent sees the notes of every symbol its graph tools return, the docs path gets the entity and
+document notes the question names or shares words with. An answer cites a note as `note#7`, which
+becomes a source with origin `human`.
+
+Every sentence of an answer ends with its origin, taken from its citations: `[code]`,
+`[summary]`, `[human]`, `[document]` or `[unsupported]` (no citation). When a cited note is not
+plainly verified, a warning line follows the answer: `⚠ note#7 needs verification (reason:
+deps)`, `is orphaned`, `is a proposal` or `is marked as conflicting with the code; both are shown
+above`. Conflicts are marked by hand (`PATCH {"conflict": true}`).
+
+Who may do what: the author is the API key's name (`web` for the UI, `anonymous` without
+`ENIGRAM_API_KEYS`) and owns the note unless `owner` names another key. A note created by its
+owner is `verified`; one created for someone else is `proposed`. Only the owner or a key named in
+`ANNOTATION_VERIFIERS` (comma list) may verify, reject, change the owner or extend `verify_by`
+(403 otherwise). A text edit by anyone else turns the note back into a proposal. Relinking and
+marking a conflict are open to every key. Every change is kept as an event.
+
+A symbol note stores the symbol's body hash and, for `scope: deps` (default), a hash of the
+callees it reaches (the same set its flow summary covers). Every re-index then flags it
+`needs_verification` with reason `hash` (the symbol's own code changed), `deps` (a callee
+changed; `scope: body` notes ignore callees) or `verify_by` (the date passed; default 90 days
+after verification). A symbol that moved to another file with the same code is relinked
+automatically (reason `orphan`); a renamed or deleted one becomes `orphaned` with up to five
+candidates (same code or same short name) to relink by hand. Formatting and comments change no
+hash.
+
+The Annotations page lists notes by status (the re-verification queue is
+`needs_verification`), creates them (with a symbol picker), verifies, rejects, relinks and shows
+each note's history. Trace links entity names and code sources to it. Seed notes from a file with
+`uv run enigram annotations seed <file.yaml> --repo <url> [--ref <ref>]` (`annotations:` list of
+`{target, text, scope?}`; same target and text are skipped).
+
+Corrections made earlier as LightRAG entity edits were not migrated. The Graph page (`/graph`,
+linked from the Annotations page) remains for structural fixes such as merging duplicate
+entities:
 
 ### Correcting the graph
 

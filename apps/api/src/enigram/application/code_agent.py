@@ -26,22 +26,29 @@ from enigram.application.agent_loop import (
     result_from_json,
     run_tool_loop,
 )
+from enigram.application.annotations import attach_notes
 from enigram.application.code_query import CODE_IS_THE_TRUTH, ROUTE
 from enigram.application.code_summary import TRUNCATED
 from enigram.application.files import atomic_write_text
-from enigram.application.ports import ChatModel, ChatReply, CodeGraphRepository
+from enigram.application.ports import (
+    AnnotationRepository,
+    ChatModel,
+    ChatReply,
+    CodeGraphRepository,
+)
 from enigram.application.repo_store import GitTools, store_path
 from enigram.application.repo_sync import check_repo_url
 from enigram.config import Config
+from enigram.domain.annotation import Annotation, note_line, parse_note_citations
 from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult
-from enigram.domain.code import CodeSymbol
+from enigram.domain.code import CodeCitation, CodeSymbol
 from enigram.domain.errors import EnigramError
 from enigram.domain.secrets import redact
 
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "1b.1"  # bump when tool output or the prompt changes: busts the answer cache
+AGENT_VERSION = "2.0"  # bump when tool output or the prompt changes: busts the answer cache
 AGENT_MAX_REPOS = 3
 GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
@@ -113,7 +120,9 @@ def system_prompt(repo_lines: list[str]) -> str:
         "graph found nothing.\n"
         "Answer in 1-6 sentences, each ending with a citation `path:start-end@sha12` from a tool "
         "result. " + CODE_IS_THE_TRUTH + "If the repos do not answer it, say so in one sentence "
-        f"ending with {NO_ANSWER_MARKER}."
+        f"ending with {NO_ANSWER_MARKER}.\n"
+        "Team notes (note#N) beat summaries; cite one as note#N. If one contradicts the code, "
+        "state both."
     )
 
 
@@ -158,8 +167,14 @@ class CodeAgentTools:
         *,
         selected: dict[str, Any] | None = None,
         open_git: Callable[[Path, str], Any] = GitTools,
+        notes: AnnotationRepository | None = None,
     ) -> None:
         self.cfg, self.graph, self.repos, self.open_git = cfg, graph_repo, repos, open_git
+        self.notes = notes
+        # Every note a tool result showed, by id: the only ids an answer may cite.
+        self.notes_seen: dict[int, Annotation] = {}
+        # (repo id, file) -> symbols the graph returned, for a citation's target symbol.
+        self.hits: dict[tuple[int, str], dict[str, CodeSymbol]] = {}
         self.names = {r["id"]: repo_name(r, cfg.repo_hosts) for r in repos}
         self.by_key: dict[str, list[dict[str, Any]]] = {}
         for r in repos:
@@ -214,11 +229,44 @@ class CodeAgentTools:
         self.scope.add(repo["id"])
         self.graph_hits += 1
         self.graph_lines.add((repo["id"], symbol.file))
+        self.hits.setdefault((repo["id"], symbol.file), {})[symbol.id] = symbol
 
-    def _row(self, repo: dict[str, Any], s: CodeSymbol, snippet: str = "") -> str:
+    def _row(
+        self,
+        repo: dict[str, Any],
+        s: CodeSymbol,
+        snippet: str = "",
+        notes: list[Annotation] | None = None,
+    ) -> str:
         where = f"{s.file}:{s.line_start}-{s.line_end}@{repo['indexed_sha'][:12]}"
         row = f"repo={self.names[repo['id']]} {s.qualified_name} ({s.kind}) {where}"
-        return f"{row} — {snippet}" if snippet else row
+        row = f"{row} — {snippet}" if snippet else row
+        return f"{row} · {'; '.join(note_line(n) for n in notes)}" if notes else row
+
+    async def _notes_for(
+        self, repo: dict[str, Any], symbol_ids: list[str]
+    ) -> dict[str, list[Annotation]]:
+        """The cited notes of these symbols (one query), remembered for the answer's sources."""
+        if self.notes is None or not symbol_ids:
+            return {}
+        found = await self.notes.for_symbols(repo["id"], symbol_ids)
+        for notes in found.values():
+            self.notes_seen.update((n.id, n) for n in notes)
+        return found
+
+    def target_of(self, c: CodeCitation) -> str:
+        """ "<repo id>:<symbol id>" of the innermost graph hit in the cited file that covers the
+        cited lines, "" when none does."""
+        best: tuple[int, str] | None = None
+        for r in self.repos:
+            if not r["indexed_sha"].startswith(c.sha):
+                continue
+            for s in self.hits.get((r["id"], _norm_path(c.file)), {}).values():
+                if s.line_start <= c.start and c.end <= s.line_end:
+                    span = s.line_end - s.line_start
+                    if best is None or span < best[0]:
+                        best = (span, f"{r['id']}:{s.id}")
+        return best[1] if best else ""
 
     def _targets(self, arg: Any) -> list[dict[str, Any]] | str:
         """One named repository, or all of them."""
@@ -255,12 +303,18 @@ class CodeAgentTools:
         hits.sort(key=lambda h: (-h[0], self.names[h[2]["id"]], h[1]))
         if not hits:
             return "no matches; try other words or find_symbol, or grep an indexed repo"
+        top = hits[:SEARCH_MAX_HITS]
+        notes: dict[tuple[int, str], list[Annotation]] = {}
+        for r in {h[2]["id"]: h[2] for h in top}.values():
+            ids = [h[1] for h in top if h[2]["id"] == r["id"]]
+            for symbol_id, found in (await self._notes_for(r, ids)).items():
+                notes[(r["id"], symbol_id)] = found
         rows = []
-        for _, symbol_id, r, s in hits[:SEARCH_MAX_HITS]:
+        for _, symbol_id, r, s in top:
             self._hit(r, s)
             snippet = _one_line(await self._summary(r, symbol_id) or s.signature)
             clipped = snippet[:SNIPPET_CHARS] + ("…" if len(snippet) > SNIPPET_CHARS else "")
-            rows.append(self._row(r, s, clipped))
+            rows.append(self._row(r, s, clipped, notes.get((r["id"], symbol_id))))
         return "\n".join(rows)
 
     async def find_symbol(self, name: str, repo: Any = None) -> str:
@@ -308,6 +362,12 @@ class CodeAgentTools:
             lines += await self._wiring(repo, parent_id, "class ")
         if summary := await self._summary(repo, s.id):
             lines.append(f"summary: {summary}")
+        parent_id = f"{s.file}#{s.parent}" if s.parent else ""
+        notes = await self._notes_for(repo, [i for i in (s.id, parent_id) if i])
+        if notes:
+            lines.append("notes:")
+            lines += [f"- {note_line(n, full=True)}" for n in notes.get(s.id, [])]
+            lines += [f"- class {note_line(n, full=True)}" for n in notes.get(parent_id, [])]
         return "\n".join(lines)
 
     async def entrypoint_flow(self, route: str, repo: Any = None) -> str:
@@ -333,7 +393,9 @@ class CodeAgentTools:
             flow = await self._summary(r, s.id)
             if len(flow) > FLOW_MAX_CHARS:
                 flow = flow[:FLOW_MAX_CHARS] + TRUNCATED
-            out.append(f"{self._row(r, s)} [{entry.kind} {entry.route}]\nflow: {flow or '—'}")
+            notes = (await self._notes_for(r, [s.id])).get(s.id)
+            row = self._row(r, s, notes=notes)
+            out.append(f"{row} [{entry.kind} {entry.route}]\nflow: {flow or '—'}")
         if len(found) > FLOW_MAX_ENTRIES:
             more = len(found) - FLOW_MAX_ENTRIES
             out.append(f"… {more} more entry points match; pass a more specific route")
@@ -443,6 +505,7 @@ async def answer_with_agent(
     max_input_tokens: int = AGENT_MAX_INPUT_TOKENS,
     model: str = "",
     open_git: Callable[[Path, str], Any] = GitTools,
+    notes: AnnotationRepository | None = None,
 ) -> QueryResult:
     repos = await graph_repo.list_repos()
     if not repos:
@@ -452,13 +515,17 @@ async def answer_with_agent(
     if cache_dir is not None:
         shas = ",".join(sorted(r["indexed_sha"] for r in repos))
         picked = f"{selected['url']}@{selected['ref'] or ''}" if selected else ""
-        cache_key = f"{AGENT_VERSION}\n{question}\n{shas}\n{picked}\n{model}"
+        # A new, changed or re-verified note must change the answer.
+        notes_version = await notes.version([r["id"] for r in repos]) if notes else ""
+        cache_key = f"{AGENT_VERSION}\n{question}\n{shas}\n{picked}\n{model}\n{notes_version}"
         key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
         if path.exists():
             log.info("[agent] enigram: cached")
             return result_from_json(json.loads(path.read_text(encoding="utf-8")))
-    tools = CodeAgentTools(cfg, graph_repo, repos, selected=selected, open_git=open_git)
+    tools = CodeAgentTools(
+        cfg, graph_repo, repos, selected=selected, open_git=open_git, notes=notes
+    )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt(tools.repo_lines())},
         {"role": "user", "content": question},
@@ -482,7 +549,11 @@ async def answer_with_agent(
             "diagnostics": tools.diagnostics() | {"turns": counting.turns},
             "repos": {r["indexed_sha"][:12]: tools.names[r["id"]] for r in repos},
         },
+        notes=tools.notes_seen,
+        resolve_target=tools.target_of,
     )
+    cited = set(parse_note_citations(result.answer))
+    result = attach_notes(result, {i: n for i, n in tools.notes_seen.items() if i in cited})
     log.info(
         "[agent] enigram: %d tool calls, %d in / %d out tokens%s",
         loop.calls,

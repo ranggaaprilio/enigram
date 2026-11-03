@@ -24,6 +24,11 @@ def test_normalize_answer_keeps_prose_only():
     )
 
 
+def test_normalize_answer_strips_note_citations_and_origin_tags():
+    tagged = "Logout revokes the token note#7 [human]. It deletes src/a.ts:3-4@70ae60dbb609 [code]."
+    assert normalize_answer(tagged) == "Logout revokes the token. It deletes."
+
+
 @pytest.mark.parametrize("text", ["[no-context] Nothing found.", "Plain sentence, no marks."])
 def test_normalize_answer_leaves_plain_text_and_abstentions(text):
     assert normalize_answer(text) == text

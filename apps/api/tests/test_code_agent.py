@@ -83,8 +83,13 @@ async def test_graph_first_then_read_then_answer(cfg, graph):
 
     result = await answer_with_agent(cfg, chat, graph, "Who may load users?", open_git=git)
 
-    assert result.mode == "enigram-agent" and result.found and result.answer == FINAL
+    assert result.mode == "enigram-agent" and result.found
+    assert result.answer == FINAL.removesuffix(".") + " [code]."  # the origin tag
     assert [s.citation for s in result.sources] == [f"src/app.controller.ts:7-17@{SHA[:12]}"]
+    assert [(s.origin, s.target) for s in result.sources] == [
+        ("code", "1:src/app.controller.ts#AppController")  # innermost graph hit covering 7-17
+    ]
+    assert result.extra["origins"] == {"code": 1} and result.extra["notes"] == []
     assert result.extra["tool_calls"] == 3
     assert result.extra["diagnostics"] == {
         "graph_first": True,
@@ -274,9 +279,10 @@ async def test_unknown_repo_or_empty_graph_raise_before_any_model_call(cfg, grap
 def test_tool_set_schemas_and_prompt_stay_small():
     names = [t["function"]["name"] for t in TOOLS]
     assert names == ["search_code", "find_symbol", "entrypoint_flow", "read_file", "grep"]
-    # Resent on every turn: tiktoken before this iteration 677 (8 tools) and 233.
+    # Resent on every turn: tiktoken before this iteration 677 (8 tools) and 233; Phase 2 adds
+    # the team-notes sentence (257).
     assert count_tokens(json.dumps(TOOLS)) <= 440
-    assert count_tokens(system_prompt([f"org-app {SHA[:12]}"])) <= 250
+    assert count_tokens(system_prompt([f"org-app {SHA[:12]}"])) <= 265
 
 
 async def test_system_prompt_lists_the_indexed_repos(cfg, graph):
@@ -398,3 +404,110 @@ async def test_the_selected_repo_respects_the_ref(cfg, graph):
     with pytest.raises(EnigramError, match=r"https://github.com/org/app \(main\) is not indexed"):
         await answer_with_agent(cfg, ScriptedChat([]), graph, "q", repo_url=URL, repo_ref="main")
     assert by_name.replies == []  # resolved by name, answered
+
+
+# --- annotations -------------------------------------------------------------------------------
+
+CLASS = "src/app.controller.ts#AppController"
+
+
+async def _note(cfg, graph, notes, target=CLASS, text="Only the admin team may load users.", **kw):
+    from enigram.application.annotations import NewAnnotation, create_annotation
+
+    new = NewAnnotation("symbol", target, text, 1, **kw)
+    return await create_annotation(cfg, graph, notes, new, "alice")
+
+
+async def test_notes_appear_in_search_and_find_symbol(cfg, graph):
+    from code_fakes import FakeAnnotations
+
+    notes = FakeAnnotations()
+    await _note(cfg, graph, notes, target=CONTROLLER, text="Route is admin only.")
+    await _note(cfg, graph, notes, text="The class is behind RolesGuard.")
+    await _note(cfg, graph, notes, target=CONTROLLER, text="A proposal.", owner="bob")
+    tools = _tools(cfg, graph, notes=notes)
+
+    search_out = await tools.run("search_code", {"query": "users"})
+    find_out = await tools.run("find_symbol", {"name": "AppController.find"})
+
+    row = next(line for line in search_out.splitlines() if "AppController.find" in line)
+    assert " — " in row and " · note#1 [verified by alice " in row  # after the snippet
+    assert '"Route is admin only."' in row and "A proposal" not in search_out
+    assert "notes:\n- note#1 [verified by alice" in find_out
+    assert "- class note#2 [verified by alice" in find_out
+    assert set(tools.notes_seen) == {1, 2}
+
+    plain = _tools(cfg, graph)  # no notes repository: rows as before
+    assert " · note#" not in await plain.run("search_code", {"query": "users"})
+
+
+async def test_cited_note_becomes_a_human_source_and_a_tag(cfg, graph):
+    from code_fakes import FakeAnnotations
+
+    notes = FakeAnnotations()
+    await _note(cfg, graph, notes)
+    answer = FINAL + " The team says only admins may load users note#1. A made-up one note#99."
+    chat = ScriptedChat(
+        [tool_reply(("find_symbol", _args(name="AppController"))), answer_reply(answer)]
+    )
+
+    result = await answer_with_agent(cfg, chat, graph, "q", notes=notes)
+
+    assert [(s.origin, s.citation, s.target) for s in result.sources] == [
+        ("code", f"src/app.controller.ts:7-17@{SHA[:12]}", "1:" + CLASS),
+        ("human", "note#1", "1"),
+    ]
+    assert result.answer == (
+        FINAL.removesuffix(".") + " [code]. The team says only admins may load users note#1 "
+        "[human]. A made-up one note#99 [unsupported]."
+    )
+    assert result.extra["origins"] == {"code": 1, "human": 1, "unsupported": 1}
+    assert result.extra["notes"] == [
+        {"id": 1, "status": "verified", "reason": None, "conflict": False}
+    ]
+    assert "⚠" not in result.answer
+    assert "note#N" in chat.calls[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    ("changes", "warning"),
+    [
+        ({"status": "needs_verification", "reason": "deps"}, "⚠ note#1 needs verification"),
+        ({"conflict": True}, "⚠ note#1 is marked as conflicting with the code"),
+    ],
+)
+async def test_flagged_or_conflicting_notes_add_a_warning(cfg, graph, changes, warning):
+    from code_fakes import FakeAnnotations
+
+    notes = FakeAnnotations()
+    await _note(cfg, graph, notes)
+    await notes.update(1, changes, "worker", "flagged")
+    chat = ScriptedChat(
+        [
+            tool_reply(("find_symbol", _args(name="AppController"))),
+            answer_reply("Only admins may load users, says the team note#1."),
+        ]
+    )
+
+    result = await answer_with_agent(cfg, chat, graph, "q", notes=notes)
+
+    assert result.answer.splitlines()[-1].startswith(warning)
+
+
+async def test_a_note_change_misses_the_cache(cfg, graph, tmp_path):
+    from code_fakes import FakeAnnotations
+
+    notes = FakeAnnotations()
+    await _note(cfg, graph, notes)
+    cache = tmp_path / "cache"
+    await answer_with_agent(
+        cfg, ScriptedChat([answer_reply(FINAL)]), graph, "q", cache_dir=cache, notes=notes
+    )
+    hit = await answer_with_agent(cfg, ScriptedChat([]), graph, "q", cache_dir=cache, notes=notes)
+
+    await notes.update(1, {"conflict": True}, "bob", "conflict")
+    again = ScriptedChat([answer_reply("A different answer here.")])
+    miss = await answer_with_agent(cfg, again, graph, "q", cache_dir=cache, notes=notes)
+
+    assert hit.answer.startswith("Only admins") and again.replies == []
+    assert miss.answer.startswith("A different answer")

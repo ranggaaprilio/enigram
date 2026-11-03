@@ -8,8 +8,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from enigram.application.ports import ChatModel, ChatReply
+from enigram.domain.annotation import Annotation, note_source, parse_note_citations
 from enigram.domain.answer import NO_ANSWER_MARKER, ContextChunk, QueryResult, Source
-from enigram.domain.code import parse_code_citations
+from enigram.domain.code import CodeCitation, parse_code_citations
 
 AGENT_MAX_TOOL_CALLS = 30
 AGENT_MAX_INPUT_TOKENS = 120_000  # cumulative prompt tokens per question (eval/README.md)
@@ -88,10 +89,19 @@ async def run_tool_loop(
 
 
 def loop_answer(
-    question: str, loop: LoopResult, *, mode: str, secs: float, extra: dict[str, Any]
+    question: str,
+    loop: LoopResult,
+    *,
+    mode: str,
+    secs: float,
+    extra: dict[str, Any],
+    notes: dict[int, Annotation] | None = None,
+    resolve_target: Callable[[CodeCitation], str] | None = None,
 ) -> QueryResult:
     """The QueryResult of an agent answer: the no-answer marker becomes `found`, every inline
-    `path:start-end@sha` citation a source."""
+    `path:start-end@sha` citation a code source and every `note#N` of a note in `notes` a human
+    source (a note id the tools never showed is dropped). The `agent+repo` baseline passes
+    neither `notes` nor `resolve_target`."""
     text = loop.reply.text
     found = NO_ANSWER_MARKER not in text
     text = text.replace(NO_ANSWER_MARKER, "").strip()
@@ -102,9 +112,15 @@ def loop_answer(
             section="",
             pages="",
             citation=f"{c.file}:{c.start}-{c.end}@{c.sha}",
+            origin="code" if notes is not None else "",
+            target=resolve_target(c) if resolve_target else "",
         )
         for i, c in enumerate(parse_code_citations(text), 1)
     ]
+    if notes:
+        for note_id in dict.fromkeys(parse_note_citations(text)):
+            if note := notes.get(note_id):
+                sources.append(note_source(len(sources) + 1, note))
     return QueryResult(
         question,
         text,

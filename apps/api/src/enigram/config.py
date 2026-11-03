@@ -96,6 +96,11 @@ class Config:
     # (name, key) pairs from ENIGRAM_API_KEYS; empty means the API is open.
     api_keys: tuple[tuple[str, str], ...] = field(repr=False)
     repo_hosts: tuple[str, ...]
+    # API key names that may verify, reject or reassign any annotation (ANNOTATION_VERIFIERS);
+    # a note's owner always may.
+    annotation_verifiers: tuple[str, ...]
+    # Seconds between `git ls-remote` checks of indexed repositories by the worker; 0 = off.
+    repo_poll_secs: int
     data_dir: Path
     # Bare partial clones the code agent reads source from (application/repo_store.py).
     repo_store: Path
@@ -140,6 +145,9 @@ class Config:
             # LightRAG reads the POSTGRES_* variables itself; check them here for a clear error.
             for name in ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DATABASE"):
                 _required(name)
+        repo_poll_secs = _int("REPO_POLL_SECS", 120)
+        if repo_poll_secs < 0:
+            raise EnigramError(f"REPO_POLL_SECS must be 0 (off) or more, got {repo_poll_secs}")
         if os.environ.get("POSTGRES_WORKSPACE", "").strip():
             # LightRAG lets it override the workspace passed in code, which would put the
             # `index --pages` dev run into the main index.
@@ -174,6 +182,12 @@ class Config:
                 h.strip().lower() for h in os.environ.get("REPO_HOSTS", "").split(",") if h.strip()
             )
             or DEFAULT_REPO_HOSTS,
+            annotation_verifiers=tuple(
+                n.strip()
+                for n in os.environ.get("ANNOTATION_VERIFIERS", "").split(",")
+                if n.strip()
+            ),
+            repo_poll_secs=repo_poll_secs,
             data_dir=data_dir,
             repo_store=Path(
                 os.environ.get("REPO_STORE", "").strip() or data_dir / "repos"

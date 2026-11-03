@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
-import { ApiError, getQuery, listQueries, messageOf, type QueryRecord, type QuerySummary } from '../api'
+import {
+  ApiError,
+  getQuery,
+  listQueries,
+  messageOf,
+  type QueryRecord,
+  type QuerySummary,
+  type Source,
+} from '../api'
 import Answer from '../components/Answer'
 import { formatSecs, formatTime } from '../format'
 
@@ -75,8 +83,24 @@ export function TraceList() {
   )
 }
 
-// Names open the graph editor, searching for that name.
-const graphLink = (name: string) => <Link to={`/graph?q=${encodeURIComponent(name)}`}>{name}</Link>
+// Names open the Annotations page with a new note on that entity prefilled.
+const noteLink = (kind: string, ref: string) => (
+  <Link to={`/annotations?target_kind=${kind}&target_ref=${encodeURIComponent(ref)}`}>{ref}</Link>
+)
+
+// A code source resolved to a graph symbol can be annotated; a human source opens its note.
+function sourceLink(s: Source) {
+  if (s.origin === 'code' && s.target) {
+    const at = s.target.indexOf(':')
+    const symbol = encodeURIComponent(s.target.slice(at + 1))
+    const to = `/annotations?target_kind=symbol&repo=${s.target.slice(0, at)}&target_ref=${symbol}`
+    return <Link to={to}>Annotate</Link>
+  }
+  if (s.origin === 'human' && s.target) {
+    return <Link to={`/annotations?id=${s.target}`}>note#{s.target}</Link>
+  }
+  return null
+}
 
 function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) {
   return (
@@ -164,7 +188,7 @@ export function TraceDetail() {
                 <tbody>
                   {result.entities.map((e) => (
                     <tr key={e.name}>
-                      <td>{graphLink(e.name)}</td>
+                      <td>{noteLink('entity', e.name)}</td>
                       <td>{e.type}</td>
                       <td>{e.description}</td>
                     </tr>
@@ -187,7 +211,7 @@ export function TraceDetail() {
                   {result.relations.map((r) => (
                     <tr key={`${r.source}\u0000${r.target}`}>
                       <td>
-                        {graphLink(r.source)} → {graphLink(r.target)}
+                        {noteLink('entity', r.source)} → {noteLink('entity', r.target)}
                       </td>
                       <td>{r.keywords}</td>
                       <td>{r.description}</td>
@@ -207,6 +231,8 @@ export function TraceDetail() {
                     <th>Section</th>
                     <th>Pages</th>
                     <th>Citation</th>
+                    <th>Origin</th>
+                    <th />
                   </tr>
                 </thead>
                 <tbody>
@@ -217,6 +243,8 @@ export function TraceDetail() {
                       <td>{s.section}</td>
                       <td>{s.pages}</td>
                       <td className="small">{s.citation}</td>
+                      <td>{s.origin}</td>
+                      <td>{sourceLink(s)}</td>
                     </tr>
                   ))}
                 </tbody>

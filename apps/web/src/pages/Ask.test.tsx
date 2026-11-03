@@ -50,6 +50,7 @@ describe('Ask', () => {
     expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({
       question: 'Who designed the protocol?',
       mode: 'mix',
+      scope: 'docs',
     })
   })
 
@@ -60,6 +61,21 @@ describe('Ask', () => {
 
     await screen.findByText('Mira Okafor')
     expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).mode).toBe('naive')
+  })
+
+  it('asks the code agent', async () => {
+    const fetch = mockFetch({
+      'POST /api/query': { body: { ...result, mode: 'enigram-agent', sources: [] } },
+    })
+
+    await askQuestion('code')
+
+    await screen.findByText('Mira Okafor')
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({
+      question: 'Who designed the protocol?',
+      mode: 'mix',
+      scope: 'code',
+    })
   })
 
   it('says when the index had no matching context', async () => {

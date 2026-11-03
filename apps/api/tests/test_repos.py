@@ -149,7 +149,7 @@ def fake_sync(cfg, deps, monkeypatch):
 
     fake = FakeSync()
 
-    async def fake_index_code(cfg, deps, graph, root, url, ref, *, limit=None):
+    async def fake_index_code(cfg, deps, graph, root, url, ref, *, limit=None, notes=None):
         fake.code.append((graph, url, ref, limit, (root / "tsconfig.json").exists()))
         return {"symbols": 3, "summaries": {"flows": 1}, "commit_sha": "a" * 40}
 
@@ -302,3 +302,48 @@ async def test_index_repo_checks_the_url_again(cfg, deps, fake_sync):
 def test_repo_book_keeps_dotted_directories(rel, book):
     # Path(...).stem used to cut everything after the last dot of a dotted directory.
     assert repos.repo_book("org-app", Path(rel)) == book
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_remote_head_for_a_branch_an_annotated_tag_and_a_missing_ref(tmp_path):
+    from git_fixture import git_commit, git_repo
+
+    origin = git_repo(tmp_path / "origin", {"README.md": "# One"})
+    first = git_commit(origin, {"README.md": "# Two"}, "two")
+    git = ["git", "-C", str(origin), "-c", "user.name=t", "-c", "user.email=t@example.com"]
+    subprocess.run([*git, "tag", "-a", "v1", "-m", "release"], check=True)
+    head = git_commit(origin, {"README.md": "# Three"}, "three")
+    url = origin.as_uri()
+
+    assert repos.remote_head(url, None) == head
+    assert repos.remote_head(url, "main") == head
+    assert repos.remote_head(url, "v1") == first  # peeled: the commit, not the tag object
+    assert repos.remote_head(url, "nope") is None
+    with pytest.raises(EnigramError, match="git ls-remote failed"):
+        repos.remote_head((tmp_path / "missing").as_uri(), None)
+
+
+async def test_delete_repo_job_orphans_notes_and_removes_store(cfg):
+    from code_fakes import FakeAnnotations, FakeCodeGraph, fixture_graph
+
+    from enigram.application.annotations import NewAnnotation, create_annotation
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+    note = await create_annotation(
+        cfg, graph, notes, NewAnnotation("symbol", "AppService.find", "x", 1), "web"
+    )
+    store = repo_store.store_path(cfg, graph.repos[1]["url"], None)
+    store.mkdir(parents=True)
+
+    result = await repos.delete_repo_job(cfg, graph, notes, 1)
+
+    assert result == {
+        "repo_id": 1,
+        "url": "https://github.com/org/app",
+        "annotations_orphaned": 1,
+        "store_removed": True,
+    }
+    assert not store.exists() and graph.repos == {}
+    assert (await notes.get(note.id)).status == "orphaned"
+    with pytest.raises(EnigramError, match="No repository 1"):
+        await repos.delete_repo_job(cfg, graph, notes, 1)

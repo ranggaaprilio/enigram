@@ -1,0 +1,136 @@
+import os
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import asyncpg
+import pytest
+
+from enigram.adapters.driven.postgres_annotations import PostgresAnnotations
+from enigram.domain.errors import NotFound
+
+pytestmark = pytest.mark.postgres
+NOW = datetime.now(UTC)
+
+
+@pytest.fixture
+async def pool():
+    pool = await asyncpg.create_pool(os.environ["ENIGRAM_TEST_PG_DSN"])
+    yield pool
+    await pool.close()
+
+
+@pytest.fixture
+async def notes(pool):
+    notes = PostgresAnnotations(pool, f"test_{uuid4().hex[:8]}")
+    await notes.ensure_schema()
+    yield notes
+    await pool.execute("DELETE FROM annotations WHERE workspace = $1", notes.workspace)
+
+
+def _symbol_note(ref="src/a.ts#A.run", **kw):
+    return {
+        "target_kind": "symbol",
+        "target_ref": ref,
+        "repo_id": 1,
+        "scope": "deps",
+        "text": "Runs the nightly export.",
+        "author": "web",
+        "by": "Alice",
+        "owner": "web",
+        "status": "verified",
+        "target_hash": "h1",
+        "deps_hash": "d1",
+        "verified_by": "web",
+        "verified_at": NOW,
+        **kw,
+    }
+
+
+async def test_create_get_list_and_events(notes):
+    a = await notes.create(_symbol_note(), "web")
+    await notes.create(_symbol_note("src/b.ts#B", status="proposed"), "web")
+    await notes.create(
+        {
+            "target_kind": "entity",
+            "target_ref": "Mutation Score",
+            "text": "x",
+            "author": "web",
+            "owner": "web",
+            "status": "rejected",
+        },
+        "web",
+    )
+
+    got = await notes.get(a.id)
+    assert (got.by, got.candidates, got.verified_by) == ("Alice", (), "web")
+    assert [n.target_ref for n in await notes.list()] == ["src/b.ts#B", "src/a.ts#A.run"]
+    assert [n.status for n in await notes.list(status="rejected")] == ["rejected"]
+    assert len(await notes.list(target_kind="symbol", repo_id=1, target_ref="src/a.ts#A.run")) == 1
+    (event,) = await notes.events(a.id)
+    assert (event.action, event.old, event.new["by"]) == ("created", None, "Alice")
+
+
+async def test_for_symbols_skips_proposals_and_update_logs_changed_keys(notes):
+    a = await notes.create(_symbol_note(), "web")
+    await notes.create(_symbol_note(status="proposed"), "web")
+    version = await notes.version([1])
+
+    found = await notes.for_symbols(1, ["src/a.ts#A.run", "missing"])
+    assert [n.id for n in found["src/a.ts#A.run"]] == [a.id]
+
+    changed = await notes.update(
+        a.id,
+        {"status": "orphaned", "candidates": [{"id": "x", "qualified_name": "X", "file": "f"}]},
+        "worker",
+        "orphaned",
+    )
+    assert changed.candidates == ({"id": "x", "qualified_name": "X", "file": "f"},)
+    event = (await notes.events(a.id))[-1]
+    assert (event.actor, event.old["status"], event.new["status"]) == (
+        "worker",
+        "verified",
+        "orphaned",
+    )
+    assert await notes.version([1]) != version
+    with pytest.raises(NotFound):
+        await notes.update(999999, {"text": "x"}, "web", "edited")
+
+
+async def test_expire_and_orphan_repo(notes):
+    due = await notes.create(_symbol_note(verify_by=NOW - timedelta(days=1)), "web")
+    later = await notes.create(_symbol_note("src/c.ts#C", verify_by=NOW + timedelta(days=1)), "web")
+
+    (expired,) = await notes.expire(NOW, "worker")
+    assert (expired.id, expired.status, expired.reason) == (
+        due.id,
+        "needs_verification",
+        "verify_by",
+    )
+    assert await notes.expire(NOW, "worker") == []
+
+    assert await notes.orphan_repo(1, "worker") == 2
+    assert (await notes.get(later.id)).status == "orphaned"
+    assert await notes.orphan_repo(1, "worker") == 0
+
+
+async def test_search_text_by_name_and_words(notes):
+    entity = {"target_kind": "entity", "author": "web", "owner": "web", "status": "verified"}
+    named = await notes.create(
+        {**entity, "target_ref": "Mutation Score", "text": "A ratio."}, "web"
+    )
+    worded = await notes.create(
+        {**entity, "target_ref": "Other", "text": "Mutation testing kills mutants."}, "web"
+    )
+
+    hits = await notes.search_text("What is the mutation score?", ("entity", "document"))
+    assert [n.id for n in hits] == [named.id, worded.id]
+    assert await notes.search_text("the of a", ("entity",)) == []
+    assert await notes.search_text("What is the mutation score?", ("document",)) == []
+
+
+async def test_workspaces_are_isolated(notes, pool):
+    a = await notes.create(_symbol_note(), "web")
+    other = PostgresAnnotations(pool, f"test_{uuid4().hex[:8]}")
+    assert await other.get(a.id) is None
+    assert await other.list() == []
+    assert await other.events(a.id) == []

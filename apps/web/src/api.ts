@@ -47,6 +47,8 @@ export interface Source {
   section: string // "-" when the chunk had no heading, "" when the citation was truncated
   pages: string
   citation: string
+  origin?: string // code | summary | human | document; absent on answers before Phase 2
+  target?: string // "<repo id>:<symbol id>" for a code source, the note id for a human one
 }
 
 export interface ContextChunk {
@@ -79,7 +81,100 @@ export interface QueryResult {
   relations: ContextRelation[]
   found: boolean
   query_secs: number
-  mode: Mode
+  mode: Mode | 'enigram-agent'
+}
+
+export type Scope = 'docs' | 'code'
+
+export type AnnotationStatus =
+  | 'verified'
+  | 'needs_verification'
+  | 'orphaned'
+  | 'proposed'
+  | 'rejected'
+
+export type TargetKind = 'symbol' | 'entity' | 'document'
+
+export interface Candidate {
+  id: string
+  qualified_name: string
+  file: string
+}
+
+export interface Annotation {
+  id: number
+  target_kind: TargetKind
+  target_ref: string
+  repo_id: number | null
+  scope: 'deps' | 'body'
+  text: string
+  author: string
+  by: string
+  owner: string
+  status: AnnotationStatus
+  reason: string | null
+  conflict: boolean
+  target_hash: string | null
+  deps_hash: string | null
+  candidates: Candidate[]
+  verified_by: string | null
+  verified_at: string | null
+  verify_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AnnotationEvent {
+  id: number
+  annotation_id: number
+  actor: string
+  action: string
+  old: Record<string, unknown> | null
+  new: Record<string, unknown> | null
+  at: string
+}
+
+export interface AnnotationWithEvents extends Annotation {
+  events: AnnotationEvent[]
+}
+
+export interface NewAnnotation {
+  target_kind: TargetKind
+  target_ref: string
+  text: string
+  repo?: number
+  by?: string
+  scope?: 'deps' | 'body'
+  verify_by?: string
+}
+
+export interface AnnotationPatch {
+  status?: 'verified' | 'rejected' | 'needs_verification'
+  text?: string
+  owner?: string
+  verify_by?: string
+  conflict?: boolean
+  target_ref?: string
+  by?: string
+}
+
+export interface RepoRow {
+  id: number
+  url: string
+  ref: string | null
+  name: string
+  indexed_sha: string
+  indexed_at: string | null
+  webhook: boolean
+}
+
+export interface SymbolRow {
+  id: string
+  qualified_name: string
+  kind: string
+  file: string
+  line_start: number
+  line_end: number
 }
 
 export interface QuerySummary {
@@ -168,8 +263,8 @@ const sendJson = <T>(path: string, body: unknown) =>
     body: JSON.stringify(body),
   })
 
-export const ask = (question: string, mode: Mode) =>
-  sendJson<QueryResult & { id: number }>('/query', { question, mode })
+export const ask = (question: string, mode: Mode, scope: Scope = 'docs') =>
+  sendJson<QueryResult & { id: number }>('/query', { question, mode, scope })
 
 export const listQueries = (limit = 50) => request<QuerySummary[]>(`/queries?limit=${limit}`)
 
@@ -206,3 +301,36 @@ export const indexRepo = (url: string, ref?: string) =>
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+export function listAnnotations(params: {
+  status?: string
+  target_kind?: string
+  repo?: number
+  target_ref?: string
+}) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') query.set(key, String(value))
+  }
+  const qs = query.toString()
+  return request<Annotation[]>(`/annotations${qs ? `?${qs}` : ''}`)
+}
+
+export const createAnnotation = (body: NewAnnotation) => sendJson<Annotation>('/annotations', body)
+
+export const getAnnotation = (id: number) => request<AnnotationWithEvents>(`/annotations/${id}`)
+
+export const patchAnnotation = (id: number, body: AnnotationPatch) =>
+  request<Annotation>(`/annotations/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+export const listRepos = () => request<RepoRow[]>('/repos')
+
+export const searchSymbols = (repoId: number, q: string) =>
+  request<SymbolRow[]>(`/repos/${repoId}/symbols?q=${encodeURIComponent(q)}`)
+
+export const deleteRepo = (id: number) =>
+  request<{ repo: number; job: Job }>(`/repos/${id}`, { method: 'DELETE' })

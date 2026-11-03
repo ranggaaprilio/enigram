@@ -15,6 +15,7 @@ from pydantic import Field
 from enigram.application.code_agent import AGENT_MODE, answer_with_agent
 from enigram.application.documents import documents_overview
 from enigram.application.ports import (
+    AnnotationRepository,
     CodeGraphRepository,
     Deps,
     JobRepository,
@@ -35,6 +36,7 @@ class AppContext:
     store: JobRepository | None = None  # set over HTTP: queries are logged, jobs show in documents
     memory: MemoryRepository | None = None  # set over HTTP: memories belong to an API key
     code_graph: CodeGraphRepository | None = None  # needs STORAGE_BACKEND=postgres
+    notes: AnnotationRepository | None = None  # needs STORAGE_BACKEND=postgres
 
 
 @dataclass
@@ -95,7 +97,11 @@ def create_server(
                 return
             store = await deps.open_store()  # only for the code graph: stdio logs no queries
             try:
-                yield AppContext(engine=engine, code_graph=await deps.new_code_graph(store))
+                yield AppContext(
+                    engine=engine,
+                    code_graph=await deps.new_code_graph(store),
+                    notes=await deps.new_annotations(store),
+                )
             finally:
                 await store.close()
 
@@ -136,9 +142,10 @@ def create_server(
                     question,
                     repo_url=repo,
                     model=cfg.llm_model,
+                    notes=app.notes,
                 )
             else:
-                result = await answer_question(app.engine, question)
+                result = await answer_question(app.engine, question, notes=app.notes)
         except EnigramError as e:
             if app.store:
                 await app.store.log_query(

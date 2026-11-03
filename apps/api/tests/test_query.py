@@ -251,7 +251,15 @@ async def test_open_engine_without_index_raises(cfg):
 
 
 async def test_cli_query_scope_code_uses_the_agent(cfg, deps, monkeypatch, capsys):
-    from code_fakes import SHA, FakeCodeGraph, ScriptedChat, answer_reply, fixture_graph, tool_reply
+    from code_fakes import (
+        SHA,
+        FakeAnnotations,
+        FakeCodeGraph,
+        ScriptedChat,
+        answer_reply,
+        fixture_graph,
+        tool_reply,
+    )
 
     from enigram import bootstrap
 
@@ -268,6 +276,9 @@ async def test_cli_query_scope_code_uses_the_agent(cfg, deps, monkeypatch, capsy
     async def new_code_graph(store):
         return graph
 
+    async def new_annotations(store):
+        return FakeAnnotations()
+
     final = f"It loads the user src/app.service.ts:10-15@{SHA[:12]}."
     chat = ScriptedChat(
         [
@@ -276,6 +287,7 @@ async def test_cli_query_scope_code_uses_the_agent(cfg, deps, monkeypatch, capsy
         ]
     )
     deps.open_store, deps.new_code_graph = open_store, new_code_graph
+    deps.new_annotations = new_annotations
     deps.generator = lambda: chat
     monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
     args = cli._build_parser().parse_args(
@@ -285,7 +297,7 @@ async def test_cli_query_scope_code_uses_the_agent(cfg, deps, monkeypatch, capsy
     assert await cli._query(cfg, args) == 0
 
     out = capsys.readouterr().out
-    assert out.startswith(final)
+    assert out.startswith(final.removesuffix(".") + " [code].")
     assert f"[1] src/app.service.ts:10-15@{SHA[:12]} (src/app.service.ts)" in out
     assert "(enigram-agent, " in out and "900 in / 20 out tokens, 1 tool calls)" in out
     assert "AppService.find (method)" in chat.calls[1]["messages"][-1]["content"]
@@ -293,7 +305,7 @@ async def test_cli_query_scope_code_uses_the_agent(cfg, deps, monkeypatch, capsy
 
 
 async def test_cli_query_scope_code_needs_one_repo(cfg, deps, monkeypatch):
-    from code_fakes import FakeCodeGraph
+    from code_fakes import FakeAnnotations, FakeCodeGraph
 
     from enigram import bootstrap
 
@@ -307,9 +319,119 @@ async def test_cli_query_scope_code_needs_one_repo(cfg, deps, monkeypatch):
     async def new_code_graph(store):
         return FakeCodeGraph()
 
+    async def new_annotations(store):
+        return FakeAnnotations()
+
     deps.open_store, deps.new_code_graph = open_store, new_code_graph
+    deps.new_annotations = new_annotations
     monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
     args = cli._build_parser().parse_args(["query", "--scope", "code", "Who logs in?"])
 
     with pytest.raises(EnigramError, match="enigram repo <url>"):
         await cli._query(cfg, args)
+
+
+async def test_docs_path_puts_named_notes_in_the_prompt_and_cites_them():
+    from code_fakes import FakeAnnotations
+
+    notes = FakeAnnotations()
+    common = {"author": "web", "owner": "web", "status": "verified"}
+    await notes.create(
+        {
+            "target_kind": "entity",
+            "target_ref": "Mira Okafor",
+            "text": "Mira led the 1987 team.",
+            **common,
+        },
+        "web",
+    )
+    await notes.create(
+        {"target_kind": "entity", "target_ref": "Unrelated", "text": "Nothing here.", **common},
+        "web",
+    )
+    response = success_response()
+    response["llm_response"]["content"] = "Mira Okafor [1]. She led the 1987 storm team note#1."
+    rag = FakeRag(response)
+
+    result = await querying.answer_question(
+        lightrag_engine.LightRagEngine(rag), "Who is Mira Okafor?", notes=notes
+    )
+
+    prompt = rag.params[0].user_prompt
+    assert "Team notes (note#N) rank above both." in prompt
+    assert 'note#1 [verified] "Mira led the 1987 team." (on entity Mira Okafor)' in prompt
+    assert "note#2" not in prompt
+    human = result.sources[-1]
+    assert (human.ref, human.origin, human.citation) == (
+        max(s.ref for s in result.sources[:-1]) + 1,
+        "human",
+        "note#1",
+    )
+    assert (
+        result.answer == "Mira Okafor [1] [document]. She led the 1987 storm team note#1 [human]."
+    )
+    assert result.extra["notes"] == [
+        {"id": 1, "status": "verified", "reason": None, "conflict": False}
+    ]
+
+
+async def test_docs_path_without_matching_notes_only_tags():
+    from code_fakes import FakeAnnotations
+
+    rag = FakeRag()
+    result = await querying.answer_question(
+        lightrag_engine.LightRagEngine(rag), "Who is Mira Okafor?", notes=FakeAnnotations()
+    )
+
+    assert "Team notes:" not in rag.params[0].user_prompt
+    assert result.answer == "Mira Okafor [1] [document]." and result.extra["notes"] == []
+
+
+async def test_cli_annotations_seed(cfg, deps, monkeypatch, tmp_path, capsys):
+    from code_fakes import FakeAnnotations, FakeCodeGraph, fixture_graph
+
+    from enigram import bootstrap
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+
+    class Store:
+        async def close(self):
+            pass
+
+    async def open_store():
+        return Store()
+
+    async def new_code_graph(store):
+        return graph
+
+    async def new_annotations(store):
+        return notes
+
+    deps.open_store, deps.new_code_graph, deps.new_annotations = (
+        open_store,
+        new_code_graph,
+        new_annotations,
+    )
+    monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
+    seeds = tmp_path / "seeds.yaml"
+    seeds.write_text(
+        "annotations:\n"
+        "  - {target: AppService.find, text: Finds one user.}\n"
+        "  - {target: Ghost.run, text: Missing.}\n"
+    )
+    args = cli._build_parser().parse_args(
+        ["annotations", "seed", str(seeds), "--repo", "https://github.com/org/app"]
+    )
+
+    assert await cli._annotations_seed(cfg, args) == 1
+    assert "created 1, skipped 0" in capsys.readouterr().out
+    assert [n.author for n in notes.notes.values()] == ["cli"]
+
+    other = cli._build_parser().parse_args(
+        ["annotations", "seed", str(seeds), "--repo", "https://github.com/org/x"]
+    )
+    with pytest.raises(EnigramError, match="is not indexed"):
+        await cli._annotations_seed(cfg, other)
+    seeds.write_text("annotations: [{target: x}]\n")
+    with pytest.raises(EnigramError, match="expected `annotations:`"):
+        await cli._annotations_seed(cfg, args)

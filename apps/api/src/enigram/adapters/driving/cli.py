@@ -71,6 +71,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="summarise only the first N entry points (quick trial)",
     )
 
+    notes = sub.add_parser("annotations", help="team notes on symbols, entities and documents")
+    nsub = notes.add_subparsers(dest="annotations_command", required=True)
+    seed = nsub.add_parser(
+        "seed", help="create symbol notes from a YAML file (`annotations:` of {target, text})"
+    )
+    seed.add_argument("file", type=Path, help="YAML with a top-level `annotations:` list")
+    seed.add_argument("--repo", required=True, help="URL of the indexed repository")
+    seed.add_argument("--ref", help="branch or tag it was indexed at")
+
     sub.add_parser("mcp", help="run the MCP server on stdio (for Claude Code)")
 
     api = sub.add_parser("api", help="run the HTTP API (upload, query, query traces)")
@@ -218,8 +227,9 @@ async def _query_code(cfg: Config, question: str, url: str | None) -> int:
     store = await deps.open_store()
     try:
         graph = await deps.new_code_graph(store)
+        notes = await deps.new_annotations(store)
         result = await answer_with_agent(
-            cfg, deps.generator(), graph, question, repo_url=url, model=cfg.llm_model
+            cfg, deps.generator(), graph, question, repo_url=url, model=cfg.llm_model, notes=notes
         )
     finally:
         await store.close()
@@ -242,8 +252,15 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
     from enigram.application.querying import answer_question
     from enigram.bootstrap import build_deps
 
-    async with build_deps(cfg).open_engine() as engine:
-        result = await answer_question(engine, args.question, args.mode)
+    deps = build_deps(cfg)
+    store = await deps.open_store() if cfg.storage == "postgres" else None
+    try:
+        notes = await deps.new_annotations(store) if store else None
+        async with deps.open_engine() as engine:
+            result = await answer_question(engine, args.question, args.mode, notes=notes)
+    finally:
+        if store:
+            await store.close()
     print(result.answer)
     if result.sources:
         print("\nSources:")
@@ -265,7 +282,10 @@ async def _repo(cfg: Config, args: argparse.Namespace) -> int:
     store = await deps.open_store()
     try:
         graph = await deps.new_code_graph(store)
-        result = await index_repo(cfg, deps, args.url, args.ref, graph=graph, limit=args.limit)
+        notes = await deps.new_annotations(store)
+        result = await index_repo(
+            cfg, deps, args.url, args.ref, graph=graph, limit=args.limit, notes=notes
+        )
     finally:
         await store.close()
     for key, value in result["code"].items():
@@ -280,6 +300,44 @@ async def _repo(cfg: Config, args: argparse.Namespace) -> int:
     atomic_write_text(path, json.dumps(result, indent=2, default=str))
     print(f"result: {path}")
     return 1 if result["failed"] else 0
+
+
+def _seed_items(path: Path) -> list[dict]:
+    import yaml
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as e:
+        raise EnigramError(f"Cannot read {path}: {e}") from e
+    items = data.get("annotations") if isinstance(data, dict) else None
+    if not isinstance(items, list) or not all(
+        isinstance(i, dict) and i.get("target") and i.get("text") for i in items
+    ):
+        raise EnigramError(f"{path}: expected `annotations:` as a list of {{target, text}}")
+    return items
+
+
+async def _annotations_seed(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.application.annotations import seed_annotations
+    from enigram.bootstrap import build_deps
+
+    items = _seed_items(args.file)
+    deps = build_deps(cfg)
+    store = await deps.open_store()
+    try:
+        graph = await deps.new_code_graph(store)
+        notes = await deps.new_annotations(store)
+        repo = await graph.get_repo(args.repo, args.ref)
+        if repo is None:
+            where = f" ({args.ref})" if args.ref else ""
+            raise EnigramError(f"{args.repo}{where} is not indexed; run `enigram repo` first")
+        result = await seed_annotations(cfg, graph, notes, repo, items, actor="cli")
+    finally:
+        await store.close()
+    print(f"created {result['created']}, skipped {result['skipped']} (same target and text)")
+    for target in result["unresolved"]:
+        print(f"unresolved: {target}")
+    return 1 if result["unresolved"] else 0
 
 
 async def _graph_symbols(cfg: Config, url: str, ref: str | None, pinned_sha: str) -> list:
@@ -486,6 +544,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_query(cfg, args))
         if args.command == "repo":
             return asyncio.run(_repo(cfg, args))
+        if args.command == "annotations":
+            return asyncio.run(_annotations_seed(cfg, args))
         if args.command == "mcp":
             from enigram.adapters.driving.mcp_server import create_server
 

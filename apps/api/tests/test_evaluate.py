@@ -420,3 +420,33 @@ async def test_phase1b_criteria_only_with_an_enigram_agent_run(cfg, deps, two_sy
     run = await evaluate.run_eval(cfg, deps, [code, agent], [sheet])
     assert not any(k.startswith("phase1b") for k in run.verdicts)
     assert "## Agent diagnostics" not in run.report_path.read_text()
+
+
+def test_phase2_annotation_and_conflict_criteria():
+    from enigram.application.evaluation import evaluate as ev
+
+    human = [{"origin": "code"}, {"origin": "human"}]
+    items = [
+        {"id": "s01", "category": "behavior_annotation", "correct": True, "sources": human},
+        {"id": "s02", "category": "behavior_annotation", "correct": True, "sources": human[:1]},
+        {"id": "s03", "category": "behavior_annotation", "correct": None, "sources": []},
+        {
+            "id": "s05",
+            "category": "behavior_annotation",
+            "correct": False,
+            "sources": human,
+            "notes": [{"id": 5, "conflict": True}],
+            "answer": "…\n\n⚠ note#5 is marked as conflicting with the code; both are shown above.",
+        },
+        {"id": "b01", "category": "behavior", "notes": [{"id": 1, "conflict": False}]},
+    ]
+    runs = {"enigram-agent": {"items": items}}
+
+    followed = ev._annotation_followed(runs, "enigram-agent")
+    shown = ev._conflict_shown(runs, "enigram-agent")
+
+    assert (followed["result"], followed["n"], followed["verdict"]) == (1, 3, ev.FAIL)
+    assert (shown["result"], shown["n"], shown["verdict"]) == (1, 1, ev.PASS)
+    empty = {"enigram-agent": {"items": items[-1:]}}
+    assert ev._annotation_followed(empty, "enigram-agent")["verdict"] == ev.INSUFFICIENT
+    assert ev._conflict_shown(empty, "enigram-agent")["verdict"] == ev.INSUFFICIENT

@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from code_fakes import FakeChat, FakeCodeGraph, fixture_graph
+from code_fakes import FakeAnnotations, FakeChat, FakeCodeGraph, fixture_graph
 from test_golden import (  # noqa: F401
     INTRO,
     METHOD,
@@ -111,7 +111,10 @@ def _code_set(tmp_path):
                 "AuthService.validateLogin",
                 qid="a01",
                 split="dev",
-                extra="    setup: {annotation: {target: AuthService, text: note}}\n",
+                extra=(
+                    "    setup:\n"
+                    "      annotation: {target: AppService.find, text: note, conflict: true}\n"
+                ),
             ),
             '  - id: "u01"\n    category: unanswerable\n    question: Is there GraphQL?\n'
             "    answer: No.\n",
@@ -140,7 +143,14 @@ def _fake_graph_deps(deps, graph):
     async def new_code_graph(store):
         return graph
 
+    notes = FakeAnnotations()
+
+    async def new_annotations(store):
+        return notes
+
     deps.open_store, deps.new_code_graph = open_store, new_code_graph
+    deps.new_annotations = new_annotations
+    deps.notes = notes  # read by the tests
     return closed
 
 
@@ -201,9 +211,16 @@ async def test_enigram_agent_system_answers_from_the_graph(cfg, deps, tmp_path, 
     seen = {}
     diagnostics = {"graph_first": True, "graph_hits": 3, "read_calls": 1}
 
-    async def fake_agent(cfg_, chat, graph_, question, *, repo_url, repo_ref, cache_dir, model):
+    async def fake_agent(
+        cfg_, chat, graph_, question, *, repo_url, repo_ref, cache_dir, model, notes
+    ):
         seen.update(
-            graph=graph_, repo_url=repo_url, repo_ref=repo_ref, cache_dir=cache_dir, model=model
+            graph=graph_,
+            repo_url=repo_url,
+            repo_ref=repo_ref,
+            cache_dir=cache_dir,
+            model=model,
+            notes=notes,
         )
         text = f"It checks the hash [1] src/auth/auth.service.ts:2-4@{PINNED[:12]}."
         citation = f"src/auth/auth.service.ts:2-4@{PINNED[:12]}"
@@ -230,8 +247,10 @@ async def test_enigram_agent_system_answers_from_the_graph(cfg, deps, tmp_path, 
         "repo_ref": "eval-v1",
         "cache_dir": cfg.eval_dir / "enigram-agent-cache",
         "model": cfg.llm_model,
+        "notes": deps.notes,
     }
-    (item,) = data["items"]
+    item, annotated = data["items"]  # enigram-agent also answers behavior_annotation
+    assert annotated["id"] == "a01" and annotated["error"] is None
     assert item["diagnostics"] == diagnostics and item["tool_calls"] == 3
     assert [c["ref"] for c in item["citations"]] == [None]  # inline only: [1] is not a ref
     assert closed == [True]
@@ -325,3 +344,36 @@ def test_answer_citations_skip_array_indexes_and_agent_refs():
     assert [c["ref"] for c in out] == [1]
     agent = answer_citations("See [1] and src/a.ts:3-9@abc1234.", sources, refs=False)
     assert [(c["ref"], c["file"]) for c in agent] == [(None, "src/a.ts")]
+
+
+@pytest.mark.usefixtures("fake_repo")
+async def test_enigram_agent_creates_the_setup_annotation_once(cfg, deps, tmp_path, monkeypatch):
+    graph = FakeCodeGraph(fixture_graph())
+    graph.repos[1].update(url=CODE_URL, ref="eval-v1", indexed_sha=PINNED)
+    _fake_graph_deps(deps, graph)
+    deps.generator = lambda: FakeChat("unused")
+
+    async def fake_agent(cfg_, chat, graph_, question, **kw):
+        return QueryResult(question, "It is so note#1.", [], [], mode="enigram-agent")
+
+    monkeypatch.setattr(golden_run, "answer_with_agent", fake_agent)
+
+    for _ in range(2):
+        await run_golden(
+            cfg,
+            deps,
+            _code_set(tmp_path),
+            "enigram-agent",
+            split="dev",
+            categories=("behavior_annotation",),
+        )
+
+    (note,) = deps.notes.notes.values()
+    assert (note.target_ref, note.text, note.status, note.conflict, note.author) == (
+        "src/app.service.ts#AppService.find",
+        "note",
+        "verified",
+        True,
+        "golden",
+    )
+    assert [e.action for e in await deps.notes.events(note.id)] == ["created", "conflict"]

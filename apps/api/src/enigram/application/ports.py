@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     import networkx as nx
 
+    from enigram.domain.annotation import Annotation, AnnotationEvent
     from enigram.domain.answer import QueryResult
     from enigram.domain.chunk import ParsedBook
     from enigram.domain.code import CodeEdge, CodeEntrypoint, CodeFile, CodeSymbol, FlowSummary
@@ -122,6 +123,66 @@ class MemoryRepository(Protocol):
     async def add(self, text: str, api_key: str | None) -> tuple[int, datetime]: ...
 
     async def search(self, query: str, api_key: str | None, limit: int = 5) -> "MemorySearch": ...
+
+
+class AnnotationRepository(Protocol):
+    """Human notes on symbols, entities and documents, scoped to one workspace."""
+
+    async def ensure_schema(self) -> None: ...
+
+    async def create(self, fields: dict[str, Any], actor: str) -> "Annotation":
+        """Insert and log a `created` event; `fields` are the Annotation fields minus id and
+        timestamps."""
+        ...
+
+    async def get(self, annotation_id: int) -> "Annotation | None": ...
+
+    async def for_symbols(
+        self, repo_id: int, symbol_ids: list[str]
+    ) -> dict[str, list["Annotation"]]:
+        """Notes in CITED_STATUSES keyed by symbol id."""
+        ...
+
+    async def search_text(
+        self, question: str, kinds: tuple[str, ...], limit: int = 5
+    ) -> list["Annotation"]:
+        """Entity/document notes whose target name appears in the question or whose text shares
+        stemmed words with it, best first, ACTIVE_STATUSES only."""
+        ...
+
+    async def update(
+        self, annotation_id: int, changes: dict[str, Any], actor: str, action: str
+    ) -> "Annotation":
+        """Apply `changes`, set updated_at, log one event with the old and new values of the
+        changed keys."""
+        ...
+
+    async def events(self, annotation_id: int) -> list["AnnotationEvent"]: ...
+
+    async def expire(self, now: datetime, actor: str) -> list["Annotation"]:
+        """Verified notes past verify_by -> needs_verification (reason verify_by), one event
+        each."""
+        ...
+
+    async def orphan_repo(self, repo_id: int, actor: str) -> int:
+        """Every non-rejected symbol note of the repo -> orphaned (reason orphan); the count."""
+        ...
+
+    async def version(self, repo_ids: list[int]) -> str:
+        """`"<count>:<max updated_at>"` over the repos' symbol notes: the agent cache key."""
+        ...
+
+    async def list(
+        self,
+        *,
+        status: str | None = None,
+        target_kind: str | None = None,
+        repo_id: int | None = None,
+        target_ref: str | None = None,
+        limit: int = 200,
+    ) -> list["Annotation"]:
+        """Newest first; `rejected` only when asked for by status."""
+        ...
 
 
 class DocumentParser(Protocol):
@@ -274,6 +335,35 @@ class CodeGraphRepository(Protocol):
         """HTTP entry points matching "VERB /path"."""
         ...
 
+    async def get_repo_by_id(self, repo_id: int) -> dict[str, Any] | None: ...
+
+    async def webhook_secret(self, repo_id: int) -> str | None: ...
+
+    async def set_webhook_secret(self, repo_id: int, secret: str) -> None: ...
+
+    async def delete_repo(self, repo_id: int) -> None:
+        """The repo row and, by cascade, its files, symbols, edges, entry points, summaries and
+        symbol changes."""
+        ...
+
+    async def symbol_hashes(self, repo_id: int) -> dict[str, str]:
+        """symbol id -> body_hash."""
+        ...
+
+    async def files(self, repo_id: int) -> list["CodeFile"]: ...
+
+    async def import_edges(self, repo_id: int) -> list[tuple[str, str]]:
+        """(importing file, imported file) for resolved `imports` edges."""
+        ...
+
+    async def record_symbol_changes(
+        self, repo_id: int, sha: str, changes: list[tuple[str, str | None, str | None]]
+    ) -> None:
+        """(symbol id, old hash, new hash) rows into code_symbol_changes."""
+        ...
+
+    async def symbols_by_hash(self, repo_id: int, body_hashes: list[str]) -> list["CodeSymbol"]: ...
+
 
 @dataclass
 class Deps:
@@ -293,6 +383,8 @@ class Deps:
     code_parser: Callable[[], CodeParser]
     # new_code_graph(store): the code graph, sharing the store's pool like new_memory.
     new_code_graph: Callable[[JobRepository], Awaitable[CodeGraphRepository]]
+    # new_annotations(store): human notes, sharing the store's pool like new_memory.
+    new_annotations: Callable[[JobRepository], Awaitable[AnnotationRepository]]
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     query_budget: dict[str, int]  # the engine's retrieval token caps, recorded in eval reports

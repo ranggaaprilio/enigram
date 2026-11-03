@@ -22,7 +22,13 @@ from enigram.application.evaluation.citations import (
     sentences_without_citation,
 )
 from enigram.application.evaluation.claims import read_labelled_claims
-from enigram.application.evaluation.golden import BEHAVIOR, CATEGORIES, INJECTION, UNANSWERABLE
+from enigram.application.evaluation.golden import (
+    BEHAVIOR,
+    BEHAVIOR_ANNOTATION,
+    CATEGORIES,
+    INJECTION,
+    UNANSWERABLE,
+)
 from enigram.application.evaluation.judges import (
     JUDGE_TEMPERATURE,
     judge_abstention,
@@ -374,6 +380,45 @@ def _cheaper(runs: dict[str, dict[str, Any]], system: str, baseline: str) -> dic
     }
 
 
+CONFLICT_WARNING = "conflicting with the code"  # domain.annotation.warnings_for
+
+
+def _annotation_followed(runs: dict[str, dict[str, Any]], system: str) -> dict[str, Any]:
+    """Labelled behavior_annotation answers that are correct and cite the note (a human source)."""
+    items = [
+        i
+        for i in runs[system]["items"]
+        if i["category"] == BEHAVIOR_ANNOTATION and i.get("correct") is not None
+    ]
+    followed = [
+        i
+        for i in items
+        if i["correct"] and any(s.get("origin") == "human" for s in i.get("sources") or [])
+    ]
+    return {
+        "target": f"every labelled {BEHAVIOR_ANNOTATION} answer correct with a human source",
+        "result": len(followed) if items else None,
+        "n": len(items),
+        "verdict": _verdict(items or None, len(followed) == len(items), bool(items)),
+        "note": "blind labels; a human source = the answer cited note#N",
+    }
+
+
+def _conflict_shown(runs: dict[str, dict[str, Any]], system: str) -> dict[str, Any]:
+    """Answers citing a conflicting note that carry the deterministic conflict warning."""
+    items = [
+        i for i in runs[system]["items"] if any(n.get("conflict") for n in i.get("notes") or [])
+    ]
+    shown = [i for i in items if CONFLICT_WARNING in (i.get("answer") or "")]
+    return {
+        "target": "every answer citing a conflicting note shows the conflict",
+        "result": len(shown) if items else None,
+        "n": len(items),
+        "verdict": _verdict(items or None, len(shown) == len(items), bool(items)),
+        "note": "answers whose cited notes include one marked conflict: true",
+    }
+
+
 def _citations_valid(systems: dict[str, dict[str, Any]], system: str) -> dict[str, Any]:
     cites = (systems.get(system) or {}).get("citations")
     return {
@@ -426,6 +471,8 @@ def _hypothesis(
             "phase1b_not_worse_than_agent": _not_worse(runs, PHASE1B_SYSTEM, PHASE1B_BASELINE),
             "phase1b_cheaper_than_agent": _cheaper(runs, PHASE1B_SYSTEM, PHASE1B_BASELINE),
             "phase1b_citations_valid": _citations_valid(systems, PHASE1B_SYSTEM),
+            "phase2_annotation_followed": _annotation_followed(runs, PHASE1B_SYSTEM),
+            "phase2_conflict_shown": _conflict_shown(runs, PHASE1B_SYSTEM),
         }
     return out
 

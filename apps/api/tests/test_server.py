@@ -89,7 +89,7 @@ async def test_query_returns_answer_and_sources_without_context(cfg, fake_rag):
 
     assert not result.is_error
     data = result.structured_content
-    assert data["answer"] == "Mira Okafor [1]."
+    assert data["answer"] == "Mira Okafor [1] [document]."
     assert data["sources"][0]["title"] == "Harbor Signals Study"
     assert data["sources"][1]["pages"] == "3-3"
     assert data["found"] is True

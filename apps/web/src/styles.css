@@ -233,6 +233,39 @@ td.truncate {
   color: var(--error);
 }
 
+/* Annotation statuses */
+.status-verified {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.status-needs_verification,
+.status-proposed {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.status-orphaned,
+.status-rejected {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.chip {
+  display: inline-block;
+  margin: 0 0.25rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.chip-error {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 .ask-form textarea {
   display: block;
   width: 100%;
