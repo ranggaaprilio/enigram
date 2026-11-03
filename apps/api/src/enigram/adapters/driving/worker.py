@@ -6,6 +6,7 @@ import logging
 import time
 from datetime import UTC, datetime
 
+from enigram.application.budget import daily_exhausted
 from enigram.application.graph_edits import GRAPH_JOB_KINDS, apply_graph_job
 from enigram.application.indexing import delete_document, run_index
 from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps, JobRepository
@@ -13,6 +14,7 @@ from enigram.application.repo_sync import delete_repo_job, index_repo, remote_he
 from enigram.application.staleness import expire_verify_by
 from enigram.bootstrap import build_deps
 from enigram.config import Config
+from enigram.domain.budget import BUDGET_EXCEEDED, metered
 from enigram.domain.errors import EnigramError
 from enigram.domain.job import Job
 
@@ -144,10 +146,38 @@ async def process_next(
     notes: AnnotationRepository | None = None,
 ) -> Job | None:
     """Claim and run one job; None when the queue is empty. `graph` is the code graph that
-    repository jobs fill, `notes` the annotations they check."""
+    repository jobs fill, `notes` the annotations they check. A job stops with status
+    budget_exceeded when the daily budget is already used up or it crosses MAX_TOKENS_PER_JOB;
+    re-queue it by hand once the budget allows."""
     job = await store.claim()
     if job is None:
         return None
+    if message := await daily_exhausted(store, cfg):
+        log.warning("[worker] job %d not run: %s", job.id, message)
+        await store.finish(job.id, BUDGET_EXCEEDED, error=message)
+        return job
+    with metered(cfg.max_tokens_per_job, f"job {job.id}") as meter:
+        try:
+            job = await _dispatch(cfg, store, deps, job, graph, notes)
+        finally:
+            if meter.total:
+                await store.add_tokens(f"job:{job.kind}", job.payload.get("api_key"), meter.total)
+    if meter.exceeded:
+        log.warning("[worker] job %d: %s", job.id, meter.message)
+        done = await store.get_job(job.id)
+        result = done.result if done else None
+        await store.finish(job.id, BUDGET_EXCEEDED, result=result, error=meter.message)
+    return job
+
+
+async def _dispatch(
+    cfg: Config,
+    store: JobRepository,
+    deps: Deps,
+    job: Job,
+    graph: CodeGraphRepository | None,
+    notes: AnnotationRepository | None,
+) -> Job:
     if job.kind == "index_repo":
         return await _run_repo_job(cfg, store, deps, job, graph, notes)
     if job.kind == "delete_repo":

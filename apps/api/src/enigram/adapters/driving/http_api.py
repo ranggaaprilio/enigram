@@ -28,6 +28,7 @@ from enigram.application.annotations import (
     change_annotation,
     create_annotation,
 )
+from enigram.application.budget import daily_exhausted, query_allowance
 from enigram.application.code_agent import AGENT_MODE, answer_with_agent, repo_name
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
@@ -39,6 +40,7 @@ from enigram.bootstrap import build_deps
 from enigram.config import Config
 from enigram.domain.annotation import ANNOTATION_MAX_CHARS, Annotation
 from enigram.domain.answer import QUERY_MODE
+from enigram.domain.budget import BudgetExceeded, metered
 from enigram.domain.chunk import SOURCE_SUFFIXES, book_name
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
 
@@ -358,6 +360,10 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         log.info("[api] queued job %d: delete %s", job.id, book)
         return {"book": book, "status": "deleting", "job": asdict(job)}
 
+    async def _refuse_when_exhausted(store: JobRepository) -> None:
+        if message := await daily_exhausted(store, cfg):
+            raise HTTPException(429, message)
+
     @app.post("/repos", status_code=202)
     async def index_repo_route(request: Request, body: RepoRequest) -> Any:
         try:
@@ -366,6 +372,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         except EnigramError as e:
             raise HTTPException(422, str(e)) from e
         store = store_of(request)
+        await _refuse_when_exhausted(store)
         if any(j.payload.get("url") == body.url for j in await store.active_jobs()):
             raise HTTPException(409, f"{body.url} is already queued or running")
         payload = {"url": body.url, "api_key": _key_name(request)}
@@ -455,6 +462,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         if event.after == repo["indexed_sha"]:
             return {"ignored": f"already indexed {event.after[:12]}"}
         store = store_of(request)
+        await _refuse_when_exhausted(store)
         active = next(
             (j for j in await store.active_jobs() if j.payload.get("url") == repo["url"]), None
         )
@@ -550,29 +558,37 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
     async def query(request: Request, body: QueryRequest) -> dict[str, Any]:
         store = store_of(request)
         mode = AGENT_MODE if body.scope == "code" else body.mode
+        key = _key_name(request)
         try:
-            if body.scope == "code":
-                result = await answer_with_agent(
-                    cfg,
-                    deps.generator(),
-                    request.app.state.code_graph,
-                    body.question,
-                    repo_url=body.repo,
-                    model=cfg.llm_model,
-                    notes=request.app.state.notes,
-                )
-            else:
-                result = await answer_question(
-                    request.app.state.engine,
-                    body.question,
-                    body.mode,
-                    notes=request.app.state.notes,
-                )
-        except EnigramError as e:
-            await store.log_query(
-                "api", body.question, mode, error=str(e), api_key=_key_name(request)
-            )
-            raise HTTPException(502, str(e)) from e
+            cap = await query_allowance(store, cfg, key)
+        except BudgetExceeded as e:
+            raise HTTPException(429, str(e)) from e
+        with metered(cap, "this query") as meter:
+            try:
+                if body.scope == "code":
+                    result = await answer_with_agent(
+                        cfg,
+                        deps.generator(),
+                        request.app.state.code_graph,
+                        body.question,
+                        repo_url=body.repo,
+                        model=cfg.llm_model,
+                        notes=request.app.state.notes,
+                    )
+                else:
+                    result = await answer_question(
+                        request.app.state.engine,
+                        body.question,
+                        body.mode,
+                        notes=request.app.state.notes,
+                    )
+            except EnigramError as e:
+                await store.log_query("api", body.question, mode, error=str(e), api_key=key)
+                status = 429 if isinstance(e, BudgetExceeded) else 502
+                raise HTTPException(status, str(e)) from e
+            finally:
+                if meter.total:
+                    await store.add_tokens("query", key, meter.total)
         query_id = await store.log_query(
             "api", body.question, mode, result=result, api_key=_key_name(request)
         )

@@ -12,6 +12,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from enigram.application.budget import query_allowance
 from enigram.application.code_agent import AGENT_MODE, answer_with_agent
 from enigram.application.documents import documents_overview
 from enigram.application.ports import (
@@ -26,6 +27,7 @@ from enigram.application.querying import answer_question
 from enigram.bootstrap import build_deps
 from enigram.config import Config
 from enigram.domain.answer import QUERY_MODE, ContextChunk, Source
+from enigram.domain.budget import BudgetExceeded, metered
 from enigram.domain.errors import EnigramError
 from enigram.domain.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX
 
@@ -129,29 +131,39 @@ def create_server(
         call."""
         app = ctx.request_context.lifespan_context
         mode = AGENT_MODE if scope == "code" else QUERY_MODE
-        try:
-            if scope == "code":
-                if app.code_graph is None:
-                    raise ToolError(
-                        "Code questions need STORAGE_BACKEND=postgres and an indexed repository"
+        key = _api_key(ctx)
+        cap = None
+        if app.store:  # over HTTP: the daily and per-key caps; stdio is the owner's own run
+            try:
+                cap = await query_allowance(app.store, cfg, key)
+            except BudgetExceeded as e:
+                raise ToolError(f"429: {e}") from e
+        with metered(cap, "this query") as meter:
+            try:
+                if scope == "code":
+                    if app.code_graph is None:
+                        raise ToolError(
+                            "Code questions need STORAGE_BACKEND=postgres and an indexed repository"
+                        )
+                    result = await answer_with_agent(
+                        cfg,
+                        deps.generator(),
+                        app.code_graph,
+                        question,
+                        repo_url=repo,
+                        model=cfg.llm_model,
+                        notes=app.notes,
                     )
-                result = await answer_with_agent(
-                    cfg,
-                    deps.generator(),
-                    app.code_graph,
-                    question,
-                    repo_url=repo,
-                    model=cfg.llm_model,
-                    notes=app.notes,
-                )
-            else:
-                result = await answer_question(app.engine, question, notes=app.notes)
-        except EnigramError as e:
-            if app.store:
-                await app.store.log_query(
-                    "mcp", question, mode, error=str(e), api_key=_api_key(ctx)
-                )
-            raise ToolError(str(e)) from e
+                else:
+                    result = await answer_question(app.engine, question, notes=app.notes)
+            except EnigramError as e:
+                if app.store:
+                    await app.store.log_query("mcp", question, mode, error=str(e), api_key=key)
+                prefix = "429: " if isinstance(e, BudgetExceeded) else ""
+                raise ToolError(f"{prefix}{e}") from e
+            finally:
+                if app.store and meter.total:
+                    await app.store.add_tokens("query", key, meter.total)
         if app.store:
             await app.store.log_query("mcp", question, mode, result=result, api_key=_api_key(ctx))
         return AgentAnswer(

@@ -233,6 +233,11 @@ td.truncate {
   color: var(--error);
 }
 
+.status-budget_exceeded {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
 /* Annotation statuses */
 .status-verified {
   background: var(--ok-bg);

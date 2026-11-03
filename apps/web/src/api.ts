@@ -9,6 +9,7 @@ export type DocStatus =
   | 'failed'
   | 'done'
   | 'deleting'
+  | 'budget_exceeded' // a worker job stopped by MAX_TOKENS_PER_JOB or DAILY_TOKEN_BUDGET
 
 export interface Job {
   id: number

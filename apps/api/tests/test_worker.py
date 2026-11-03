@@ -19,6 +19,7 @@ class FakeJobStore:
         self.closed = False
         self.searches: list[tuple] = []
         self.graph = {"entities": [], "relations": []}
+        self.tokens: list[tuple[str, str | None, int]] = []  # (source, api key, tokens)
 
     async def close(self):
         self.closed = True
@@ -79,6 +80,12 @@ class FakeJobStore:
     async def search_graph(self, phrase, limit=50):
         self.searches.append((phrase, limit))
         return self.graph
+
+    async def add_tokens(self, source, api_key, tokens):
+        self.tokens.append((source, api_key, tokens))
+
+    async def tokens_today(self, api_key=None):
+        return sum(t for _, k, t in self.tokens if api_key is None or k == api_key)
 
     @asynccontextmanager
     async def worker_lock(self):
@@ -439,3 +446,51 @@ async def test_poll_tick_never_raises(cfg, store, monkeypatch, caplog):
     monkeypatch.setattr(worker, "poll_repos", boom)
     await worker._poll_tick(cfg, store, object(), object())
     assert "poll tick failed" in caplog.text
+
+
+async def test_job_over_its_token_cap_stops_as_budget_exceeded(cfg, store, deps, monkeypatch):
+    from enigram.domain.budget import record_usage
+
+    async def spending_index(cfg, deps, folder, pages=None, only=None):
+        record_usage(900, 100)  # under the cap: fine
+        record_usage(900, 100)  # crosses it: raises inside the job
+        raise AssertionError("not reached")
+
+    monkeypatch.setattr(worker, "run_index", spending_index)
+    cfg = replace(cfg, max_tokens_per_job=1500)
+    job = await store.enqueue("index", {"book": "p", "api_key": "web"})
+
+    await worker.process_next(cfg, store, deps)
+
+    done = await store.get_job(job.id)
+    assert done.status == "budget_exceeded"
+    assert "job 1 spent 2,000 tokens, over the cap of 1,500" in done.error
+    assert store.tokens == [("job:index", "web", 2000)]
+
+
+async def test_job_is_not_run_when_the_daily_budget_is_used_up(cfg, store, deps, fake_index):
+    await store.add_tokens("query", "web", 50)
+    cfg = replace(cfg, daily_token_budget=50)
+    job = await store.enqueue("index", {"book": "p"})
+
+    await worker.process_next(cfg, store, deps)
+
+    done = await store.get_job(job.id)
+    assert done.status == "budget_exceeded" and "Daily token budget exhausted" in done.error
+    assert fake_index.calls == []
+
+
+async def test_job_under_the_caps_records_its_tokens(cfg, store, deps, monkeypatch):
+    from enigram.domain.budget import record_usage
+
+    async def spending_index(cfg, deps, folder, pages=None, only=None):
+        record_usage(10, 5)
+        return IndexRun(books={"p": {"status": "indexed"}})
+
+    monkeypatch.setattr(worker, "run_index", spending_index)
+    job = await store.enqueue("index", {"book": "p"})
+
+    await worker.process_next(cfg, store, deps)
+
+    assert (await store.get_job(job.id)).status == "done"
+    assert store.tokens == [("job:index", None, 15)]
