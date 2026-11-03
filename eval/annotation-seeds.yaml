@@ -1,0 +1,65 @@
+# Phase 7 seed annotations (Enigram Code Knowledge PRD, Phase 2 deliverable).
+#
+# Targets exist at base_sha 9de6d8e54e5feb2e533a0348379fa03e8dca6350 of
+# https://github.com/ranggaaprilio/nestjs-boilerplate (the parent of the first staleness commit,
+# eval/README.md "Staleness commits"). Phase 7 indexes that commit on the `staleness` branch,
+# creates these notes, then replays the 13 commits and judges every (commit, note) pair:
+#   uv run enigram repo <fork> --ref staleness --limit 0
+#   uv run enigram annotations seed eval/annotation-seeds.yaml --repo <fork> --ref staleness
+# `# touched: #n` names the staleness commit expected to change the target (or a callee for
+# scope deps); `# untouched` targets sit in files no staleness commit changes. The texts are
+# invented team notes. Drafted by Claude 2026-11-03; names checked with grep at base_sha. A name
+# declared in two files (UserMapper: relational and document) is given as its symbol id.
+annotations:
+  # ------------------------------------------------------------------ touched by a commit
+  - target: AuthTwitterService.getProfileByToken  # touched: #1 (module deleted)
+    text: "Twitter login is kept only for the legacy partner app; do not extend it."
+  - target: bootstrap  # touched: #4 (body: global x-custom-lang header)
+    text: "Swagger is served at /docs only outside production; the gateway blocks it in production."
+  - target: ResolvePromisesInterceptor.intercept  # touched: #5, reverted by #6, #7
+    text: "Every response passes through this interceptor; keep it free of database calls."
+  - target: AuthFacebookService.getProfileByToken  # touched: #8 (body rewrite), #13
+    text: "Facebook tokens are checked against the app id configured in FACEBOOK_APP_ID."
+  - target: AuthService.refreshToken  # touched: #10 (callee change: deps)
+    text: "A refresh rotates the session hash, so an old refresh token stops working at once."
+  - target: AuthService.constructor  # touched: #11 (readonly on injected params: false alarm)
+    text: "AuthService gets its collaborators by injection only; never construct it by hand."
+    scope: body
+  - target: AuthGoogleService.constructor  # touched: #11 (signature only)
+    text: "The Google client is built once per process from GOOGLE_CLIENT_ID."
+    scope: body
+  - target: RolesGuard.canActivate  # touched: #12 (body)
+    text: "Admins pass every role check; the guard compares role ids, not names."
+  - target: deepResolvePromises  # touched: #12 (body)
+    text: "Used only by the serializer interceptor to await nested promises in responses."
+  - target: AuthService.validateLogin  # touched: #13 (body)
+    text: "Login errors must not reveal whether an email exists when uniform errors are on."
+  - target: AuthService.forgotPassword  # touched: #13 (body)
+    text: "Reset links are single-use: the signing secret includes the current password hash."
+  - target: AuthService.validateSocialLogin  # touched: #13 (body: unverified email rejected)
+    text: "Social logins create the user on first sign-in with the provider's email."
+  - target: AuthAppleService.getProfileByToken  # touched: #13 (body)
+    text: "Apple may hide the user's email; the account is then keyed by the Apple id."
+  # ------------------------------------------------------------------ untouched
+  - target: MailerService.sendMail  # untouched
+    text: "All outgoing email goes through this one method; staging points it at Mailpit."
+  - target: infinityPagination  # untouched
+    text: "hasNextPage is true when a full page came back, so the last page can be empty."
+  - target: UsersService.remove  # untouched
+    text: "Removing a user is a soft delete; the row stays for audit."
+  - target: UsersService.findById  # untouched
+    text: "Returns null, never throws, for an unknown id; callers decide the HTTP status."
+  - target: UsersService.findByEmail  # untouched
+    text: "Emails are stored lower-cased, so lookups are case-insensitive in practice."
+  - target: UsersService.findManyWithPagination  # untouched
+    text: "The admin user list is the only caller; filters come from the query string."
+  - target: MailService.forgotPassword  # untouched
+    text: "The reset email links to the frontend's /password-change page with the hash."
+  - target: FilesService.findById  # untouched
+    text: "File ids are UUIDs; a missing file returns null."
+  - target: "src/users/infrastructure/persistence/relational/mappers/user.mapper.ts#UserMapper.toDomain"  # untouched
+    text: "The mapper drops nothing: password stays on the domain user and is hidden at serialization."
+  - target: "src/users/infrastructure/persistence/relational/mappers/user.mapper.ts#UserMapper.toPersistence"  # untouched
+    text: "Role and status are mapped by id only; their names are not written."
+  - target: UsersController.remove  # untouched
+    text: "Only admins may delete users through the API."

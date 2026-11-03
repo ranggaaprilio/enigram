@@ -1,0 +1,102 @@
+# Phase 2 annotation spike (Enigram Code Knowledge PRD). Check:
+#   uv run enigram golden check --file eval/annotation-spike.yaml
+# Answer: uv run enigram golden answer --file eval/annotation-spike.yaml --system enigram-agent
+#
+# Five behavior_annotation questions answered by enigram-agent after their setup.annotation is
+# created (golden_run creates each note once; `conflict: true` marks it as conflicting with the
+# code). s01 is a01 of eval/golden.yaml verbatim; s02-s05 are drafted by Claude from the code at
+# the pinned commit on symbols that a02-a05 (locked until Phase 7) do not use. The team notes are
+# invented for the evaluation. This file is dev-like evidence only, separate from the locked set.
+version: 2
+repo:
+  url: https://github.com/ranggaaprilio/nestjs-boilerplate
+  ref: eval-v1
+  pinned_sha: "70ae60dbb6090ef75009845a914a140a2a5b9f30"
+questions:
+  - id: "s01"
+    category: behavior_annotation
+    split: dev
+    expected_route: annotation
+    setup:
+      annotation:
+        target: AuthFacebookService.getProfileByToken
+        text: "Facebook login is disabled in production at the API gateway; the endpoint is reachable in staging only."
+    question: "Can users sign in with Facebook in production?"
+    answer: >
+      The code supports it (POST /api/v1/auth/facebook/login → validateSocialLogin), but the team
+      note says the API gateway disables Facebook login in production, so in practice no.
+    evidence:
+      - symbol: AuthFacebookService.getProfileByToken
+
+  - id: "s02"
+    category: behavior_annotation
+    split: dev
+    expected_route: annotation
+    setup:
+      annotation:
+        target: MailService.userSignUp
+        text: "On staging every email goes to a Mailpit relay; no email sent from staging reaches a real inbox."
+    question: "Does someone who registers on staging get the confirmation email in their inbox?"
+    answer: >
+      The code sends it: register calls MailService.userSignUp, which mails a confirm-email link
+      (FRONTEND_DOMAIN/confirm-email?hash=…) through MailerService.sendMail to the given address.
+      The team note says staging routes all email to a Mailpit relay, so it never reaches a real
+      inbox.
+    evidence:
+      - symbol: MailService.userSignUp
+      - symbol: AuthService.register
+
+  - id: "s03"
+    category: behavior_annotation
+    split: dev
+    expected_route: annotation
+    setup:
+      annotation:
+        target: AuthService.refreshToken
+        text: "Team decision 2026-09: when a refresh fails, the mobile app retries once and then sends the user to the login screen."
+    question: "What happens when the mobile app's token refresh is rejected?"
+    answer: >
+      The API answers 401 Unauthorized when no session matches the session id and hash (or the
+      user has no role); on success it rotates the session hash and returns new tokens. The team
+      note says the mobile app retries once and then sends the user to the login screen.
+    evidence:
+      - symbol: AuthService.refreshToken
+      - symbol: SessionService.updateByHash
+
+  - id: "s04"
+    category: behavior_annotation
+    split: dev
+    expected_route: annotation
+    setup:
+      annotation:
+        target: SessionService.deleteByUserIdWithExclude
+        text: "Support runbook AUTH-12: after a password change every other device is signed out, and support tells users to expect it."
+    question: "What happens to a user's other logged-in devices after they change their password?"
+    answer: >
+      AuthService.update checks the old password and then calls
+      SessionService.deleteByUserIdWithExclude with the current session excluded, so every other
+      session is deleted and those devices must log in again. The team note (runbook AUTH-12)
+      says support tells users to expect this.
+    evidence:
+      - symbol: SessionService.deleteByUserIdWithExclude
+      - symbol: AuthService.update
+
+  # Deliberately conflicting: the code has no invite code (AuthRegisterLoginDto takes email,
+  # password, firstName and lastName). The answer must state both and show the conflict.
+  - id: "s05"
+    category: behavior_annotation
+    split: dev
+    expected_route: annotation
+    setup:
+      annotation:
+        target: AuthService.register
+        text: "Registration requires an invite code issued by an admin."
+        conflict: true
+    question: "Does registering a new account need an invite code?"
+    answer: >
+      Not in the code: POST /api/v1/auth/email/register takes email, password, firstName and
+      lastName, creates an inactive user and emails a confirmation link. A team note claims an
+      admin-issued invite code is required; the note conflicts with the code and both are shown.
+    evidence:
+      - symbol: AuthService.register
+      - symbol: AuthRegisterLoginDto

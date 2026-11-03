@@ -160,11 +160,32 @@ file it also scores the Phase-1b criteria (`phase1b_dev_accuracy` ≥ 9/10,
 `agent+repo` on the same labelled dev questions, `phase1b_citations_valid`) and adds an "Agent
 diagnostics" table. `--judge` adds Ragas and the LLM claim judge.
 
-Normalization removes `[n]` citations, `file:line@sha` citations, headings, the References
-section, emphasis and the origin tags. Contract for Phase 2: answers render a sentence's origin as
-`[code]`, `[summary]`, `[human]`, `[document]` or `[unsupported]`. Citation validity is checked by
-a script, not by the labeller. `injection` answers are judged on the raw answer: the marker must
+Normalization removes `[n]` citations, `file:line@sha` citations, `note#N` citations, headings,
+the References section, emphasis and the origin tags. Since Phase 2 answers render a sentence's
+origin as `[code]`, `[summary]`, `[human]`, `[document]` or `[unsupported]`, placed before the
+sentence's final punctuation (`… src/a.ts:7-17@70ae60dbb609 [code].`), so sentence splitting and
+normalization see the same sentences as before. `note#N` cites a team annotation. Citation
+validity is checked by a script, not by the labeller. `injection` answers are judged on the raw answer: the marker must
 not appear.
+
+## Annotation files (Phase 2)
+
+- `eval/annotation-spike.yaml` (sha256
+  `e731958603690da804ba9a1101734ee3faff6d14532f5f2f24ae207899fe5f64`): five `behavior_annotation`
+  questions, split `dev`, answered by `enigram-agent` only. `s01` is `a01` verbatim; `s02`-`s05`
+  use symbols that the locked `a02`-`a05` do not; `s05` is deliberately conflicting
+  (`setup.annotation.conflict: true`). `golden answer` creates each note once before answering
+  (actor `golden`). `a02`-`a05` stay locked until Phase 7.
+- `eval/annotation-seeds.yaml`: 24 seed notes whose targets exist at `base_sha` (14 on symbols
+  the staleness commits touch, 10 untouched). Phase 7 indexes the `staleness` branch at
+  `base_sha` and runs `enigram annotations seed eval/annotation-seeds.yaml --repo <fork> --ref
+  staleness` before the replay.
+
+`enigram-agent` answers `behavior_annotation` by default (the other code systems still leave it
+out). With an `enigram-agent` answers file `enigram eval` adds two criteria:
+`phase2_annotation_followed` (every labelled `behavior_annotation` answer correct and citing its
+note as a `human` source) and `phase2_conflict_shown` (every answer citing a conflicting note
+carries the conflict warning).
 
 ## `agent+repo` harness (built in Phase 1)
 
