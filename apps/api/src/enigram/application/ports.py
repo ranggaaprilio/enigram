@@ -116,6 +116,14 @@ class JobRepository(Protocol):
         self, phrase: str, limit: int = 50
     ) -> dict[str, list[dict[str, Any]]]: ...
 
+    async def add_tokens(self, source: str, api_key: str | None, tokens: int) -> None:
+        """Tokens one job or query spent today (UTC), for the daily budget."""
+        ...
+
+    async def tokens_today(self, api_key: str | None = None) -> int:
+        """Tokens spent today (UTC) in the workspace, or by one API key name."""
+        ...
+
 
 class MemoryRepository(Protocol):
     """Short agent notes, scoped to one API key name."""

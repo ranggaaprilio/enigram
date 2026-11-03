@@ -13,6 +13,7 @@ from openai import APIError, AsyncOpenAI
 
 from enigram.application.ports import ChatReply, ToolCall
 from enigram.config import Config
+from enigram.domain.budget import record_usage
 from enigram.domain.errors import EnigramError, ProviderUnavailableError
 from enigram.domain.llm_output import repair_relation_lines, strip_think
 
@@ -34,6 +35,29 @@ def prepare_request(cfg: Config, prompt: str, kwargs: dict[str, Any]) -> str:
     return prompt
 
 
+class _UsageTracker:
+    """What LightRAG's `token_tracker` hook expects: every provider call lands on the current
+    token meter (domain/budget), which raises once its cap is crossed."""
+
+    def add_usage(self, token_counts: dict[str, int]) -> None:
+        record_usage(
+            int(token_counts.get("prompt_tokens") or 0),
+            int(token_counts.get("completion_tokens") or 0),
+        )
+
+
+async def _complete(cfg: Config, prompt: str, **kwargs: Any) -> str:
+    """One completion through LightRAG's client, with its usage recorded."""
+    return await openai_complete_if_cache(
+        cfg.llm_model,
+        prompt,
+        api_key=cfg.llm_api_key,
+        base_url=cfg.llm_base_url,
+        token_tracker=_UsageTracker(),
+        **kwargs,
+    )
+
+
 def make_llm_func(cfg: Config):
     async def llm_model_func(
         prompt: str,
@@ -42,13 +66,11 @@ def make_llm_func(cfg: Config):
         **kwargs: Any,
     ) -> str:
         prompt = prepare_request(cfg, prompt, kwargs)
-        result = await openai_complete_if_cache(
-            cfg.llm_model,
+        result = await _complete(
+            cfg,
             prompt,
             system_prompt=system_prompt,
             history_messages=history_messages or [],
-            api_key=cfg.llm_api_key,
-            base_url=cfg.llm_base_url,
             **kwargs,
         )
         return repair_relation_lines(strip_think(result))
@@ -78,10 +100,7 @@ class OpenAIChatModel:
             kwargs["response_format"] = {"type": "json_object"}
         cfg = self.cfg
         prompt = prepare_request(cfg, prompt, kwargs)
-        raw = await openai_complete_if_cache(
-            cfg.llm_model, prompt, api_key=cfg.llm_api_key, base_url=cfg.llm_base_url, **kwargs
-        )
-        return strip_think(raw)
+        return strip_think(await _complete(cfg, prompt, **kwargs))
 
     async def chat(
         self,
@@ -125,12 +144,15 @@ class OpenAIChatModel:
             for c in (msg.tool_calls or [])
         ]
         usage = resp.usage
+        tokens_in = usage.prompt_tokens if usage else 0
+        tokens_out = usage.completion_tokens if usage else 0
+        record_usage(tokens_in, tokens_out)
         return ChatReply(
             text=strip_think(msg.content or ""),
             tool_calls=calls,
             finish_reason=choice.finish_reason or "",
-            tokens_in=usage.prompt_tokens if usage else 0,
-            tokens_out=usage.completion_tokens if usage else 0,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
             secs=round(time.perf_counter() - start, 2),
         )
 
