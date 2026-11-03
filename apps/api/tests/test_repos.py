@@ -149,7 +149,7 @@ def fake_sync(cfg, deps, monkeypatch):
 
     fake = FakeSync()
 
-    async def fake_index_code(cfg, deps, graph, root, url, ref, *, limit=None):
+    async def fake_index_code(cfg, deps, graph, root, url, ref, *, limit=None, notes=None):
         fake.code.append((graph, url, ref, limit, (root / "tsconfig.json").exists()))
         return {"symbols": 3, "summaries": {"flows": 1}, "commit_sha": "a" * 40}
 

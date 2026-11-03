@@ -265,7 +265,10 @@ async def _repo(cfg: Config, args: argparse.Namespace) -> int:
     store = await deps.open_store()
     try:
         graph = await deps.new_code_graph(store)
-        result = await index_repo(cfg, deps, args.url, args.ref, graph=graph, limit=args.limit)
+        notes = await deps.new_annotations(store)
+        result = await index_repo(
+            cfg, deps, args.url, args.ref, graph=graph, limit=args.limit, notes=notes
+        )
     finally:
         await store.close()
     for key, value in result["code"].items():

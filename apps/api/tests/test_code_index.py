@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 from code_fakes import FakeChat, FakeCodeGraph, fixture_graph, sym
+from git_fixture import git_commit
 from git_fixture import git_repo as _git_repo
 
 from enigram.application import code_index
@@ -118,6 +119,36 @@ async def test_index_code_checks_limits_before_the_sidecar(cfg, deps, tmp_path, 
     with pytest.raises(EnigramError, match="More than 1 TypeScript files"):
         await index_code(cfg, deps, FakeCodeGraph(), root, URL, None)
     assert parser.roots == []
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_second_index_reports_the_diff_and_symbol_changes(cfg, deps, tmp_path):
+    root = _git_repo(tmp_path / "repo", TREE)
+    first_graph = fixture_graph()
+    parser, graph_repo = FakeParser(first_graph), FakeCodeGraph()
+    deps.code_parser, deps.generator = (lambda: parser), FakeChat
+    first = await index_code(cfg, deps, graph_repo, root, URL, None)
+    assert (first["files_changed"], first["symbols_changed"], first["staleness"]) == (4, 0, {})
+    assert graph_repo.changes == []  # the first index is not a change
+    assert first["commit_at"][:4].isdigit()
+
+    service = "src/app.service.ts#AppService.find"
+    parser.graph = dataclasses.replace(
+        first_graph,
+        symbols=[
+            dataclasses.replace(s, body_hash="new") if s.id == service else s
+            for s in first_graph.symbols
+        ],
+    )
+    sha = git_commit(root, {"src/app.service.ts": "export class AppService { x = 1 }\n"}, "c")
+    second = await index_code(cfg, deps, graph_repo, root, URL, None)
+
+    assert (second["files_changed"], second["files_affected"], second["symbols_changed"]) == (
+        1,
+        1,
+        1,
+    )
+    assert graph_repo.changes == [(1, sha, service, "h-AppService.find", "new")]
 
 
 def test_is_ts_repo(tmp_path):

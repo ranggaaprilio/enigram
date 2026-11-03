@@ -6,7 +6,7 @@ import logging
 
 from enigram.application.graph_edits import GRAPH_JOB_KINDS, apply_graph_job
 from enigram.application.indexing import delete_document, run_index
-from enigram.application.ports import CodeGraphRepository, Deps, JobRepository
+from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps, JobRepository
 from enigram.application.repo_sync import index_repo
 from enigram.bootstrap import build_deps
 from enigram.config import Config
@@ -15,6 +15,7 @@ from enigram.domain.job import Job
 log = logging.getLogger(__name__)
 
 POLL_SECS = 2.0
+TRIGGER_KEYS = ("pushed_at", "received_at", "expected_sha")
 
 
 async def _run_graph_job(store: JobRepository, deps: Deps, job: Job) -> Job:
@@ -55,15 +56,23 @@ async def _run_repo_job(
     deps: Deps,
     job: Job,
     graph: CodeGraphRepository | None,
+    notes: AnnotationRepository | None = None,
 ) -> Job:
     url = job.payload["url"]
-    log.info("[worker] job %d: indexing repository %s", job.id, url)
+    trigger = job.payload.get("trigger", "manual")
+    log.info("[worker] job %d: indexing repository %s (%s)", job.id, url, trigger)
     try:
-        result = await index_repo(cfg, deps, url, job.payload.get("ref"), graph=graph)
+        result = await index_repo(cfg, deps, url, job.payload.get("ref"), graph=graph, notes=notes)
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
         await store.finish(job.id, "failed", error=str(e))
         return job
+    # What started the job and when, for the push -> indexed latency.
+    result = {
+        **result,
+        "trigger": trigger,
+        **{k: job.payload[k] for k in TRIGGER_KEYS if k in job.payload},
+    }
     failed = result["failed"]
     status = "failed" if failed else "done"
     error = f"{len(failed)} documents failed: {', '.join(failed[:5])}" if failed else None
@@ -73,15 +82,19 @@ async def _run_repo_job(
 
 
 async def process_next(
-    cfg: Config, store: JobRepository, deps: Deps, graph: CodeGraphRepository | None = None
+    cfg: Config,
+    store: JobRepository,
+    deps: Deps,
+    graph: CodeGraphRepository | None = None,
+    notes: AnnotationRepository | None = None,
 ) -> Job | None:
     """Claim and run one job; None when the queue is empty. `graph` is the code graph that
-    repository jobs fill."""
+    repository jobs fill, `notes` the annotations they check."""
     job = await store.claim()
     if job is None:
         return None
     if job.kind == "index_repo":
-        return await _run_repo_job(cfg, store, deps, job, graph)
+        return await _run_repo_job(cfg, store, deps, job, graph, notes)
     if job.kind == "delete_document":
         return await _run_delete_job(cfg, store, deps, job)
     if job.kind in GRAPH_JOB_KINDS:
@@ -118,13 +131,14 @@ async def run_worker(cfg: Config) -> None:
     store = await deps.open_store()
     try:
         graph = await deps.new_code_graph(store)
+        notes = await deps.new_annotations(store)
         async with store.worker_lock():
             # Safe under the lock: no other worker can be running these.
             if requeued := await store.requeue_running():
                 log.info("[worker] requeued %d interrupted job(s)", requeued)
             log.info("[worker] waiting for jobs in workspace %r", cfg.workspace)
             while True:
-                if await process_next(cfg, store, deps, graph) is None:
+                if await process_next(cfg, store, deps, graph, notes) is None:
                     await asyncio.sleep(POLL_SECS)
     finally:
         await store.close()

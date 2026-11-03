@@ -16,7 +16,8 @@ from urllib.parse import urlsplit
 from enigram.application.code_index import SKIP_DIRS, index_code, is_ts_repo
 from enigram.application.files import file_sha256
 from enigram.application.indexing import delete_document, load_manifest, run_index, save_manifest
-from enigram.application.ports import CodeGraphRepository, Deps
+from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps
+from enigram.application.staleness import expire_verify_by
 from enigram.config import Config
 from enigram.domain.chunk import MARKDOWN_SUFFIXES, book_name
 from enigram.domain.errors import EnigramError
@@ -142,6 +143,7 @@ async def index_repo(
     *,
     graph: CodeGraphRepository | None = None,
     limit: int | None = None,
+    notes: AnnotationRepository | None = None,
 ) -> dict[str, Any]:
     """Index (or re-sync) a repository from one clone. Markdown: changed files are deleted and
     indexed again, files gone from the repository are deleted, uploaded documents are never
@@ -162,7 +164,9 @@ async def index_repo(
                 raise EnigramError(
                     "Indexing a TypeScript repository needs STORAGE_BACKEND=postgres"
                 )
-            code = await index_code(cfg, deps, graph, root, url, ref, limit=limit)
+            code = await index_code(cfg, deps, graph, root, url, ref, limit=limit, notes=notes)
+            if notes:
+                code["expired"] = await expire_verify_by(notes)
             # The answering agent reads source from this store (repo_store imports this module).
             from enigram.application import repo_store
 

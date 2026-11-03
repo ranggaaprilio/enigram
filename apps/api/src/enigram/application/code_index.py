@@ -10,8 +10,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from enigram.application.code_changes import affected_files, diff_files, symbol_changes
 from enigram.application.code_summary import build_summaries
-from enigram.application.ports import CodeGraphRepository, Deps, ParsedGraph
+from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps, ParsedGraph
+from enigram.application.staleness import check_repo
 from enigram.config import Config
 from enigram.domain.code import CodeFile
 from enigram.domain.errors import EnigramError
@@ -124,21 +126,37 @@ async def index_code(
     ref: str | None,
     *,
     limit: int | None = None,
+    notes: AnnotationRepository | None = None,
 ) -> dict[str, Any]:
     """Parse, store and summarise one checked-out repository; `limit` summarises only the first
-    N entry points (a quick trial)."""
+    N entry points (a quick trial). Against the previous index: the file diff, the files that
+    import a changed one, the symbol changes, and (with `notes`) the staleness pass, which runs
+    before the summaries because those spend tokens and may fail."""
     start = time.perf_counter()
     files, loc = repo_limits(root)  # before the sidecar: a huge repository fails fast
     log.info("[code] %s: %d TypeScript files, %d lines", url, files, loc)
     parsed = await asyncio.to_thread(deps.code_parser().parse, root)
     parsed, redacted = redact_graph(parsed)
+    previous = await graph_repo.get_repo(url, ref)
+    old_hashes = await graph_repo.symbol_hashes(previous["id"]) if previous else {}
+    old_files = await graph_repo.files(previous["id"]) if previous else []
+    old_imports = await graph_repo.import_edges(previous["id"]) if previous else []
+    blobs = git_blob_shas(root)
+    diff = diff_files(old_files, blobs)
+    affected = affected_files([*diff.changed, *diff.added, *diff.removed], old_imports)
     sha = head_sha(root)
-    repo_id = await graph_repo.replace_repo(url, ref, sha, git_blob_shas(root), parsed)
+    commit_at = _git(root, "log", "-1", "--format=%cI").strip()
+    repo_id = await graph_repo.replace_repo(url, ref, sha, blobs, parsed)
+    changes = symbol_changes(old_hashes, parsed.symbols)
+    if previous:  # the first index is not a change
+        await graph_repo.record_symbol_changes(repo_id, sha, changes)
+    staleness = await check_repo(graph_repo, notes, repo_id, sha) if notes else {}
     summary = await build_summaries(cfg, deps.generator(), graph_repo, repo_id, sha, limit=limit)
     report = parsed.report
     result = {
         "repo_id": repo_id,
         "commit_sha": sha,
+        "commit_at": commit_at,
         "files": files,
         "loc": loc,
         "symbols": len(parsed.symbols),
@@ -153,6 +171,11 @@ async def index_code(
         "diagnostics_sample": report.get("diagnostics_sample"),
         "secrets_redacted": redacted,
         "summaries": summary,
+        # Against the previous index of (url, ref); everything is "added" on the first one.
+        "files_changed": len(diff.changed) + len(diff.added) + len(diff.removed),
+        "files_affected": len(affected),
+        "symbols_changed": len(changes) if previous else 0,
+        "staleness": staleness,
         "secs": round(time.perf_counter() - start, 1),
     }
     await graph_repo.set_report(
