@@ -1,7 +1,7 @@
 import hashlib
 
 import pytest
-from code_fakes import FakeCodeGraph
+from code_fakes import FakeAnnotations, FakeCodeGraph
 from fastapi.testclient import TestClient
 from test_query import FakeRag
 from test_server import FakeMemoryStore
@@ -41,7 +41,11 @@ def _deps(cfg, store, built):
     async def new_code_graph(store):
         return FakeCodeGraph()
 
+    async def new_annotations(store):
+        return FakeAnnotations()
+
     deps.open_store, deps.new_memory, deps.new_code_graph = open_store, new_memory, new_code_graph
+    deps.new_annotations = new_annotations
     return deps
 
 
@@ -208,7 +212,7 @@ def test_query_returns_answer_and_stores_its_trace(env):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["answer"] == "Mira Okafor [1]."
+    assert body["answer"] == "Mira Okafor [1] [document]."
     assert body["sources"][0]["title"] == "Harbor Signals Study"
     assert rag.params[0].mode == "mix"
     stored = client.get(f"/queries/{body['id']}").json()
@@ -233,8 +237,8 @@ def test_query_scope_code_uses_the_agent(env, monkeypatch):
     client, store, rag, _ = env
     seen = {}
 
-    async def fake_agent(cfg, chat, graph, question, *, repo_url, model):
-        seen.update(graph=graph, question=question, repo_url=repo_url, model=model)
+    async def fake_agent(cfg, chat, graph, question, *, repo_url, model, notes):
+        seen.update(graph=graph, question=question, repo_url=repo_url, model=model, notes=notes)
         return QueryResult(question, "Only admins src/a.ts:1-2@abc1234.", [], [], mode=AGENT_MODE)
 
     monkeypatch.setattr(api, "answer_with_agent", fake_agent)
@@ -244,6 +248,7 @@ def test_query_scope_code_uses_the_agent(env, monkeypatch):
 
     assert response.status_code == 200 and response.json()["mode"] == "enigram-agent"
     assert isinstance(seen["graph"], FakeCodeGraph) and seen["repo_url"] == body["repo"]
+    assert isinstance(seen["notes"], FakeAnnotations)
     assert rag.params == []  # the document index is not asked
     assert store.queries[0]["mode"] == "enigram-agent"
 
@@ -376,7 +381,7 @@ def test_mcp_over_http_answers_and_logs_source_and_key(keyed_env):
     assert response.status_code == 200
     result = response.json()["result"]
     assert not result["isError"]
-    assert result["structuredContent"]["answer"] == "Mira Okafor [1]."
+    assert result["structuredContent"]["answer"] == "Mira Okafor [1] [document]."
     [logged] = store.queries
     assert (logged["source"], logged["api_key"]) == ("mcp", "laptop-a")
     assert rag.initialized == 1  # the API's own instance, not a second one for MCP

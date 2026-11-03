@@ -218,8 +218,9 @@ async def _query_code(cfg: Config, question: str, url: str | None) -> int:
     store = await deps.open_store()
     try:
         graph = await deps.new_code_graph(store)
+        notes = await deps.new_annotations(store)
         result = await answer_with_agent(
-            cfg, deps.generator(), graph, question, repo_url=url, model=cfg.llm_model
+            cfg, deps.generator(), graph, question, repo_url=url, model=cfg.llm_model, notes=notes
         )
     finally:
         await store.close()
@@ -242,8 +243,15 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
     from enigram.application.querying import answer_question
     from enigram.bootstrap import build_deps
 
-    async with build_deps(cfg).open_engine() as engine:
-        result = await answer_question(engine, args.question, args.mode)
+    deps = build_deps(cfg)
+    store = await deps.open_store() if cfg.storage == "postgres" else None
+    try:
+        notes = await deps.new_annotations(store) if store else None
+        async with deps.open_engine() as engine:
+            result = await answer_question(engine, args.question, args.mode, notes=notes)
+    finally:
+        if store:
+            await store.close()
     print(result.answer)
     if result.sources:
         print("\nSources:")

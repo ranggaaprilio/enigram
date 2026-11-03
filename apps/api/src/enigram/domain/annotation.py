@@ -9,6 +9,8 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Any
 
+from enigram.domain.answer import Source
+
 TARGET_KINDS = ("symbol", "entity", "document")
 STATUSES = ("verified", "needs_verification", "orphaned", "proposed", "rejected")
 REASONS = ("hash", "deps", "orphan", "verify_by")
@@ -111,3 +113,16 @@ def warnings_for(notes: Iterable[Annotation]) -> list[str]:
                 f"⚠ note#{n.id} is marked as conflicting with the code; both are shown above."
             )
     return out
+
+
+def note_source(ref: int, note: Annotation) -> Source:
+    """The answer source of a cited note."""
+    return Source(
+        ref=ref,
+        title=f"note#{note.id} on {note.target_ref}",
+        section="human",
+        pages="",
+        citation=f"note#{note.id}",
+        origin="human",
+        target=str(note.id),
+    )

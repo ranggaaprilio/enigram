@@ -172,6 +172,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             store=app.state.store,
             memory=app.state.memory,
             code_graph=app.state.code_graph,
+            notes=app.state.notes,
         )
 
     mcp = create_server(cfg, lifespan=mcp_lifespan, deps=deps)
@@ -195,6 +196,8 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         store = await deps.open_store()
         app.state.memory = await deps.new_memory(store)
         app.state.code_graph = await deps.new_code_graph(store)
+        # Written synchronously by the annotation routes; the worker writes staleness flags.
+        app.state.notes = await deps.new_annotations(store)
         try:
             # require_index=False: a fresh deployment has no index yet and must still start.
             async with deps.open_engine(query_cache=False, require_index=False) as engine:
@@ -323,9 +326,15 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
                     body.question,
                     repo_url=body.repo,
                     model=cfg.llm_model,
+                    notes=request.app.state.notes,
                 )
             else:
-                result = await answer_question(request.app.state.engine, body.question, body.mode)
+                result = await answer_question(
+                    request.app.state.engine,
+                    body.question,
+                    body.mode,
+                    notes=request.app.state.notes,
+                )
         except EnigramError as e:
             await store.log_query(
                 "api", body.question, mode, error=str(e), api_key=_key_name(request)

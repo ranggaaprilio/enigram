@@ -1,6 +1,7 @@
 """Annotation use cases shared by the API, the CLI and the golden runner: create and change with
 the verifier rule (owner or ANNOTATION_VERIFIERS), one event per change."""
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -16,9 +17,13 @@ from enigram.domain.annotation import (
     TARGET_KINDS,
     Annotation,
     may_verify,
+    note_line,
+    warnings_for,
 )
+from enigram.domain.answer import QueryResult
 from enigram.domain.code import CodeSymbol
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
+from enigram.domain.origin import tag_origins
 
 log = logging.getLogger(__name__)
 
@@ -283,3 +288,35 @@ async def seed_annotations(
         await create_annotation(cfg, graph, notes, new, actor)
         created += 1
     return {"created": created, "skipped": skipped, "unresolved": unresolved}
+
+
+NOTES_INSTRUCTION = (
+    "Team notes rank above the Knowledge Graph and the Document Chunks. When a sentence uses one, "
+    "end it with its id exactly as written (note#N). If a note contradicts the context, state "
+    "both."
+)
+
+
+def notes_prompt(notes: list[Annotation]) -> str:
+    """The docs-path instruction block: the rule, then one full note line per note."""
+    lines = "\n".join(
+        f"- {note_line(n, full=True)} (on {n.target_kind} {n.target_ref})" for n in notes
+    )
+    return f"{NOTES_INSTRUCTION}\nTeam notes:\n{lines}"
+
+
+def attach_notes(result: QueryResult, cited: dict[int, Annotation]) -> QueryResult:
+    """Origin tags on every sentence (when the answer was found), then one warning line per
+    cited note that is not plainly verified; the counts and the cited notes go into `extra`."""
+    answer, origins = (
+        tag_origins(result.answer, result.sources) if result.found else (result.answer, {})
+    )
+    warnings = warnings_for(cited.values())
+    if warnings:
+        answer = answer.rstrip() + "\n\n" + "\n".join(warnings)
+    notes = [
+        {"id": n.id, "status": n.status, "reason": n.reason, "conflict": n.conflict}
+        for n in sorted(cited.values(), key=lambda n: n.id)
+    ]
+    extra = {**result.extra, "origins": origins, "notes": notes}
+    return dataclasses.replace(result, answer=answer, extra=extra)
