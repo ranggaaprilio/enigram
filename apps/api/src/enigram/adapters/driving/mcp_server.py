@@ -160,16 +160,25 @@ class Proposed:
 
 
 @dataclass
-class DocConflict:
-    repo: str
-    ref: str | None
-    entity: str  # the knowledge-graph entity from the documents
+class ConflictSymbol:
     symbol: str
     location: str  # file:start-end@sha, "" when the symbol is gone
+    entity: str  # the knowledge-graph entity from the documents that led to this symbol
+    p: float  # P(the document contradicts this code)
+    provider: str
+
+
+@dataclass
+class DocConflict:
+    """One passage of a document and the code it may contradict."""
+
+    repo: str
+    ref: str | None
     chunk_ids: list[str]
     doc_excerpt: str
-    p: float  # P(the document contradicts the code)
-    provider: str
+    p: float  # the highest of `symbols`
+    entities: list[str]
+    symbols: list[ConflictSymbol]  # highest p first
 
 
 @dataclass
@@ -597,11 +606,13 @@ def create_server(
             str | None, Field(description="Only this repository URL (default: all).")
         ] = None,
     ) -> Conflicts:
-        """Known contradictions: team notes marked as conflicting with the code, and places
-        where the indexed documents say something the code contradicts (entity, symbol with
-        file:start-end@sha, document excerpt, probability). Where they disagree, trust the code
-        and say so. `runs` tells when detection last ran per repository; an empty `runs` means
-        it never ran (ask the owner to run `enigram conflicts detect`)."""
+        """Possible contradictions: team notes marked as conflicting with the code, and passages
+        of the indexed documents that may contradict the code (excerpt, then the symbols with
+        file:start-end@sha and probability). The document matches are found automatically and
+        are often wrong: read the cited code before relying on one; only when the code really
+        contradicts the document, trust the code and say so. `runs` tells when detection last
+        ran per repository; an empty `runs` means it never ran (ask the owner to run
+        `enigram conflicts detect`)."""
         app = ctx.request_context.lifespan_context
         repos = await _repos(app, repo)
         view = await conflicts_view(
@@ -610,7 +621,10 @@ def create_server(
         urls = {r["id"]: r["url"] for r in repos}
         return Conflicts(
             notes=[_note_info(n, urls) for n in view["notes"]],
-            documents=[DocConflict(**d) for d in view["documents"]],
+            documents=[
+                DocConflict(**{**d, "symbols": [ConflictSymbol(**s) for s in d["symbols"]]})
+                for d in view["documents"]
+            ],
             runs=[
                 ConflictRun(
                     r["repo"], r["ref"], r["sha"], r["at"].isoformat(), r["report"]["conflicts"]

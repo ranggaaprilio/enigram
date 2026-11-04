@@ -73,6 +73,54 @@ def test_repo_books_filters_by_url_and_ref():
     assert repo_books(books, URL, "v2") == ["c"]
 
 
+def test_repo_books_skip_files_that_make_no_claim_about_the_code():
+    paths = {
+        "readme": "README.md",
+        "guide": "docs/auth.md",
+        "claude": "CLAUDE.md",
+        "nested_claude": "packages/api/CLAUDE.md",
+        "skill": ".claude/skills/generate/SKILL.md",
+        "agents": "AGENTS.md",
+        "changelog": "CHANGELOG.md",
+        "conduct": "CODE_OF_CONDUCT.md",
+        "issue": ".github/ISSUE_TEMPLATE/bug_report.md",
+    }
+    books = {b: {"repo": URL, "repo_path": p} for b, p in paths.items()}
+    assert repo_books(books, URL, None) == ["guide", "readme"]
+
+
+async def test_conflicts_view_groups_one_passage(cfg, world):
+    """One passage gives a row per (entity, candidate symbol): one item, highest p first."""
+    graph, conflicts = world
+    helper = "src/app.service.ts#AppService.helper"
+    rows = [
+        ("Social Providers", SERVICE, [CHUNK, "x-c00002"], 0.86),
+        ("Email Verified Flag", helper, [CHUNK], 0.81),
+        ("Email Verified Flag", SERVICE, [CHUNK], 0.9),
+        ("Elsewhere", SERVICE, ["other-c00001"], 0.85),
+    ]
+    found = [
+        {"entity": e, "symbol_id": s, "chunk_ids": c, "doc_excerpt": e, "p": p, "provider": "jev"}
+        for e, s, c, p in rows
+    ]
+    await conflicts.replace(1, SHA, [], found, {"conflicts": len(found)})
+
+    view = await conflicts_view(graph, None, conflicts, await graph.list_repos(), all_notes=False)
+
+    passage, other = view["documents"]
+    assert (passage["chunk_ids"], passage["p"]) == ([CHUNK, "x-c00002"], 0.9)
+    assert passage["entities"] == ["Email Verified Flag", "Social Providers"]
+    assert [(s["symbol"], s["p"]) for s in passage["symbols"]] == [
+        (SERVICE, 0.9),
+        (SERVICE, 0.86),
+        (helper, 0.81),
+    ]
+    assert (other["chunk_ids"], [s["entity"] for s in other["symbols"]]) == (
+        ["other-c00001"],
+        ["Elsewhere"],
+    )
+
+
 # The fake full-text search matches the two AppService methods by name ("AppService" in the
 # entity's description); the fixture has no code embeddings, so vectors add nothing.
 PAIRS = 2
@@ -236,13 +284,10 @@ async def test_conflicts_view(cfg, world):
         n.id for n in view["notes"]
     ]
     [doc] = view["documents"]
-    assert (doc["repo"], doc["entity"], doc["symbol"], doc["location"], doc["p"]) == (
-        URL,
-        "User Lookup",
-        SERVICE,
-        f"src/app.service.ts:10-15@{SHA[:12]}",
-        0.95,
-    )
+    assert (doc["repo"], doc["entities"], doc["p"]) == (URL, ["User Lookup"], 0.95)
+    assert [(s["symbol"], s["location"], s["p"]) for s in doc["symbols"]] == [
+        (SERVICE, f"src/app.service.ts:10-15@{SHA[:12]}", 0.95)
+    ]
     [run] = view["runs"]
     assert (run["repo"], run["sha"], run["report"]["conflicts"]) == (URL, SHA, 1)
     empty = await conflicts_view(graph, None, None, repos, all_notes=True)
