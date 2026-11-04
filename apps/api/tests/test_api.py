@@ -839,3 +839,78 @@ def test_webhook_ignores_another_branch(notes_env):
     main = _push()
     client.post("/repos/1/webhook", content=main, headers=_signed(main, secret))
     assert store.jobs[-1].payload["ref"] == "main"
+
+
+# --- token caps --------------------------------------------------------------------------------
+
+
+def _spend(monkeypatch, tokens_in, tokens_out):
+    """Make the docs answer path record provider usage, as the LightRAG tracker would."""
+    from enigram.domain.budget import record_usage
+
+    original = api.answer_question
+
+    async def answer(*args, **kwargs):
+        record_usage(tokens_in, tokens_out)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(api, "answer_question", answer)
+
+
+def test_query_records_tokens_and_answers_429_when_the_daily_budget_is_gone(
+    pg_cfg, clean_env, fake_memory, monkeypatch
+):
+    monkeypatch.setenv("DAILY_TOKEN_BUDGET", "100")
+    cfg = Config.from_env(clean_env)
+    store, rag = FakeJobStore(), FakeRag()
+    monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: rag)
+    _spend(monkeypatch, 60, 10)
+    with TestClient(api.create_app(cfg, _deps(cfg, store, fake_memory))) as client:
+        first = client.post("/query", json={"question": "Who designed the protocol?"})
+        assert first.status_code == 200
+        assert store.tokens == [("query", None, 70)]
+
+        second = client.post("/query", json={"question": "Who designed the protocol?"})
+        assert second.status_code == 429  # 70 + 70 crossed 100 during the answer
+        assert "this query spent 70 tokens, over the cap of 30" in second.json()["detail"]
+        assert store.tokens[-1] == ("query", None, 70)
+        assert store.queries[-1]["error"].startswith("this query spent")
+
+        third = client.post("/query", json={"question": "Again?"})
+        assert third.status_code == 429 and "Daily token budget" in third.json()["detail"]
+        assert client.post("/repos", json={"url": "https://github.com/org/h"}).status_code == 429
+
+
+def test_per_key_cap_and_mcp_429(pg_cfg, clean_env, fake_memory, monkeypatch):
+    monkeypatch.setenv("ENIGRAM_API_KEYS", f"laptop-a:{LAPTOP_KEY},web:{WEB_KEY}")
+    monkeypatch.setenv("PER_KEY_DAILY_TOKENS", "100")
+    cfg = Config.from_env(clean_env)
+    store, rag = FakeJobStore(), FakeRag()
+    monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: rag)
+    with TestClient(api.create_app(cfg, _deps(cfg, store, fake_memory))) as client:
+        store.tokens.append(("query", "web", 100))  # the key's cap is already used up
+
+        refused = client.post("/query", json={"question": "Who?"}, headers=_bearer(WEB_KEY))
+        assert refused.status_code == 429 and "API key 'web' used 100" in refused.json()["detail"]
+        other = client.post("/query", json={"question": "Who?"}, headers=_bearer(LAPTOP_KEY))
+        assert other.status_code == 200
+
+        mcp = _mcp(
+            client,
+            "tools/call",
+            {"name": "query_knowledge_base", "arguments": {"question": "Who?"}},
+            _bearer(WEB_KEY),
+        )
+        result = mcp.json()["result"]
+        assert result["isError"] and "429" in result["content"][0]["text"]
+
+
+def test_webhook_answers_429_when_the_daily_budget_is_gone(notes_env):
+    client, store, _, _, build = notes_env
+    secret = client.post("/repos/1/secret", headers=_bearer(WEB_KEY)).json()["secret"]
+    store.tokens.append(("job:index_repo", None, 10**9))
+    body = _push()
+
+    response = client.post("/repos/1/webhook", content=body, headers=_signed(body, secret))
+
+    assert response.status_code == 429 and store.jobs == []

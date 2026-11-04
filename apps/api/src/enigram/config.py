@@ -4,6 +4,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from enigram.domain.budget import (
+    DEFAULT_DAILY_TOKEN_BUDGET,
+    DEFAULT_MAX_TOKENS_PER_JOB,
+    DEFAULT_PER_KEY_DAILY_TOKENS,
+)
 from enigram.domain.errors import EnigramError
 
 # LightRAG re-chunks anything longer than this. Docling chunks are capped at
@@ -101,6 +106,11 @@ class Config:
     annotation_verifiers: tuple[str, ...]
     # Seconds between `git ls-remote` checks of indexed repositories by the worker; 0 = off.
     repo_poll_secs: int
+    # Token caps counted from every provider call (0 = off): per worker job, per day for the
+    # whole workspace (jobs and queries), and per API key per day on the query path.
+    max_tokens_per_job: int
+    daily_token_budget: int
+    per_key_daily_tokens: int
     data_dir: Path
     # Bare partial clones the code agent reads source from (application/repo_store.py).
     repo_store: Path
@@ -148,6 +158,14 @@ class Config:
         repo_poll_secs = _int("REPO_POLL_SECS", 120)
         if repo_poll_secs < 0:
             raise EnigramError(f"REPO_POLL_SECS must be 0 (off) or more, got {repo_poll_secs}")
+        caps = {
+            "MAX_TOKENS_PER_JOB": _int("MAX_TOKENS_PER_JOB", DEFAULT_MAX_TOKENS_PER_JOB),
+            "DAILY_TOKEN_BUDGET": _int("DAILY_TOKEN_BUDGET", DEFAULT_DAILY_TOKEN_BUDGET),
+            "PER_KEY_DAILY_TOKENS": _int("PER_KEY_DAILY_TOKENS", DEFAULT_PER_KEY_DAILY_TOKENS),
+        }
+        for name, value in caps.items():
+            if value < 0:
+                raise EnigramError(f"{name} must be 0 (off) or more, got {value}")
         if os.environ.get("POSTGRES_WORKSPACE", "").strip():
             # LightRAG lets it override the workspace passed in code, which would put the
             # `index --pages` dev run into the main index.
@@ -188,6 +206,9 @@ class Config:
                 if n.strip()
             ),
             repo_poll_secs=repo_poll_secs,
+            max_tokens_per_job=caps["MAX_TOKENS_PER_JOB"],
+            daily_token_budget=caps["DAILY_TOKEN_BUDGET"],
+            per_key_daily_tokens=caps["PER_KEY_DAILY_TOKENS"],
             data_dir=data_dir,
             repo_store=Path(
                 os.environ.get("REPO_STORE", "").strip() or data_dir / "repos"

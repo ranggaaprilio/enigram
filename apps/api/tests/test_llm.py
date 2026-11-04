@@ -398,3 +398,47 @@ def test_config_postgres_index_location_names_workspace(pg_cfg, clean_env, monke
     location = Config.from_env(clean_env).index_location
     assert "'papers'" in location and "'enigram'" in location
     assert "pg-password-not-real" not in repr(Config.from_env(clean_env))
+
+
+def test_config_token_caps_default_and_override(cfg, clean_env, monkeypatch):
+    assert (cfg.max_tokens_per_job, cfg.daily_token_budget, cfg.per_key_daily_tokens) == (
+        2_000_000,
+        20_000_000,
+        2_000_000,
+    )
+    monkeypatch.setenv("MAX_TOKENS_PER_JOB", "0")
+    monkeypatch.setenv("DAILY_TOKEN_BUDGET", "500")
+    loaded = Config.from_env(clean_env)
+    assert (loaded.max_tokens_per_job, loaded.daily_token_budget) == (0, 500)
+    monkeypatch.setenv("PER_KEY_DAILY_TOKENS", "-1")
+    with pytest.raises(EnigramError, match="PER_KEY_DAILY_TOKENS must be 0"):
+        Config.from_env(clean_env)
+
+
+async def test_chat_records_usage_on_the_meter(cfg, monkeypatch):
+    from enigram.domain.budget import BudgetExceeded, metered
+
+    completions = FakeCompletions(_response("x", usage=(120, 30)))
+    _fake_client(monkeypatch, completions)
+    model = openai_llm.OpenAIChatModel(cfg)
+
+    with metered(200, "job 1") as meter:
+        await model.chat([{"role": "user", "content": "q"}])
+        assert meter.total == 150
+        with pytest.raises(BudgetExceeded):
+            await model.chat([{"role": "user", "content": "q"}])
+    assert meter.total == 300 and len(completions.calls) == 2
+
+
+async def test_llm_func_passes_a_tracker_that_records_usage(cfg, monkeypatch):
+    from enigram.domain.budget import metered
+
+    async def fake_complete(model, prompt, **kwargs):
+        kwargs["token_tracker"].add_usage({"prompt_tokens": 7, "completion_tokens": 3})
+        return "ok"
+
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    with metered(None, "job") as meter:
+        assert await openai_llm.make_llm_func(cfg)("hello") == "ok"
+        assert await openai_llm.OpenAIChatModel(cfg).complete("hello") == "ok"
+    assert meter.total == 20

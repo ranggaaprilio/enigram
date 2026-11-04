@@ -27,7 +27,7 @@ async def store(pool):
     store = PostgresJobStore(pool, f"test_{uuid4().hex[:8]}")
     await store.ensure_schema()
     yield store
-    for table in ("enigram_jobs", "enigram_queries"):
+    for table in ("enigram_jobs", "enigram_queries", "enigram_token_usage"):
         await pool.execute(f"DELETE FROM {table} WHERE workspace = $1", store.workspace)
 
 
@@ -172,3 +172,17 @@ async def test_search_graph_is_scoped_to_the_workspace(store, pool, graph_rows):
     other = PostgresJobStore(pool, f"{store.workspace}_other")
 
     assert await other.search_graph("60%") == {"entities": [], "relations": []}
+
+
+async def test_token_ledger_sums_per_day_and_key(store, pool):
+    await store.add_tokens("job:index", None, 100)
+    await store.add_tokens("query", "web", 40)
+    await store.add_tokens("query", "web", 2)
+    await store.add_tokens("query", "laptop-a", 5)
+
+    assert await store.tokens_today() == 147
+    assert await store.tokens_today("web") == 42
+    assert await store.tokens_today("nobody") == 0
+    other = PostgresJobStore(pool, f"test_{uuid4().hex[:8]}")
+    assert await other.tokens_today() == 0
+    await pool.execute("DELETE FROM enigram_token_usage WHERE workspace = $1", store.workspace)

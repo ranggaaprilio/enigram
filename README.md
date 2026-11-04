@@ -209,6 +209,22 @@ curl -H "$AUTH" localhost:8080/queries/1
 Without Docker, run `uv run enigram api` and `uv run enigram worker` next to
 `docker compose up -d postgres`. Only one worker per `WORKSPACE` runs; a second one exits.
 
+### Token caps
+
+Every DeepSeek call (LightRAG extraction and answers, summaries, the code agent, judges) is
+counted, and three caps bound the spend; `0` turns one off.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MAX_TOKENS_PER_JOB` | 2,000,000 | A worker job that crosses it stops with status `budget_exceeded` (its partial result is kept; summaries already saved are reused when it is queued again) |
+| `DAILY_TOKEN_BUDGET` | 20,000,000 | Jobs and queries together, per workspace and UTC day. When used up, queued jobs finish as `budget_exceeded` without running, and `POST /repos`, the webhook, `POST /query` and MCP `query_knowledge_base` answer 429 |
+| `PER_KEY_DAILY_TOKENS` | 2,000,000 | Per API key name and UTC day on the query path (`/query`, MCP): 429 once used up, so a leaked key cannot burn the budget |
+
+A query that crosses what is left mid-answer also gets 429 (the tokens it spent still count).
+Usage is recorded in `enigram_token_usage` per day, source (`job:<kind>`, `query`) and key; the
+CLI (`enigram repo`, `enigram query`, `enigram golden`) is not metered. A `budget_exceeded` job is
+re-queued by hand (upload or `POST /repos` again) once the budget allows.
+
 ### API keys
 
 Set named keys in `.env`; the name is what query logs record, the key is never stored:
@@ -324,8 +340,8 @@ job without anyone clicking:
 Neither queues anything when the pushed head is already indexed or a job for that URL is queued.
 The job result records `trigger` (`manual`, `webhook` or `poll`), `pushed_at`, `received_at`,
 `expected_sha`, `code.commit_at` and `code.staleness`. Automatic re-indexing spends summary tokens
-on every changed flow and there is no token cap yet: leave `REPO_POLL_SECS=0` and set no webhook
-for manual indexing only. What is sent to DeepSeek and Voyage does not change.
+on every changed flow; the [token caps](#token-caps) bound what a job and a day may cost. What is
+sent to DeepSeek and Voyage does not change.
 
 `DELETE /repos/{id}` removes the code graph and the clone; the repository's annotations become
 `orphaned`, never deleted. Its Markdown documents stay (delete them with `DELETE

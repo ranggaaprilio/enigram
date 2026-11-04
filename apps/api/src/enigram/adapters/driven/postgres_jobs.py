@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import asyncpg
 
+from enigram.application.budget import today
 from enigram.config import Config
 from enigram.domain.errors import EnigramError
 from enigram.domain.job import ACTIVE, Job
@@ -46,6 +47,15 @@ CREATE TABLE IF NOT EXISTS enigram_queries (
 );
 -- The name of the API key that asked (ENIGRAM_API_KEYS), never the key itself.
 ALTER TABLE enigram_queries ADD COLUMN IF NOT EXISTS api_key TEXT;
+-- Tokens per UTC day, source ("job:index_repo", "query") and key name, for the daily caps.
+CREATE TABLE IF NOT EXISTS enigram_token_usage (
+    workspace TEXT NOT NULL,
+    day DATE NOT NULL,
+    source TEXT NOT NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    tokens BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (workspace, day, source, api_key)
+);
 """
 
 
@@ -221,6 +231,31 @@ class PostgresJobStore:
             limit,
         )
         return {"entities": [dict(r) for r in entities], "relations": [dict(r) for r in relations]}
+
+    async def add_tokens(self, source: str, api_key: str | None, tokens: int) -> None:
+        # The day comes from Python: a container's clock can drift from the host's.
+        await self.pool.execute(
+            "INSERT INTO enigram_token_usage (workspace, day, source, api_key, tokens) "
+            "VALUES ($1, $2, $3, $4, $5) ON CONFLICT (workspace, day, source, api_key) "
+            "DO UPDATE SET tokens = enigram_token_usage.tokens + EXCLUDED.tokens",
+            self.workspace,
+            today(),
+            source,
+            api_key or "",
+            tokens,
+        )
+
+    async def tokens_today(self, api_key: str | None = None) -> int:
+        where, args = "", []
+        if api_key is not None:
+            where, args = " AND api_key = $3", [api_key]
+        return await self.pool.fetchval(
+            "SELECT coalesce(sum(tokens), 0) FROM enigram_token_usage "
+            f"WHERE workspace = $1 AND day = $2{where}",
+            self.workspace,
+            today(),
+            *args,
+        )
 
     @asynccontextmanager
     async def worker_lock(self) -> AsyncIterator[None]:

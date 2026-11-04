@@ -29,6 +29,19 @@ def test_normalize_answer_strips_note_citations_and_origin_tags():
     assert normalize_answer(tagged) == "Logout revokes the token. It deletes."
 
 
+def test_normalize_answer_leaves_no_traces_of_stripped_citations():
+    # What the Phase 2 spike sheet showed: ",,", "()", a citation without a code suffix, ⚠ lines.
+    raw = (
+        "It throws a 500 (src/a.ts:1-2@70ae60dbb609, src/b.ts:3@70ae60dbb609, "
+        "src/c.config.ts:7-24@70ae60dbb609) [code]. The env sets MAIL_HOST=maildev "
+        "(env-example-relational:33@70ae60dbb609) [code]. The note says so (note#52) [human].\n\n"
+        "⚠ note#52 is marked as conflicting with the code; both are shown above."
+    )
+    assert normalize_answer(raw) == (
+        "It throws a 500. The env sets MAIL_HOST=maildev. The note says so."
+    )
+
+
 @pytest.mark.parametrize("text", ["[no-context] Nothing found.", "Plain sentence, no marks."])
 def test_normalize_answer_leaves_plain_text_and_abstentions(text):
     assert normalize_answer(text) == text
