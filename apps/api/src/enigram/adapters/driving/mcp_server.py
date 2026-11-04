@@ -13,10 +13,11 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from enigram.application.budget import query_allowance
-from enigram.application.code_agent import AGENT_MODE, answer_with_agent
+from enigram.application.code_agent import answer_with_agent, repo_name
 from enigram.application.documents import documents_overview
 from enigram.application.ports import (
     AnnotationRepository,
+    CodeEmbedder,
     CodeGraphRepository,
     DecisionProvider,
     Deps,
@@ -25,6 +26,7 @@ from enigram.application.ports import (
     MemoryRepository,
 )
 from enigram.application.querying import answer_question
+from enigram.application.routing import answer_routed, resolve_scope, scope_mode
 from enigram.bootstrap import build_deps
 from enigram.config import Config
 from enigram.domain.answer import QUERY_MODE, ContextChunk, Source
@@ -40,7 +42,8 @@ class AppContext:
     memory: MemoryRepository | None = None  # set over HTTP: memories belong to an API key
     code_graph: CodeGraphRepository | None = None  # needs STORAGE_BACKEND=postgres
     notes: AnnotationRepository | None = None  # needs STORAGE_BACKEND=postgres
-    decider: DecisionProvider | None = None  # the abstain guard; None skips it
+    decider: DecisionProvider | None = None  # the abstain guard and the route; None skips them
+    code_embedder: CodeEmbedder | None = None  # search_code's semantic channel; None = full text
 
 
 @dataclass
@@ -107,6 +110,7 @@ def create_server(
                     code_graph=await deps.new_code_graph(store),
                     notes=await deps.new_annotations(store),
                     decider=decider,
+                    code_embedder=deps.code_embedder(),
                 )
             finally:
                 await store.close()
@@ -121,20 +125,24 @@ def create_server(
             bool, Field(description="Also return the retrieved text chunks (large).")
         ] = False,
         scope: Annotated[
-            Literal["docs", "code"],
-            Field(description="docs = the indexed documents; code = the indexed repositories."),
-        ] = "docs",
+            Literal["auto", "docs", "code"],
+            Field(
+                description="auto (default) = the router picks; docs = the indexed documents; "
+                "code = the indexed repositories."
+            ),
+        ] = "auto",
         repo: Annotated[
-            str | None, Field(description="With scope=code: the repository URL to ask about.")
+            str | None,
+            Field(description="The repository URL to ask about (makes auto a code question)."),
         ] = None,
     ) -> AgentAnswer:
         """Answer a question from the indexed documents (GraphRAG: knowledge graph + vector
-        search), citing sources as [n] (`sources` maps each n to title, section and pages); or,
-        with scope="code", from the indexed TypeScript repositories (an agent that reads the code
-        graph and the source), citing `path:start-end@sha` inline. Ask one specific question per
-        call."""
+        search), citing sources as [n] (`sources` maps each n to title, section and pages), or
+        from the indexed TypeScript repositories (an agent that reads the code graph and the
+        source), citing `path:start-end@sha` inline. By default (scope="auto") a router picks
+        the source, or answers from both under two headings when unsure; pass scope="docs" or
+        "code" to force one. Ask one specific question per call."""
         app = ctx.request_context.lifespan_context
-        mode = AGENT_MODE if scope == "code" else QUERY_MODE
         key = _api_key(ctx)
         cap = None
         if app.store:  # over HTTP: the daily and per-key caps; stdio is the owner's own run
@@ -144,27 +152,40 @@ def create_server(
                 raise ToolError(f"429: {e}") from e
         with metered(cap, "this query") as meter:
             try:
-                if scope == "code":
-                    if app.code_graph is None:
-                        raise ToolError(
-                            "Code questions need STORAGE_BACKEND=postgres and an indexed repository"
-                        )
-                    result = await answer_with_agent(
+                if resolve_scope(scope, repo) == "code" and app.code_graph is None:
+                    raise ToolError(
+                        "Code questions need STORAGE_BACKEND=postgres and an indexed repository"
+                    )
+                graph = app.code_graph
+
+                async def repo_names() -> list[str]:
+                    repos = await graph.list_repos() if graph else []
+                    return [repo_name(r, cfg.repo_hosts) for r in repos]
+
+                result = await answer_routed(
+                    question,
+                    scope=scope,
+                    repo=repo,
+                    decider=app.decider,
+                    repo_names=repo_names,
+                    ask_code=lambda: answer_with_agent(
                         cfg,
                         deps.generator(),
-                        app.code_graph,
+                        graph,
                         question,
                         repo_url=repo,
                         model=cfg.llm_model,
                         notes=app.notes,
                         decider=app.decider,
-                    )
-                else:
-                    result = await answer_question(
+                        embedder=app.code_embedder,
+                    ),
+                    ask_docs=lambda: answer_question(
                         app.engine, question, notes=app.notes, decider=app.decider
-                    )
+                    ),
+                )
             except EnigramError as e:
                 if app.store:
+                    mode = scope_mode(scope, repo, QUERY_MODE)
                     await app.store.log_query("mcp", question, mode, error=str(e), api_key=key)
                 prefix = "429: " if isinstance(e, BudgetExceeded) else ""
                 raise ToolError(f"{prefix}{e}") from e
@@ -172,7 +193,7 @@ def create_server(
                 if app.store and meter.total:
                     await app.store.add_tokens("query", key, meter.total)
         if app.store:
-            await app.store.log_query("mcp", question, mode, result=result, api_key=_api_key(ctx))
+            await app.store.log_query("mcp", question, result.mode, result=result, api_key=key)
         return AgentAnswer(
             answer=result.answer,
             sources=result.sources,

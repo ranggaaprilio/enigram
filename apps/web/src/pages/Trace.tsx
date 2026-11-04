@@ -7,6 +7,7 @@ import {
   messageOf,
   type QueryRecord,
   type QuerySummary,
+  type RouteDecision,
   type Source,
 } from '../api'
 import Answer from '../components/Answer'
@@ -113,6 +114,17 @@ function Section({ title, count, children }: { title: string; count: number; chi
   )
 }
 
+// "route graph_flow → code (rule: http_route, flow_phrase)"
+function RouteLine({ route }: { route: RouteDecision }) {
+  const rules = route.rules.length ? `: ${route.rules.join(', ')}` : ''
+  return (
+    <p className="muted small">
+      route {route.route} → {route.targets.join(' + ')} ({route.method}
+      {rules})
+    </p>
+  )
+}
+
 export function TraceDetail() {
   const { id } = useParams()
   const valid = id !== undefined && /^\d+$/.test(id)
@@ -161,6 +173,7 @@ export function TraceDetail() {
         #{record.id} · {formatTime(record.created_at)} · {record.mode} ·{' '}
         {formatSecs(record.query_secs)} · {record.source}
       </p>
+      {result?.extra?.route && <RouteLine route={result.extra.route} />}
       {record.error && <p className="error-box">{record.error}</p>}
       {result && (
         <>

@@ -212,9 +212,21 @@ async def test_enigram_agent_system_answers_from_the_graph(cfg, deps, tmp_path, 
     diagnostics = {"graph_first": True, "graph_hits": 3, "read_calls": 1}
 
     async def fake_agent(
-        cfg_, chat, graph_, question, *, repo_url, repo_ref, cache_dir, model, notes, decider
+        cfg_,
+        chat,
+        graph_,
+        question,
+        *,
+        repo_url,
+        repo_ref,
+        cache_dir,
+        model,
+        notes,
+        decider,
+        embedder,
     ):
         seen.update(
+            embedder=embedder,
             graph=graph_,
             repo_url=repo_url,
             repo_ref=repo_ref,
@@ -250,8 +262,10 @@ async def test_enigram_agent_system_answers_from_the_graph(cfg, deps, tmp_path, 
         "model": cfg.llm_model,
         "notes": deps.notes,
         "decider": seen["decider"],
+        "embedder": seen["embedder"],
     }
     assert type(seen["decider"]).__name__ == "FakeDecider"
+    assert type(seen["embedder"]).__name__ == "FakeEmbedder"
     item, annotated = data["items"]  # enigram-agent also answers behavior_annotation
     assert annotated["id"] == "a01" and annotated["error"] is None
     assert item["diagnostics"] == diagnostics and item["tool_calls"] == 3

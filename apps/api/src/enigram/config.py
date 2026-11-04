@@ -24,6 +24,8 @@ LLM_PROVIDERS = ("deepseek",)
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
 DEFAULT_EMBED_MODEL = "voyage-4-lite"
+# Code text (flow summaries, symbols) for the semantic part of search_code.
+DEFAULT_CODE_EMBED_MODEL = "voyage-code-4"
 # The Docling chunker's tokenizer, recorded in the manifest by guard_chunk_settings.
 CHUNK_TOKENIZER = "tiktoken:cl100k_base"
 
@@ -90,6 +92,8 @@ class Config:
     embed_model: str
     embed_dim: int
     embed_max_tokens: int
+    code_embed_model: str
+    code_embed_dim: int
     voyage_api_key: str = field(repr=False)
     chunk_max_tokens: int
     llm_max_async: int
@@ -201,6 +205,9 @@ class Config:
             embed_model=os.environ.get("EMBED_MODEL", "").strip() or DEFAULT_EMBED_MODEL,
             embed_dim=_int("EMBED_DIM", 1024),
             embed_max_tokens=_int("EMBED_MAX_TOKENS", 32000),
+            code_embed_model=os.environ.get("CODE_EMBED_MODEL", "").strip()
+            or DEFAULT_CODE_EMBED_MODEL,
+            code_embed_dim=_int("CODE_EMBED_DIM", 1024),
             voyage_api_key=_required("VOYAGE_API_KEY"),
             chunk_max_tokens=_int("CHUNK_MAX_TOKENS", 800),
             llm_max_async=_int("LLM_MAX_ASYNC", 2),

@@ -8,6 +8,7 @@ from code_fakes import SHA, agent_graph, fixture_graph
 
 from enigram.adapters.driven.postgres_code_graph import PostgresCodeGraph
 from enigram.domain.code import IMPLEMENTATION_CALL, CodeEdge, CodeFile, FlowSummary
+from enigram.domain.errors import EnigramError
 
 pytestmark = pytest.mark.postgres
 URL = "https://github.com/org/app"
@@ -182,3 +183,53 @@ async def test_secret_hashes_files_imports_changes_and_delete(graph, pool):
     await graph.delete_repo(repo_id)
     assert await graph.get_repo_by_id(repo_id) is None
     assert await graph.symbol_changes(repo_id) == []  # cascade
+
+
+def _unit(i: int, j: int | None = None, dim: int = 1024) -> list[float]:
+    """A unit vector on axis i (or halfway between axes i and j)."""
+    v = [0.0] * dim
+    v[i] = 1.0
+    if j is not None:
+        v[i] = v[j] = 2**-0.5
+    return v
+
+
+async def test_embeddings_round_trip_search_prune_and_cascade(graph, pool):
+    repo_id = await graph.replace_repo(URL, None, SHA, [], fixture_graph())
+    controller = "src/app.controller.ts#AppController.find"
+    await graph.save_embeddings(
+        repo_id,
+        "m1",
+        [
+            (SERVICE, "code", "h1", _unit(0)),
+            (SERVICE, "symbol", "h2", _unit(1)),
+            (controller, "code", "h3", _unit(0, 2)),
+        ],
+    )
+    await graph.save_embeddings(repo_id, "m1", [(SERVICE, "code", "h1b", _unit(0))])  # upsert
+
+    assert await graph.embedding_hashes(repo_id, "m1") == {
+        (SERVICE, "code"): "h1b",
+        (SERVICE, "symbol"): "h2",
+        (controller, "code"): "h3",
+    }
+    assert await graph.embedding_hashes(repo_id, "other") == {}
+    near = await graph.search_vectors(repo_id, _unit(0), "m1", 5)
+    assert [s for s, _ in near] == [SERVICE, controller]  # one row per symbol, its best one
+    assert near[0][1] == pytest.approx(1.0) and near[1][1] == pytest.approx(2**-0.5, abs=1e-4)
+    assert await graph.search_vectors(repo_id, _unit(0), "other", 5) == []
+
+    assert await graph.delete_embeddings_except(repo_id, [(SERVICE, "code")], "m1") == 2
+    assert list(await graph.embedding_hashes(repo_id, "m1")) == [(SERVICE, "code")]
+    assert await graph.delete_embeddings_except(repo_id, [(SERVICE, "code")], "m2") == 1
+
+    await graph.save_embeddings(repo_id, "m1", [(SERVICE, "code", "h", _unit(3))])
+    await graph.delete_repo(repo_id)
+    left = await pool.fetchval("SELECT count(*) FROM code_embeddings WHERE repo_id = $1", repo_id)
+    assert left == 0
+
+
+async def test_another_embedding_dim_is_refused(graph, pool):
+    other = PostgresCodeGraph(pool, graph.workspace, embed_dim=graph.embed_dim // 2)
+    with pytest.raises(EnigramError, match=r"vector\(1024\).*CODE_EMBED_DIM=512"):
+        await other.ensure_schema()

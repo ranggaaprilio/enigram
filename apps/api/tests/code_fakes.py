@@ -1,8 +1,10 @@
 """In-memory code graph and chat model shared by the code tests (no Postgres, no network)."""
 
 import dataclasses
+import math
 import re
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import Any
 
 from enigram.application.ports import ChatReply, ParsedGraph, ToolCall
@@ -156,6 +158,8 @@ class FakeCodeGraph:
         self.calls: list[tuple[str, Any]] = []
         self.secrets: dict[int, str] = {}
         self.changes: list[tuple[int, str, str, str | None, str | None]] = []
+        # (repo_id, symbol_id, source) -> (text_hash, model, vector)
+        self.embeddings: dict[tuple[int, str, str], tuple[str, str, list[float]]] = {}
         if graph:
             self.repos[1] = {
                 "id": 1,
@@ -284,6 +288,37 @@ class FakeCodeGraph:
             del self.stored[k]
         return len(gone)
 
+    async def embedding_hashes(self, repo_id, model):
+        return {
+            (sid, source): h
+            for (rid, sid, source), (h, m, _) in self.embeddings.items()
+            if rid == repo_id and m == model
+        }
+
+    async def save_embeddings(self, repo_id, model, rows):
+        for symbol_id, source, text_hash, vector in rows:
+            self.embeddings[(repo_id, symbol_id, source)] = (text_hash, model, list(vector))
+
+    async def delete_embeddings_except(self, repo_id, keep, model):
+        kept = set(keep)
+        gone = [
+            k
+            for k, (_, m, _) in self.embeddings.items()
+            if k[0] == repo_id and (m != model or (k[1], k[2]) not in kept)
+        ]
+        for k in gone:
+            del self.embeddings[k]
+        return len(gone)
+
+    async def search_vectors(self, repo_id, vector, model, limit):
+        self.calls.append(("search_vectors", model))
+        best: dict[str, float] = {}
+        for (rid, sid, _), (_, m, v) in self.embeddings.items():
+            if rid == repo_id and m == model:
+                sim = sum(a * b for a, b in zip(v, vector, strict=True))
+                best[sid] = max(best.get(sid, -1.0), sim)
+        return sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+
     async def routes(self, repo_id, verb_path):
         self.calls.append(("routes", verb_path))
         verb, _, path = verb_path.partition(" ")
@@ -308,6 +343,7 @@ class FakeCodeGraph:
         for table in (self.repos, self.graphs, self.blobs, self.secrets):
             table.pop(repo_id, None)
         self.stored = {k: v for k, v in self.stored.items() if k[0] != repo_id}
+        self.embeddings = {k: v for k, v in self.embeddings.items() if k[0] != repo_id}
         self.changes = [c for c in self.changes if c[0] != repo_id]
 
     async def symbol_hashes(self, repo_id):
@@ -569,3 +605,30 @@ class FakeDecider:
             a = self.answers.get(k, self.default)
             answers[k] = a(state) if callable(a) else a
         return Decisions(answers, self.name, "fake-1", 123, 0.01)
+
+
+FAKE_DIM = 32
+
+
+class FakeEmbedder:
+    """CodeEmbedder: a deterministic bag-of-words vector (sha256 of each word -> one of FAKE_DIM
+    slots), so texts that share words are close; records every call."""
+
+    model, dim = "fake-code-1", FAKE_DIM
+
+    def __init__(self, error: str | None = None):
+        self.calls: list[tuple[list[str], str]] = []
+        self.error = error
+
+    async def embed(self, texts, input_type):
+        self.calls.append((list(texts), input_type))
+        if self.error:
+            raise EnigramError(self.error)
+        out = []
+        for t in texts:
+            v = [0.0] * FAKE_DIM
+            for w in re.findall(r"\w+", t.lower()):
+                v[int(sha256(w.encode()).hexdigest(), 16) % FAKE_DIM] += 1.0
+            norm = math.sqrt(sum(x * x for x in v)) or 1.0
+            out.append([x / norm for x in v])
+        return out

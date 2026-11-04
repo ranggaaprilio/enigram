@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 from lightrag.query_validation import RAGQueryTooShortError
 
@@ -485,3 +487,54 @@ async def test_docs_path_guard_sees_notes_entities_and_relations():
     assert "Mira designed it." in evidence  # a relation description
     assert "Captain Mira Okafor designed it." in evidence  # a chunk
     assert evidence.index("1987 team") < evidence.index("Captain Mira")  # precedence order
+
+
+def test_cli_scopes_match_routing_scopes():
+    from enigram.application.routing import SCOPES
+
+    commands = cli._build_parser()._subparsers._group_actions[0].choices
+    (scope,) = [a for a in commands["query"]._actions if a.dest == "scope"]
+    assert tuple(scope.choices) == SCOPES and scope.default == "auto"
+
+
+async def test_cli_query_auto_routes_a_flow_question_to_the_agent(cfg, deps, monkeypatch, capsys):
+    from code_fakes import (
+        SHA,
+        FakeAnnotations,
+        FakeCodeGraph,
+        ScriptedChat,
+        answer_reply,
+        fixture_graph,
+    )
+
+    from enigram import bootstrap
+
+    class Store:
+        async def close(self):
+            pass
+
+    async def open_store():
+        return Store()
+
+    async def new_code_graph(store):
+        return FakeCodeGraph(fixture_graph())
+
+    async def new_annotations(store):
+        return FakeAnnotations()
+
+    def no_engine(**kw):
+        raise AssertionError("the documents were not asked")
+
+    final = f"It loads the user src/app.service.ts:10-15@{SHA[:12]}."
+    deps.open_store, deps.new_code_graph = open_store, new_code_graph
+    deps.new_annotations, deps.open_engine = new_annotations, no_engine
+    deps.generator = lambda: ScriptedChat([answer_reply(final)])
+    monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
+    cfg = dataclasses.replace(cfg, storage="postgres")
+    args = cli._build_parser().parse_args(["query", "Walk through GET /users/:id"])
+
+    assert await cli._query(cfg, args) == 0
+
+    out = capsys.readouterr().out
+    assert "(enigram-agent, " in out
+    assert out.rstrip().endswith("route: graph_flow -> code (rule)")

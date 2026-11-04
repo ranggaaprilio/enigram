@@ -82,10 +82,21 @@ export interface QueryResult {
   relations: ContextRelation[]
   found: boolean
   query_secs: number
-  mode: Mode | 'enigram-agent'
+  // 'auto': the router merged a code answer and a documents answer.
+  mode: Mode | 'enigram-agent' | 'auto'
+  extra?: { route?: RouteDecision }
 }
 
-export type Scope = 'docs' | 'code'
+// The router's decision (application/routing.py), on answers from scope 'auto' or forced.
+export interface RouteDecision {
+  route: string
+  targets: string[]
+  method: string
+  rules: string[]
+  confidence: number | null
+}
+
+export type Scope = 'auto' | 'docs' | 'code'
 
 export type AnnotationStatus =
   | 'verified'
@@ -264,7 +275,7 @@ const sendJson = <T>(path: string, body: unknown) =>
     body: JSON.stringify(body),
   })
 
-export const ask = (question: string, mode: Mode, scope: Scope = 'docs') =>
+export const ask = (question: string, mode: Mode, scope: Scope = 'auto') =>
   sendJson<QueryResult & { id: number }>('/query', { question, mode, scope })
 
 export const listQueries = (limit = 50) => request<QuerySummary[]>(`/queries?limit=${limit}`)

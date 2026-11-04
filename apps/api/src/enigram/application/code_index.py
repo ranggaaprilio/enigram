@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from enigram.application.code_changes import affected_files, diff_files, symbol_changes
+from enigram.application.code_embeddings import embed_repo
 from enigram.application.code_summary import build_summaries
 from enigram.application.ports import (
     AnnotationRepository,
@@ -160,6 +161,9 @@ async def index_code(
         await graph_repo.record_symbol_changes(repo_id, sha, changes)
     staleness = await check_repo(graph_repo, notes, repo_id, sha, decider) if notes else {}
     summary = await build_summaries(cfg, deps.generator(), graph_repo, repo_id, sha, limit=limit)
+    embeddings = await embed_repo(
+        deps.code_embedder(), graph_repo, repo_id, summarised_only=limit is not None
+    )
     report = parsed.report
     result = {
         "repo_id": repo_id,
@@ -179,6 +183,7 @@ async def index_code(
         "diagnostics_sample": report.get("diagnostics_sample"),
         "secrets_redacted": redacted,
         "summaries": summary,
+        "embeddings": embeddings,
         # Against the previous index of (url, ref); everything is "added" on the first one.
         "files_changed": len(diff.changed) + len(diff.added) + len(diff.removed),
         "files_affected": len(affected),
@@ -187,7 +192,8 @@ async def index_code(
         "secs": round(time.perf_counter() - start, 1),
     }
     await graph_repo.set_report(
-        repo_id, {**report, "secrets_redacted": redacted, "summaries": summary}
+        repo_id,
+        {**report, "secrets_redacted": redacted, "summaries": summary, "embeddings": embeddings},
     )
     log.info(
         "[code] %s: %d symbols, %d edges, %d entry points, %d flows (%.1fs)",

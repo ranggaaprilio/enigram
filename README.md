@@ -88,6 +88,18 @@ Prints the answer (Markdown, citing `[n]`), the sources (paper title, section, p
 time. Retrieval combines the knowledge graph and vector search (LightRAG mode `mix`). A new
 question is answered from the cache when asked again.
 
+`--scope` picks the source: `auto` (default) lets the router decide, `docs` asks the document
+index and `code` the code agent (see [Index a Git repository](#index-a-git-repository)). The router
+(`application/routing.py`) labels the question by rules (an HTTP route or "walk through" means a
+code flow, "why"/"decided" means documents, an identifier with "what is"/"where is … defined"
+means a symbol) and, when no single rule decides, asks the decision layer's `route` choice. A
+confident choice answers from one source; otherwise both answer and the reply holds both parts
+under **From the code** and **From the documents**, with the document `[n]` renumbered after the
+code sources. Without an indexed repository `auto` answers from the documents. The last line
+prints the decision, e.g. `route: graph_flow -> code (rule)`; API answers carry it in
+`extra.route` (`route`, `targets`, `method`, `rules`, `confidence`) and the web Trace page shows
+it.
+
 To compare against plain vector RAG, add `--mode naive`:
 
 ```bash
@@ -117,8 +129,9 @@ The server loads the index once at startup: after `enigram index`, reconnect it
 (`/mcp` → enigram → Reconnect). If long calls time out, start `claude` with a higher
 `MCP_TOOL_TIMEOUT` (milliseconds).
 
-`query_knowledge_base` also takes `scope="code"` (and `repo=<url>`) to ask the code agent about the
-indexed repositories; it needs `STORAGE_BACKEND=postgres`.
+`query_knowledge_base` also takes `scope`: `auto` (default, the router picks), `docs` or `code`
+(the code agent over the indexed repositories; needs `STORAGE_BACKEND=postgres`). `repo=<url>`
+names a repository and makes `auto` a code question.
 
 A second tool, `list_documents()`, lists the documents and their indexing status.
 
@@ -185,7 +198,7 @@ write the same index.
 | `GET /annotations/{id}` | One note with its change history |
 | `PATCH /annotations/{id}` `{"status"?, "text"?, "owner"?, "verify_by"?, "conflict"?, "target_ref"?, "by"?}` | Verify, reject, edit, relink or flag a note (403 when the key may not verify) |
 | `GET /jobs/{id}` | One indexing job: status, result (chunks, timings, report), error |
-| `POST /query` `{"question", "mode": "mix"\|"naive", "scope": "docs"\|"code", "repo"?}` | Answer with sources, chunks, entities and relations, plus its stored `id`; `scope: "code"` asks the code agent (`mode` ignored, `repo` = a repository URL) |
+| `POST /query` `{"question", "mode": "mix"\|"naive", "scope": "auto"\|"docs"\|"code", "repo"?}` | Answer with sources, chunks, entities and relations, plus its stored `id`; `scope` defaults to `auto` (the router picks code, documents or both; decision in `extra.route`), `"code"` asks the code agent (`mode` applies to the documents only, `repo` = a repository URL and makes `auto` a code question) |
 | `GET /queries?limit=50` | Recent queries, newest first, without their traces (`limit` 1-200) |
 | `GET /queries/{id}` | The stored trace of an earlier query |
 | `POST /mcp` | MCP over streamable HTTP (see [Over HTTP](#over-http-another-machine)) |
@@ -249,10 +262,11 @@ API. It has four pages in its menu:
 
 - **Documents**: drop PDF or Markdown files to upload them; the table follows each job until it
   is indexed or failed.
-- **Ask**: a question in `mix` (GraphRAG) or `naive` (vector only) mode, or `Code (agent)` for
+- **Ask**: a question in `Auto (router)` mode (default: the router picks the documents, the code
+  or both), `mix` (GraphRAG) or `naive` (vector only) on the documents, or `Code (agent)` for
   the indexed repositories, answered with sources and per-sentence origin tags.
-- **Trace**: recent queries, and for each one the chunks, entities, relations and sources behind
-  the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
+- **Trace**: recent queries, and for each one the router's decision, the chunks, entities,
+  relations and sources behind the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
   code sources have an `Annotate` link, note sources open the note.
 - **Annotations**: team notes by status, with verify, reject, relink and history (see
   [Annotations](#annotations)).
@@ -311,13 +325,23 @@ uv run enigram query --scope code "Can an unconfirmed user log in?"
 ```
 
 `enigram repo` indexes one repository without the API and writes the result to
-`data/reports/repo-index-<ts>.json`; `--limit N` summarises only the first N entry points.
+`data/reports/repo-index-<ts>.json`; `--limit N` summarises only the first N entry points and
+embeds only the summarised symbols.
 `enigram repo` also keeps a bare partial clone of the repository in `REPO_STORE` (default
 `DATA_DIR/repos`; blobs are fetched on first read). `query --scope code [--repo <url>]` answers
 with an agent whose first tools are the code graph (search, symbols with their decorators,
 guards and module wiring, entry-point flows); it then reads only the lines the
 graph pointed at, from that clone at the indexed commit, and cites `file:start-end@sha`. The
 `code` system of `enigram golden answer` (graph → one prompt) stays as a frozen ablation.
+
+After the summaries, every symbol's text (name, signature, decorators, the first 2,000
+characters of its body) and every summary is embedded with `CODE_EMBED_MODEL` (default
+`voyage-code-4`, `CODE_EMBED_DIM` 1024) into the `code_embeddings` table, once per text hash
+(the job result's `code.embeddings` counts `embedded`, `cached` and `pruned`). The agent's
+`search_code` fuses these vector hits with the full-text hits (reciprocal rank fusion), so a
+question that shares no words with the code still finds it; with no vectors, or when Voyage
+fails, it searches full text only. Changing `CODE_EMBED_DIM` needs
+`DROP TABLE code_embeddings` and a re-index (the API refuses to start otherwise).
 
 #### Re-indexing on every commit
 
@@ -424,7 +448,8 @@ chunks, claims and note texts. With `DECISION_PROVIDER=jev`, this data leaves fo
 as well as DeepSeek's. Every call is in the answer's trace: `extra.decisions` lists purpose,
 provider, model, input tokens (Jev only), seconds and the fallback reason, and
 `extra.abstain_guard` holds `answerable`, the `action` (`none`, `abstained` or `skipped`) and the
-original answer when it was replaced. Jev tokens are reported but are not counted on the
+original answer when it was replaced (an answer merged from code and documents has one per part
+in `extra.guards`). Jev tokens are reported but are not counted on the
 [token caps](#token-caps); the judge fallback is.
 
 Known limit: questions about an absence ("Does registering need an invite code?" when the code

@@ -13,7 +13,7 @@ from enigram.domain.code import CITATION
 from enigram.domain.normalize import _ORIGIN_TAG
 
 ORIGINS = ("code", "summary", "human", "document", "unsupported")
-_REFS = re.compile(r"(?<![\w\])])\[(\d+(?:\s*,\s*\d+)*)\]")  # as golden_run._REFS
+REFS = re.compile(r"(?<![\w\])])\[(\d+(?:\s*,\s*\d+)*)\]")  # as golden_run._REFS
 _HEADING = re.compile(r"^\s*#{1,6}\s")
 _LIST_MARKER = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
 _TRAILING_PUNCT = re.compile(r"[.!?]+[)*\"'”’]*$")
@@ -26,7 +26,7 @@ def _source_origin(source: Source) -> str:
 
 def _origins(sentence: str, by_ref: dict[int, Source], notes: set[int]) -> set[str]:
     found: set[str] = set()
-    for group in _REFS.findall(sentence):
+    for group in REFS.findall(sentence):
         for n in re.split(r"\s*,\s*", group):
             if source := by_ref.get(int(n)):
                 found.add(_source_origin(source))

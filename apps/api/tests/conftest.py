@@ -88,14 +88,15 @@ def cfg(clean_env, monkeypatch, tmp_path) -> Config:
 @pytest.fixture
 def deps(cfg):
     """The real adapters for cfg; tests replace single fields with fakes. The decision layer is
-    a FakeDecider (undecided answers): every query path asks it, and a unit test must never
-    reach the judge model."""
-    from code_fakes import FakeDecider
+    a FakeDecider (undecided answers) and the code embedder a FakeEmbedder: every query and
+    index path asks them, and a unit test must never reach the judge model or Voyage."""
+    from code_fakes import FakeDecider, FakeEmbedder
 
     from enigram.bootstrap import build_deps
 
     deps = build_deps(cfg)
     deps.decider = FakeDecider
+    deps.code_embedder = FakeEmbedder
     return deps
 
 

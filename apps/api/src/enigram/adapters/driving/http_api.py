@@ -29,12 +29,13 @@ from enigram.application.annotations import (
     create_annotation,
 )
 from enigram.application.budget import daily_exhausted, query_allowance
-from enigram.application.code_agent import AGENT_MODE, answer_with_agent, repo_name
+from enigram.application.code_agent import answer_with_agent, repo_name
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
 from enigram.application.ports import Deps, JobRepository
 from enigram.application.querying import answer_question
 from enigram.application.repo_sync import check_ref, check_repo_url
+from enigram.application.routing import answer_routed, scope_mode
 from enigram.application.webhooks import parse_push, verify_webhook
 from enigram.bootstrap import build_deps
 from enigram.config import Config
@@ -58,8 +59,10 @@ ANNOTATION_LIST_MAX = 500
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     mode: Literal["mix", "naive"] = QUERY_MODE  # docs only
-    scope: Literal["docs", "code"] = "docs"  # code: the graph-first agent, `mode` is ignored
-    repo: str | None = None  # code only: the repository URL to ask about
+    # auto: the router picks code, docs or both (application/routing.py); code: the graph-first
+    # agent, `mode` is ignored
+    scope: Literal["auto", "docs", "code"] = "auto"
+    repo: str | None = None  # the repository URL to ask about; auto then means code
 
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -245,6 +248,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             code_graph=app.state.code_graph,
             notes=app.state.notes,
             decider=app.state.decider,
+            code_embedder=app.state.code_embedder,
         )
 
     mcp = create_server(cfg, lifespan=mcp_lifespan, deps=deps)
@@ -272,6 +276,8 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         app.state.notes = await deps.new_annotations(store)
         # The decision layer: the abstain guard on /query, conflict checks on verification.
         app.state.decider = deps.decider()
+        # search_code's semantic channel on /query and MCP.
+        app.state.code_embedder = deps.code_embedder()
         try:
             # require_index=False: a fresh deployment has no index yet and must still start.
             async with deps.open_engine(query_cache=False, require_index=False) as engine:
@@ -565,43 +571,55 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
 
     @app.post("/query")
     async def query(request: Request, body: QueryRequest) -> dict[str, Any]:
-        store = store_of(request)
-        mode = AGENT_MODE if body.scope == "code" else body.mode
+        store, state = store_of(request), request.app.state
         key = _key_name(request)
         try:
             cap = await query_allowance(store, cfg, key)
         except BudgetExceeded as e:
             raise HTTPException(429, str(e)) from e
-        with metered(cap, "this query") as meter:
+        with metered(cap, "this query") as meter:  # the route choice and both answers count
             try:
-                if body.scope == "code":
-                    result = await answer_with_agent(
+
+                async def repo_names() -> list[str]:
+                    repos = await state.code_graph.list_repos()
+                    return [repo_name(r, cfg.repo_hosts) for r in repos]
+
+                result = await answer_routed(
+                    body.question,
+                    scope=body.scope,
+                    repo=body.repo,
+                    decider=state.decider,
+                    repo_names=repo_names,
+                    ask_code=lambda: answer_with_agent(
                         cfg,
                         deps.generator(),
-                        request.app.state.code_graph,
+                        state.code_graph,
                         body.question,
                         repo_url=body.repo,
                         model=cfg.llm_model,
-                        notes=request.app.state.notes,
-                        decider=request.app.state.decider,
-                    )
-                else:
-                    result = await answer_question(
-                        request.app.state.engine,
+                        notes=state.notes,
+                        decider=state.decider,
+                        embedder=state.code_embedder,
+                    ),
+                    ask_docs=lambda: answer_question(
+                        state.engine,
                         body.question,
                         body.mode,
-                        notes=request.app.state.notes,
-                        decider=request.app.state.decider,
-                    )
+                        notes=state.notes,
+                        decider=state.decider,
+                    ),
+                )
             except EnigramError as e:
+                mode = scope_mode(body.scope, body.repo, body.mode)
                 await store.log_query("api", body.question, mode, error=str(e), api_key=key)
                 status = 429 if isinstance(e, BudgetExceeded) else 502
                 raise HTTPException(status, str(e)) from e
             finally:
                 if meter.total:
                     await store.add_tokens("query", key, meter.total)
+        # The mode that answered (enigram-agent, mix/naive, or auto when both were merged).
         query_id = await store.log_query(
-            "api", body.question, mode, result=result, api_key=_key_name(request)
+            "api", body.question, result.mode, result=result, api_key=key
         )
         return {"id": query_id, **asdict(result)}
 

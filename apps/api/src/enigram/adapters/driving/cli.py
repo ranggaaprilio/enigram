@@ -52,12 +52,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default="mix",
         help="mix = GraphRAG (graph + vector, default); naive = vector-only baseline",
     )
+    # Literal copy of routing.SCOPES so parsing imports no application code; a test checks it.
     query.add_argument(
         "--scope",
-        choices=("docs", "code"),
-        default="docs",
-        help="docs = the LightRAG index (default); code = the graph-first agent over the "
-        "indexed TypeScript repositories (ignores --mode)",
+        choices=("auto", "docs", "code"),
+        default="auto",
+        help="auto = the router picks the documents, the code or both (default); docs = the "
+        "LightRAG index; code = the graph-first agent over the indexed TypeScript repositories "
+        "(--mode applies to the documents part only)",
     )
     query.add_argument("--repo", help="repository URL when more than one is indexed")
 
@@ -103,7 +105,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "`enigram repo` on the pinned ref)",
     )
     answer = gsub.add_parser("answer", help="answer golden questions and write a label sheet")
-    for p in (check, answer):
+    route = gsub.add_parser(
+        "route",
+        help="router accuracy against expected_route (no answer is generated); tune on dev",
+    )
+    route.add_argument("--split", choices=("dev", "verdict", "reserve"), help="only this split")
+    route.add_argument(
+        "--allow-verdict",
+        action="store_true",
+        help="allow the verdict and reserve splits (run once, after the rules are committed)",
+    )
+    route.add_argument(
+        "--no-choice", action="store_true", help="rules only: never ask the decision layer"
+    )
+    for p in (check, answer, route):
         p.add_argument("--file", type=Path, default=Path("eval/golden.yaml"), help="golden YAML")
     # Literal copy of golden_run.SYSTEMS so parsing never imports LightRAG; a test keeps them equal.
     answer.add_argument(
@@ -221,54 +236,61 @@ async def _index(cfg: Config, args: argparse.Namespace) -> int:
     return 1 if run.any_failed else 0
 
 
-async def _query_code(cfg: Config, question: str, url: str | None) -> int:
-    from enigram.application.code_agent import answer_with_agent
-    from enigram.bootstrap import build_deps
-
-    deps = build_deps(cfg)
-    store = await deps.open_store()
-    try:
-        graph = await deps.new_code_graph(store)
-        notes = await deps.new_annotations(store)
-        result = await answer_with_agent(
-            cfg,
-            deps.generator(),
-            graph,
-            question,
-            repo_url=url,
-            model=cfg.llm_model,
-            notes=notes,
-            decider=deps.decider(),
-        )
-    finally:
-        await store.close()
-    print(result.answer)
-    if result.sources:
-        print("\nSources:")
-        for s in result.sources:
-            print(f"  [{s.ref}] {s.citation} ({s.title})")
-    print(
-        f"({result.mode}, {result.query_secs:.1f}s, "
-        f"{result.tokens_in} in / {result.tokens_out} out tokens, "
-        f"{result.extra.get('tool_calls', 0)} tool calls)"
-    )
-    return 0 if result.found else 1
+def _source_line(s, code: bool) -> str:
+    if code:
+        return f"  [{s.ref}] {s.citation} ({s.title})"
+    return f"  [{s.ref}] {s.citation.rsplit(' | #', 1)[0]}"
 
 
 async def _query(cfg: Config, args: argparse.Namespace) -> int:
-    if args.scope == "code":
-        return await _query_code(cfg, args.question, args.repo)
+    from enigram.application.code_agent import AGENT_MODE, answer_with_agent, repo_name
     from enigram.application.querying import answer_question
+    from enigram.application.routing import answer_routed, resolve_scope
     from enigram.bootstrap import build_deps
 
     deps = build_deps(cfg)
-    store = await deps.open_store() if cfg.storage == "postgres" else None
+    decider = deps.decider()
+    scope = resolve_scope(args.scope, args.repo)
+    # The code graph lives in Postgres; with file storage only a forced code question tries it.
+    store = await deps.open_store() if cfg.storage == "postgres" or scope == "code" else None
     try:
         notes = await deps.new_annotations(store) if store else None
-        async with deps.open_engine() as engine:
-            result = await answer_question(
-                engine, args.question, args.mode, notes=notes, decider=deps.decider()
+        # A forced documents question never touches the code graph.
+        graph = await deps.new_code_graph(store) if store and scope != "docs" else None
+
+        async def repo_names():
+            repos = await graph.list_repos() if graph else []
+            return [repo_name(r, cfg.repo_hosts) for r in repos]
+
+        async def ask_code():
+            assert graph is not None  # no repos without a graph, so auto never asks
+            return await answer_with_agent(
+                cfg,
+                deps.generator(),
+                graph,
+                args.question,
+                repo_url=args.repo,
+                model=cfg.llm_model,
+                notes=notes,
+                decider=decider,
+                embedder=deps.code_embedder(),
             )
+
+        async def ask_docs():
+            async with deps.open_engine() as engine:  # only when the documents answer
+                return await answer_question(
+                    engine, args.question, args.mode, notes=notes, decider=decider
+                )
+
+        result = await answer_routed(
+            args.question,
+            scope=scope,
+            repo=args.repo,
+            decider=decider,
+            repo_names=repo_names,
+            ask_code=ask_code,
+            ask_docs=ask_docs,
+        )
     finally:
         if store:
             await store.close()
@@ -276,8 +298,18 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
     if result.sources:
         print("\nSources:")
         for s in result.sources:
-            print(f"  [{s.ref}] {s.citation.rsplit(' | #', 1)[0]}")
-    print(f"({result.mode}, {result.query_secs:.1f}s)")
+            code = result.mode == AGENT_MODE or s.origin in ("code", "summary", "human")
+            print(_source_line(s, code))
+    if result.mode == "auto" or result.mode == AGENT_MODE:
+        print(
+            f"({result.mode}, {result.query_secs:.1f}s, "
+            f"{result.tokens_in} in / {result.tokens_out} out tokens, "
+            f"{result.extra.get('tool_calls', 0)} tool calls)"
+        )
+    else:
+        print(f"({result.mode}, {result.query_secs:.1f}s)")
+    if route := result.extra.get("route"):
+        print(f"route: {route['route']} -> {'+'.join(route['targets'])} ({route['method']})")
     return 0 if result.found else 1
 
 
@@ -462,6 +494,39 @@ async def _golden_answer(cfg: Config, args: argparse.Namespace) -> int:
     return 1 if run.failed else 0
 
 
+async def _golden_route(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.application.evaluation.golden import load_golden_set
+    from enigram.application.evaluation.route_eval import run_route_eval, write_route_report
+    from enigram.application.repo_sync import check_repo_url
+    from enigram.application.routing import sources_line
+    from enigram.bootstrap import build_deps
+    from enigram.domain.budget import metered
+
+    repo = load_golden_set(args.file).repo
+    names = [f"{check_repo_url(repo.url, cfg.repo_hosts)}@{repo.ref}"] if repo else []
+    decider = None if args.no_choice else build_deps(cfg).decider()
+    with metered(None, "golden route") as meter:  # the judge fallback's tokens
+        run = await run_route_eval(
+            args.file,
+            decider=decider,
+            sources=sources_line(names),
+            split=args.split,
+            allow_verdict=args.allow_verdict,
+        )
+    for category, g in run["by_category"].items():
+        accuracy = "-" if g["accuracy"] is None else f"{g['accuracy']:.0%}"
+        target = "-" if g["target_accuracy"] is None else f"{g['target_accuracy']:.0%}"
+        print(
+            f"{category:<20} accuracy {accuracy} ({g['correct']}/{g['decided']} decided, "
+            f"{g['labelled']} labelled)  target {target}"
+        )
+    calls = [d for r in run["rows"] for d in r["decisions"]]
+    jev = sum(d.get("tokens_in") or 0 for d in calls)  # Jev reports input tokens in the trace
+    print(f"{len(calls)} route choices, {jev} Jev input tokens, {meter.total} judge tokens")
+    print(f"report: {write_route_report(cfg, run)}")
+    return 0
+
+
 async def _golden_citations(cfg: Config, path: Path) -> int:
     from enigram.application.evaluation.blind import load_answers
     from enigram.application.evaluation.citations import check_answers, citations_path
@@ -587,6 +652,8 @@ def main(argv: list[str] | None = None) -> int:
                 return asyncio.run(_golden_citations(cfg, args.answers))
             if args.golden_command == "answer":
                 return asyncio.run(_golden_answer(cfg, args))
+            if args.golden_command == "route":
+                return asyncio.run(_golden_route(cfg, args))
             if args.golden_command == "blind":
                 return _golden_blind(cfg, args)
             if args.golden_command == "unblind":

@@ -177,6 +177,49 @@ async def test_failed_query_is_logged_then_a_tool_error(cfg):
     assert "Connection error" in store.queries[0]["error"]
 
 
+async def test_query_routes_by_default_and_logs_the_answering_mode(cfg, monkeypatch):
+    from code_fakes import FakeCodeGraph, FakeDecider, FakeEmbedder
+
+    from enigram.adapters.driving import mcp_server
+    from enigram.domain.answer import QueryResult
+
+    graph, store, rag, asked = FakeCodeGraph(), FakeJobStore(), FakeRag(), []
+    graph.repos[1] = {
+        "id": 1,
+        "url": "https://github.com/o/a",
+        "ref": None,
+        "indexed_sha": "a" * 40,
+    }
+
+    async def fake_agent(cfg, chat, graph, question, **kw):
+        asked.append(kw["embedder"])
+        return QueryResult(question, "Code src/a.ts:1-2@abc1234.", [], [], mode="enigram-agent")
+
+    @asynccontextmanager
+    async def lifespan(server):
+        yield AppContext(
+            engine=lightrag_engine.LightRagEngine(rag),
+            store=store,
+            code_graph=graph,
+            decider=FakeDecider(),
+            code_embedder=FakeEmbedder(),
+        )
+
+    monkeypatch.setattr(mcp_server, "answer_with_agent", fake_agent)
+    async with Client(create_server(cfg, lifespan=lifespan)) as client:
+        flow = await client.call_tool(
+            "query_knowledge_base", {"question": "Walk through POST /auth/refresh"}
+        )
+        docs = await client.call_tool(
+            "query_knowledge_base", {"question": "Walk through POST /x", "scope": "docs"}
+        )
+
+    assert not flow.is_error and not docs.is_error
+    assert len(asked) == 1 and isinstance(asked[0], FakeEmbedder)
+    assert [q["mode"] for q in store.queries] == ["enigram-agent", "mix"]
+    assert len(rag.params) == 1
+
+
 async def test_add_then_search_memory(cfg):
     memory = FakeMemoryStore()
     async with Client(create_server(cfg, lifespan=_with(FakeRag(), None, memory))) as client:

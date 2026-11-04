@@ -310,6 +310,7 @@ async def _answer_enigram_agent(
         notes = await deps.new_annotations(store)
         chat = deps.generator()
         decider = deps.decider()
+        embedder = deps.code_embedder()
 
         async def answer(q: GoldenQuestion) -> QueryResult:
             if setup := q.setup.get("annotation"):
@@ -325,6 +326,7 @@ async def _answer_enigram_agent(
                 model=cfg.llm_model,
                 notes=notes,
                 decider=decider,
+                embedder=embedder,
             )
 
         return await answer_golden(answer, questions, "enigram-agent")

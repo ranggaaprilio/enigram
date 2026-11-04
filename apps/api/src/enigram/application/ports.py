@@ -271,6 +271,20 @@ class DecisionProvider(Protocol):
         ...
 
 
+class CodeEmbedder(Protocol):
+    """Embeddings for code text (flow summaries, symbols) and code questions."""
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def dim(self) -> int: ...
+
+    async def embed(self, texts: list[str], input_type: str) -> list[list[float]]:
+        """One vector per text; input_type "document" (index) or "query" (search)."""
+        ...
+
+
 @dataclass(frozen=True)
 class ParsedGraph:
     symbols: list["CodeSymbol"]
@@ -354,6 +368,29 @@ class CodeGraphRepository(Protocol):
         """Delete every summary whose (symbol_id, kind) is not in `keep`; returns how many."""
         ...
 
+    async def embedding_hashes(self, repo_id: int, model: str) -> dict[tuple[str, str], str]:
+        """(symbol_id, source) -> text_hash of the code_embeddings rows of that model."""
+        ...
+
+    async def save_embeddings(
+        self, repo_id: int, model: str, rows: list[tuple[str, str, str, list[float]]]
+    ) -> None:
+        """Upsert (symbol_id, source, text_hash, vector) rows."""
+        ...
+
+    async def delete_embeddings_except(
+        self, repo_id: int, keep: list[tuple[str, str]], model: str
+    ) -> int:
+        """Delete rows of other models and rows whose (symbol_id, source) is not in `keep`;
+        returns how many."""
+        ...
+
+    async def search_vectors(
+        self, repo_id: int, vector: list[float], model: str, limit: int
+    ) -> list[tuple[str, float]]:
+        """(symbol id, best cosine similarity over its rows), best first."""
+        ...
+
     async def routes(
         self, repo_id: int, verb_path: str
     ) -> list[tuple["CodeEntrypoint", "CodeSymbol"]]:
@@ -367,8 +404,8 @@ class CodeGraphRepository(Protocol):
     async def set_webhook_secret(self, repo_id: int, secret: str) -> None: ...
 
     async def delete_repo(self, repo_id: int) -> None:
-        """The repo row and, by cascade, its files, symbols, edges, entry points, summaries and
-        symbol changes."""
+        """The repo row and, by cascade, its files, symbols, edges, entry points, summaries,
+        embeddings and symbol changes."""
         ...
 
     async def symbol_hashes(self, repo_id: int) -> dict[str, str]:
@@ -413,4 +450,6 @@ class Deps:
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)
+    # the code embedder (CODE_EMBED_MODEL): index-time vectors and search_code queries
+    code_embedder: Callable[[], CodeEmbedder]
     query_budget: dict[str, int]  # the engine's retrieval token caps, recorded in eval reports

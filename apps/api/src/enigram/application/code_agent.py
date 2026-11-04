@@ -29,6 +29,7 @@ from enigram.application.agent_loop import (
     run_tool_loop,
 )
 from enigram.application.annotations import attach_notes
+from enigram.application.code_embeddings import rank_search
 from enigram.application.code_query import CODE_IS_THE_TRUTH, ROUTE
 from enigram.application.code_summary import TRUNCATED
 from enigram.application.files import atomic_write_text
@@ -36,6 +37,7 @@ from enigram.application.ports import (
     AnnotationRepository,
     ChatModel,
     ChatReply,
+    CodeEmbedder,
     CodeGraphRepository,
     DecisionProvider,
 )
@@ -44,6 +46,7 @@ from enigram.application.repo_sync import check_repo_url
 from enigram.config import Config
 from enigram.domain.annotation import Annotation, note_line, parse_note_citations
 from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult
+from enigram.domain.budget import BudgetExceeded
 from enigram.domain.code import CodeCitation, CodeSymbol
 from enigram.domain.errors import EnigramError
 from enigram.domain.secrets import redact
@@ -51,7 +54,8 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.2"  # bump when tool output, the prompt or the guard changes: busts the cache
+AGENT_VERSION = "3.3"  # bump when tool output, the prompt or the guard changes: busts the cache;
+# 3.3: search_code fuses vector hits
 AGENT_MAX_REPOS = 3
 GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
@@ -173,9 +177,15 @@ class CodeAgentTools:
         selected: dict[str, Any] | None = None,
         open_git: Callable[[Path, str], Any] = GitTools,
         notes: AnnotationRepository | None = None,
+        embedder: CodeEmbedder | None = None,
     ) -> None:
         self.cfg, self.graph, self.repos, self.open_git = cfg, graph_repo, repos, open_git
         self.notes = notes
+        # The semantic channel of search_code; None = full text only.
+        self.embedder = embedder
+        self.vectors: dict[str, list[float]] = {}
+        self.semantic_hits = 0
+        self.semantic_error: str | None = None
         # Every note a tool result showed, by id: the only ids an answer may cite.
         self.notes_seen: dict[int, Annotation] = {}
         # (repo id, file) -> symbols the graph returned, for a citation's target symbol.
@@ -303,6 +313,12 @@ class CodeAgentTools:
         hits: list[tuple[float, str, dict[str, Any], CodeSymbol]] = []
         for r in targets:
             ranked = await self.graph.search(r["id"], query, SEARCH_MAX_HITS, bodies=True)
+            vector = await self._query_vector(query)
+            if vector is not None and self.embedder is not None:
+                model = self.embedder.model
+                near = await self.graph.search_vectors(r["id"], vector, model, SEARCH_MAX_HITS)
+                self.semantic_hits += len(near)
+                ranked = rank_search(ranked, near, SEARCH_MAX_HITS)
             symbols = await self.graph.symbols_by_id(r["id"], [i for i, _ in ranked])
             hits += [(rank, i, r, symbols[i]) for i, rank in ranked if i in symbols]
         hits.sort(key=lambda h: (-h[0], self.names[h[2]["id"]], h[1]))
@@ -321,6 +337,22 @@ class CodeAgentTools:
             clipped = snippet[:SNIPPET_CHARS] + ("…" if len(snippet) > SNIPPET_CHARS else "")
             rows.append(self._row(r, s, clipped, notes.get((r["id"], symbol_id))))
         return "\n".join(rows)
+
+    async def _query_vector(self, query: str) -> list[float] | None:
+        """The question's vector (one Voyage call per distinct query text); None without an
+        embedder or when Voyage fails (search_code falls back to full text)."""
+        if self.embedder is None or self.semantic_error:
+            return None
+        if query not in self.vectors:
+            try:
+                self.vectors[query] = (await self.embedder.embed([query], "query"))[0]
+            except BudgetExceeded:
+                raise
+            except EnigramError as e:
+                log.warning("[agent] semantic search off: %s", e)
+                self.semantic_error = str(e)[:200]
+                return None
+        return self.vectors[query]
 
     async def find_symbol(self, name: str, repo: Any = None) -> str:
         targets = self._targets(repo)
@@ -469,6 +501,8 @@ class CodeAgentTools:
             "read_calls": self.read_calls,
             "reads_on_graph_lines": self.reads_on_graph,
             "repos_touched": sorted(self.names[i] for i in self.touched),
+            "semantic_hits": self.semantic_hits,
+            "semantic_error": self.semantic_error,
         }
 
 
@@ -512,23 +546,28 @@ async def answer_with_agent(
     open_git: Callable[[Path, str], Any] = GitTools,
     notes: AnnotationRepository | None = None,
     decider: DecisionProvider | None = None,
+    embedder: CodeEmbedder | None = None,
 ) -> QueryResult:
     """With `decider`, the abstain guard runs on the answer (part of the system: the guarded
-    answer is what gets cached)."""
+    answer is what gets cached); with `embedder`, search_code also ranks by code embeddings."""
     repos = await graph_repo.list_repos()
     if not repos:
         raise EnigramError("No repository indexed; run `enigram repo <url>`")
     selected = _select(repos, repo_url, repo_ref, cfg.repo_hosts) if repo_url else None
     path = None
     if cache_dir is not None:
-        shas = ",".join(sorted(r["indexed_sha"] for r in repos))
+        # A re-index of the same SHA (new summaries, new embeddings) moves indexed_at.
+        shas = ",".join(sorted(f"{r['indexed_sha']}@{r.get('indexed_at') or ''}" for r in repos))
         picked = f"{selected['url']}@{selected['ref'] or ''}" if selected else ""
         # A new, changed or re-verified note must change the answer.
         notes_version = await notes.version([r["id"] for r in repos]) if notes else ""
         # The cached result is the guarded one, so the decider is part of the key.
         guard = decider.name if decider else ""
+        # search_code ranks by the embeddings of this model too.
+        embed = embedder.model if embedder else ""
         cache_key = (
             f"{AGENT_VERSION}\n{question}\n{shas}\n{picked}\n{model}\n{notes_version}\n{guard}"
+            f"\n{embed}"
         )
         key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
@@ -536,7 +575,13 @@ async def answer_with_agent(
             log.info("[agent] enigram: cached")
             return result_from_json(json.loads(path.read_text(encoding="utf-8")))
     tools = CodeAgentTools(
-        cfg, graph_repo, repos, selected=selected, open_git=open_git, notes=notes
+        cfg,
+        graph_repo,
+        repos,
+        selected=selected,
+        open_git=open_git,
+        notes=notes,
+        embedder=embedder,
     )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt(tools.repo_lines())},
@@ -574,8 +619,8 @@ async def answer_with_agent(
         loop.tokens_out,
         " (budget exhausted)" if loop.exhausted else "",
     )
-    # A guard decision that failed is transient: do not cache the unguarded answer.
-    failed = any(
+    # A guard decision or a query embedding that failed is transient: do not cache the answer.
+    failed = tools.semantic_error is not None or any(
         t.get("purpose") == GUARD_PURPOSE and "error" in t for t in result.extra["decisions"]
     )
     if path and not failed:

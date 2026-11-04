@@ -120,6 +120,8 @@ IDENTIFIER = re.compile(
     r"|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b"
     r"|\b[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*\b"
 )
+# The full-text rank of a qualified-name match of an IDENTIFIER: above any text rank.
+NAME_MATCH_RANK = 1.0
 
 
 def is_abstract(symbol: CodeSymbol) -> bool:

@@ -6,8 +6,9 @@ import { formatSecs } from '../format'
 
 export default function Ask() {
   const [question, setQuestion] = useState('')
-  // 'code' asks the graph-first code agent (scope code); the others the document index.
-  const [mode, setMode] = useState<Mode | 'code'>('mix')
+  // 'auto' lets the router pick (scope auto); 'code' asks the graph-first code agent (scope
+  // code); mix/naive the document index (scope docs).
+  const [mode, setMode] = useState<Mode | 'code' | 'auto'>('auto')
   const [pending, setPending] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [result, setResult] = useState<(QueryResult & { id: number }) | null>(null)
@@ -30,7 +31,13 @@ export default function Ask() {
     setResult(null)
     try {
       const q = question.trim()
-      setResult(await (mode === 'code' ? ask(q, 'mix', 'code') : ask(q, mode)))
+      setResult(
+        await (mode === 'auto'
+          ? ask(q, 'mix', 'auto')
+          : mode === 'code'
+            ? ask(q, 'mix', 'code')
+            : ask(q, mode, 'docs')),
+      )
     } catch (e) {
       setError(messageOf(e))
     } finally {
@@ -60,8 +67,9 @@ export default function Ask() {
           <select
             id="mode"
             value={mode}
-            onChange={(e) => setMode(e.target.value as Mode | 'code')}
+            onChange={(e) => setMode(e.target.value as Mode | 'code' | 'auto')}
           >
+            <option value="auto">Auto (router)</option>
             <option value="mix">GraphRAG (mix)</option>
             <option value="naive">Vector only (naive)</option>
             <option value="code">Code (agent)</option>

@@ -82,6 +82,25 @@ describe('Trace', () => {
     expect(screen.getByText('Chunks (1)')).toBeInTheDocument()
   })
 
+  it('shows the router decision when the answer carries one', async () => {
+    const route = {
+      route: 'graph_flow',
+      targets: ['code'],
+      method: 'rule',
+      rules: ['http_route', 'flow_phrase'],
+      confidence: null,
+    }
+    mockFetch({
+      'GET /api/queries/23': { body: { ...record, result: { ...record.result!, extra: { route } } } },
+    })
+
+    renderAt('/trace/23')
+
+    expect(
+      await screen.findByText('route graph_flow → code (rule: http_route, flow_phrase)'),
+    ).toBeInTheDocument()
+  })
+
   it('shows the stored error of a failed query', async () => {
     mockFetch({
       'GET /api/queries/9': {

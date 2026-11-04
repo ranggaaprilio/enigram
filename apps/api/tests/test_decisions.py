@@ -16,7 +16,7 @@ from enigram.domain.errors import EnigramError, ProviderUnavailableError
 
 
 def test_questions_load_and_validate():
-    assert set(QUESTIONS) == {"claim_relation", "answerable", "note_conflict"}
+    assert set(QUESTIONS) == {"claim_relation", "answerable", "note_conflict", "route"}
     relation = QUESTIONS["claim_relation"]
     assert relation.kind == "choice"
     assert list(relation.criteria) == ["supports", "contradicts", "says_nothing"]
