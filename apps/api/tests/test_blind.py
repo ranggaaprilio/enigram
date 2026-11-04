@@ -42,6 +42,22 @@ def test_normalize_answer_leaves_no_traces_of_stripped_citations():
     )
 
 
+def test_normalize_answer_rewords_note_citations_used_as_nouns():
+    # The Phase 3 sheets: cutting "note#53" from "per note#53, the app" left "per, the app";
+    # bracketed code citations left "[]".
+    raw = (
+        "No gating [src/a.ts:15-41@70ae60dbb609] [src/b.ts:93@70ae60dbb609] [code]. "
+        "Team note #51 says it is off [note#51] [human]. Per note#53, the app retries. "
+        "This matches note#54's runbook. Note#55 claims an invite is required. "
+        "Both say so (note#7, note#8) [human]."
+    )
+    assert normalize_answer(raw) == (
+        "No gating. Team note says it is off. Per the team note, the app retries. "
+        "This matches the team note's runbook. The team note claims an invite is required. "
+        "Both say so."
+    )
+
+
 @pytest.mark.parametrize("text", ["[no-context] Nothing found.", "Plain sentence, no marks."])
 def test_normalize_answer_leaves_plain_text_and_abstentions(text):
     assert normalize_answer(text) == text

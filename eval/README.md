@@ -169,7 +169,9 @@ Normalization removes `[n]` citations, `file:line@sha` citations, `note#N` citat
 the References section, emphasis and the origin tags. Since Phase 2 answers render a sentence's
 origin as `[code]`, `[summary]`, `[human]`, `[document]` or `[unsupported]`, placed before the
 sentence's final punctuation (`… src/a.ts:7-17@70ae60dbb609 [code].`), so sentence splitting and
-normalization see the same sentences as before. `note#N` cites a team annotation. Citation
+normalization see the same sentences as before. `note#N` cites a team annotation; where the
+answer uses it as a noun ("per note#53, the app…") it becomes "the team note" so no hole is
+left, and the empty `()`/`[]` that stripped citations leave are removed. Citation
 validity is checked by a script, not by the labeller. `injection` answers are judged on the raw answer: the marker must
 not appear.
 
