@@ -1,0 +1,267 @@
+# Docs-vs-code conflict labels (PRD Phase 5): precision of `enigram conflicts detect` per run.
+# Not the golden set. real = the passage makes a claim about this code and the code contradicts it.
+repo: https://github.com/ranggaaprilio/nestjs-boilerplate
+ref: eval-v1
+sha: 70ae60dbb609
+runs:
+- name: baseline
+  at: '2026-11-04T09:08:59Z'
+  code: 88fb9e5
+  labelled_by: claude (draft, from excerpts and code; owner to confirm)
+  rows: 42
+  real_rows: 6
+  passages: 18
+  real_passages: 2
+  labels:
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedModule
+    symbol: src/database/seeds/relational/user/user-seed.module.ts#UserSeedModule
+    p: 0.95
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00008-chunk-000
+    entity: FileName Property
+    symbol: src/files/infrastructure/uploader/s3/files.controller.ts#FilesS3Controller.uploadFile
+    p: 0.94
+    real: false
+    why: s3-presigned flow compared with the local / s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00010-chunk-000
+    entity: Fronted App
+    symbol: src/files/infrastructure/uploader/local/files.controller.ts#FilesLocalController.uploadFile
+    p: 0.92
+    real: false
+    why: s3-presigned flow compared with the local / s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00008-chunk-000
+    entity: Presigned URL
+    symbol: src/files/infrastructure/uploader/local/files.controller.ts#FilesLocalController.uploadFile
+    p: 0.92
+    real: false
+    why: s3-presigned flow compared with the local / s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedService
+    symbol: src/database/seeds/relational/user/user-seed.service.ts#UserSeedService
+    p: 0.92
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00002-chunk-000
+    entity: File Upload Endpoint
+    symbol: src/files/infrastructure/uploader/s3/files.controller.ts#FilesS3Controller.uploadFile
+    p: 0.91
+    real: false
+    why: local and s3-presigned flows compared with the s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00010-chunk-000
+    entity: Fronted App
+    symbol: src/files/infrastructure/uploader/s3/files.controller.ts#FilesS3Controller.uploadFile
+    p: 0.91
+    real: false
+    why: s3-presigned flow compared with the local / s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--CHANGELOG-c00012-chunk-000
+    entity: Nestjs Modules Mailer
+    symbol: src/app.module.ts#AppModule
+    p: 0.91
+    real: false
+    why: 'changelog: history, not a claim'
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--serialization-c00002-chunk-000
+    entity: Password
+    symbol: src/users/infrastructure/persistence/relational/entities/user.entity.ts#UserEntity
+    p: 0.91
+    real: true
+    why: 'eval #3: doc shows @Exclude({toPlainOnly}) on password; UserEntity differs'
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedModule
+    symbol: src/database/seeds/document/user/user-seed.module.ts#UserSeedModule
+    p: 0.91
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00010-chunk-000
+    entity: S3 Presigned URL
+    symbol: src/files/infrastructure/uploader/s3/files.controller.ts#FilesS3Controller.uploadFile
+    p: 0.9
+    real: false
+    why: s3-presigned flow compared with the local / s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00001-chunk-000
+    entity: S3-Presigned Driver
+    symbol: src/files/infrastructure/uploader/s3-presigned/files.module.ts#FilesS3PresignedModule
+    p: 0.9
+    real: false
+    why: driver list; the modules agree
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedModule
+    symbol: src/database/seeds/document/user/user-seed.service.ts#UserSeedService.run
+    p: 0.9
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedService
+    symbol: src/database/seeds/document/user/user-seed.service.ts#UserSeedService.run
+    p: 0.9
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedModule
+    symbol: src/database/seeds/document/user/user-seed.service.ts#UserSeedService
+    p: 0.88
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedService
+    symbol: src/database/seeds/document/user/user-seed.service.ts#UserSeedService
+    p: 0.88
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--CLAUDE-c00001-chunk-000
+    entity: Generate Skill
+    symbol: src/files/infrastructure/persistence/relational/entities/file.entity.ts#FileEntity
+    p: 0.87
+    real: false
+    why: agent instructions, not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--auth-c00013-chunk-000
+    entity: Email Verified Flag
+    symbol: src/auth-facebook/auth-facebook.service.ts#AuthFacebookService.getProfileByToken
+    p: 0.86
+    real: true
+    why: 'eval README docs-vs-code #1: social providers'' email verified flag is not checked'
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--auth-c00013-chunk-000
+    entity: Social Providers
+    symbol: src/auth-facebook/auth-facebook.service.ts#AuthFacebookService.getProfileByToken
+    p: 0.86
+    real: true
+    why: 'eval README docs-vs-code #1: social providers'' email verified flag is not checked'
+  - chunk: ranggaaprilio-nestjs-boilerplate--CLAUDE-c00001-chunk-000
+    entity: Entity Files
+    symbol: src/files/infrastructure/persistence/relational/entities/file.entity.ts#FileEntity
+    p: 0.85
+    real: false
+    why: agent instructions, not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--cli-c00006-chunk-000
+    entity: Relational Database (PostgreSQL + TypeORM)
+    symbol: .install-scripts/scripts/remove-postgresql.ts#removePostgreSql
+    p: 0.85
+    real: false
+    why: a command; paired with an install script
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00007-chunk-000
+    entity: AWS S3
+    symbol: src/files/infrastructure/uploader/s3-presigned/files.module.ts#FilesS3PresignedModule
+    p: 0.84
+    real: false
+    why: s3 flow compared with the s3-presigned module
+  - chunk: ranggaaprilio-nestjs-boilerplate--CLAUDE-c00001-chunk-000
+    entity: CLI Generators
+    symbol: src/files/infrastructure/persistence/relational/entities/file.entity.ts#FileEntity
+    p: 0.84
+    real: false
+    why: agent instructions, not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00006-chunk-000
+    entity: Schema Creation Workflow
+    symbol: src/roles/infrastructure/persistence/document/entities/role.schema.ts#RoleSchema
+    p: 0.84
+    real: false
+    why: tutorial step (create a .schema.ts file), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--.claude--skills--generate--SKILL-c00001-chunk-000
+    entity: Entity
+    symbol: src/files/infrastructure/persistence/relational/entities/file.entity.ts#FileEntity
+    p: 0.83
+    real: false
+    why: agent instructions, not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--CLAUDE-c00001-chunk-000
+    entity: Generate Skill
+    symbol: src/users/infrastructure/persistence/document/entities/user.schema.ts#UserSchemaClass
+    p: 0.83
+    real: false
+    why: agent instructions, not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--auth-c00000-chunk-000
+    entity: POST /api/v1/auth/logout
+    symbol: src/auth/auth.controller.ts#AuthController.delete
+    p: 0.83
+    real: false
+    why: table of contents; logout paired with DELETE /me
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedModule
+    symbol: src/database/seeds/document/user/user-seed.service.ts#UserSeedService.constructor
+    p: 0.83
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00008-chunk-000
+    entity: File Path
+    symbol: src/files/infrastructure/uploader/local/files.service.ts#FilesLocalService.create
+    p: 0.82
+    real: false
+    why: s3-presigned flow compared with the local / s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00001-chunk-000
+    entity: S3-Presigned Driver
+    symbol: src/files/infrastructure/uploader/s3/files.module.ts#FilesS3Module
+    p: 0.82
+    real: false
+    why: driver list; the modules agree
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--auth-c00013-chunk-000
+    entity: Social Interface
+    symbol: src/auth-facebook/auth-facebook.service.ts#AuthFacebookService
+    p: 0.82
+    real: true
+    why: 'eval README docs-vs-code #1: social providers'' email verified flag is not checked'
+  - chunk: ranggaaprilio-nestjs-boilerplate--.claude--skills--generate--SKILL-c00001-chunk-000
+    entity: User
+    symbol: src/users/infrastructure/persistence/relational/entities/user.entity.ts#UserEntity
+    p: 0.82
+    real: false
+    why: agent instructions, not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--serialization-c00003-chunk-000
+    entity: Email Property
+    symbol: src/users/infrastructure/persistence/document/entities/user.schema.ts#UserSchemaClass
+    p: 0.81
+    real: false
+    why: tutorial; paired with the Mongo schema, not the layer it describes
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--auth-c00013-chunk-000
+    entity: Email Verified Flag
+    symbol: src/auth-facebook/auth-facebook.service.ts#AuthFacebookService
+    p: 0.81
+    real: true
+    why: 'eval README docs-vs-code #1: social providers'' email verified flag is not checked'
+  - chunk: ranggaaprilio-nestjs-boilerplate--CLAUDE-c00001-chunk-000
+    entity: Entity Files
+    symbol: src/files/infrastructure/persistence/relational/mappers/file.mapper.ts#FileMapper.toPersistence
+    p: 0.81
+    real: false
+    why: agent instructions, not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--cli-c00005-chunk-000
+    entity: Npm Run Add:Property:To-Document
+    symbol: .install-scripts/scripts/property-generation-scripts/remove-document.ts#removeDocumentPropertyGeneration
+    p: 0.81
+    real: false
+    why: a command; paired with an install script
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00008-chunk-000
+    entity: Presigned URL
+    symbol: src/files/infrastructure/uploader/local/files.service.ts#FilesLocalService.create
+    p: 0.81
+    real: false
+    why: s3-presigned flow compared with the local / s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--file-uploading-c00010-chunk-000
+    entity: S3 Presigned URL
+    symbol: src/files/infrastructure/uploader/local/files.service.ts#FilesLocalService.create
+    p: 0.81
+    real: false
+    why: s3-presigned flow compared with the local / s3 driver
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--auth-c00013-chunk-000
+    entity: Social Interface
+    symbol: src/auth-facebook/auth-facebook.service.ts#AuthFacebookService.getProfileByToken
+    p: 0.81
+    real: true
+    why: 'eval README docs-vs-code #1: social providers'' email verified flag is not checked'
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00009-chunk-000
+    entity: UserSeedService
+    symbol: src/database/seeds/relational/user/user-seed.service.ts#UserSeedService.constructor
+    p: 0.81
+    real: false
+    why: tutorial step (install faker, create user.factory.ts), not a claim
+  - chunk: ranggaaprilio-nestjs-boilerplate--test--generators--README-c00004-chunk-000
+    entity: Cleanup Process
+    symbol: .install-scripts/scripts/remove-install-scripts.ts#removeInstallScripts
+    p: 0.8
+    real: false
+    why: generator test cleanup; paired with an install script
+  - chunk: ranggaaprilio-nestjs-boilerplate--docs--database-c00004-chunk-000
+    entity: Revert Migration
+    symbol: .install-scripts/scripts/remove-postgresql.ts#removePostgreSql
+    p: 0.8
+    real: false
+    why: a command; paired with an install script
