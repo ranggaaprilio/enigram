@@ -57,6 +57,7 @@ def test_deps_hash_is_order_independent():
 
 def test_parse_note_citations():
     assert parse_note_citations("x note#7. y note#12 and anote#3") == [7, 12]
+    assert parse_note_citations("team note #51 says; Note#55 claims; note# 9") == [51, 55]
 
 
 def test_note_line_and_warnings():

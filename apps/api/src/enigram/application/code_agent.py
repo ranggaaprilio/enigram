@@ -51,7 +51,7 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.0"  # bump when tool output, the prompt or the guard changes: busts the cache
+AGENT_VERSION = "3.2"  # bump when tool output, the prompt or the guard changes: busts the cache
 AGENT_MAX_REPOS = 3
 GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
@@ -125,7 +125,9 @@ def system_prompt(repo_lines: list[str]) -> str:
         "result. " + CODE_IS_THE_TRUTH + "If the repos do not answer it, say so in one sentence "
         f"ending with {NO_ANSWER_MARKER}.\n"
         "Team notes (note#N) beat summaries; cite one as note#N. If one contradicts the code, "
-        "state both."
+        "state both. When a note describes behaviour outside the repo (gateway, infra, ops) that "
+        "the code does not contradict, take the note's yes or no as the answer and add that the "
+        "code does not implement it."
     )
 
 

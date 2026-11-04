@@ -280,9 +280,9 @@ def test_tool_set_schemas_and_prompt_stay_small():
     names = [t["function"]["name"] for t in TOOLS]
     assert names == ["search_code", "find_symbol", "entrypoint_flow", "read_file", "grep"]
     # Resent on every turn: tiktoken before this iteration 677 (8 tools) and 233; Phase 2 adds
-    # the team-notes sentence (257).
+    # the team-notes sentence (257); Phase 3 the note-outside-the-repo sentence (299).
     assert count_tokens(json.dumps(TOOLS)) <= 440
-    assert count_tokens(system_prompt([f"org-app {SHA[:12]}"])) <= 265
+    assert count_tokens(system_prompt([f"org-app {SHA[:12]}"])) <= 305
 
 
 async def test_system_prompt_lists_the_indexed_repos(cfg, graph):
@@ -516,7 +516,7 @@ async def test_a_note_change_misses_the_cache(cfg, graph, tmp_path):
 async def test_agent_guard_abstains_and_is_cached(cfg, graph, tmp_path):
     from code_fakes import FakeDecider, noul
 
-    assert code_agent.AGENT_VERSION == "3.0"
+    assert code_agent.AGENT_VERSION == "3.2"
     cache = tmp_path / "cache"
     decider = FakeDecider({"answerable": noul(0.1)}, name="jev")
     chat = ScriptedChat(
