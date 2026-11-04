@@ -54,6 +54,23 @@ def test_ensure_store_makes_a_bare_partial_clone_and_refetches(cfg, store):
     assert ensure_store(cfg, URL, None, sha, source=f"file://{source}") == dest  # fetch path
 
 
+def test_git_on_a_store_trusts_exactly_that_store(cfg, store, monkeypatch):
+    """A store created by the host CLI and read by the container's root: git refuses it as
+    "dubious ownership" unless that store is a safe.directory."""
+    tools, dest, source, sha = store
+    seen: list[list[str]] = []
+    run = subprocess.run
+
+    def spy(args, **kw):
+        seen.append(list(args))
+        return run(args, **kw)
+
+    monkeypatch.setattr(repo_store.subprocess, "run", spy)
+    ensure_store(cfg, URL, None, sha, source=f"file://{source}")
+
+    assert seen and all(f"safe.directory={dest.resolve()}" in args for args in seen)
+
+
 def test_ensure_store_rejects_a_missing_commit(cfg, store):
     _, _, source, _ = store
     with pytest.raises(EnigramError, match="has no commit 000000000000"):

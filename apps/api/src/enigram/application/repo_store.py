@@ -49,9 +49,13 @@ def _run(
     args: list[str], *, home: Path, check: bool = True, timeout: int = GIT_READ_TIMEOUT_SECS
 ) -> subprocess.CompletedProcess[bytes]:
     command = args[2] if args[0] == "-C" else args[0]
+    # A store may be owned by another user than the one running git (created by the CLI on the
+    # host, read by the container's root): trust exactly this store, which is enigram's own data
+    # and from which nothing is run.
+    trust = ["-c", f"safe.directory={Path(args[1]).resolve()}"] if args[0] == "-C" else []
     try:
         done = subprocess.run(
-            [*_GIT, *args],
+            [*_GIT, *trust, *args],
             capture_output=True,
             timeout=timeout,
             env=git_env(home),
