@@ -47,20 +47,25 @@ describe('Ask', () => {
     expect((await screen.findByText('Mira Okafor')).tagName).toBe('STRONG')
     expect(screen.getByText(/Harbor Signals Study · Methods > Design · p\. 3/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'View trace' })).toHaveAttribute('href', '/trace/5')
+    // Auto is the default: the router picks the documents, the code or both.
     expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({
       question: 'Who designed the protocol?',
       mode: 'mix',
-      scope: 'docs',
+      scope: 'auto',
     })
   })
 
-  it('sends the chosen mode', async () => {
-    const fetch = mockFetch({ 'POST /api/query': { body: { ...result, mode: 'naive' } } })
+  it.each(['mix', 'naive'])('sends %s to the documents explicitly', async (mode) => {
+    const fetch = mockFetch({ 'POST /api/query': { body: { ...result, mode } } })
 
-    await askQuestion('naive')
+    await askQuestion(mode)
 
     await screen.findByText('Mira Okafor')
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).mode).toBe('naive')
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({
+      question: 'Who designed the protocol?',
+      mode,
+      scope: 'docs',
+    })
   })
 
   it('asks the code agent', async () => {

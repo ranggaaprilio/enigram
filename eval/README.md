@@ -243,5 +243,34 @@ tools. Code: `application/code_agent.py`.
   invalidates answers cached before Phase 3. Cached per (`AGENT_VERSION`, question,
   indexed shas, repo, model) in
   `data/eval/enigram-agent-cache/`.
+- Phase 4: `search_code` also ranks by code embeddings (RRF of full text and cosine, see the
+  main README); `diagnostics` adds `semantic_hits` (vector rows returned) and `semantic_error`
+  (Voyage failed: full text only, and the answer is not cached). `AGENT_VERSION` 3.3 invalidates
+  older cached answers. A run whose answers show `semantic_error` is invalid for comparison.
 - Citations stay `file:start-end@sha12` inline (no repository prefix): the sha identifies the
   indexed snapshot, and the blind normaliser and citation checker parse this form.
+
+## Router accuracy (Phase 4)
+
+`enigram golden route` routes every selected question with the router of
+`application/routing.py` and generates no answer. A code set's labels are `expected_route`; a
+doc set's questions expect `docs`; unanswerable and injection questions are counted but
+unlabelled.
+
+```bash
+uv run enigram golden route --split dev --no-choice      # rules only; tune the rules here
+uv run enigram golden route --split dev                  # rules + the `route` choice
+# commit the rules and the threshold, then once each:
+uv run enigram golden route --allow-verdict --no-choice
+uv run enigram golden route --allow-verdict
+uv run enigram golden route --file eval/golden-docs.yaml
+```
+
+Reported per category, split, expected route and method (`data/reports/route-<ts>.md` and
+`.json`): **coverage** (decided by a rule or a confident choice / labelled), **accuracy** (the
+fine label right / decided; an `unsure` row carries a default label and never counts) and
+**target accuracy** (code vs documents right / labelled; an `unsure` row answers from both).
+The report also lists the misses, the choice confidences (the input for the `route` threshold in
+`decisions.yaml`), the golden sha256 and the git commit. The verdict lock applies although no
+answer is generated: rules and the threshold are adjusted only while looking at `dev`, and the
+all-splits run happens once, after they are committed.

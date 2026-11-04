@@ -98,6 +98,10 @@ async def test_index_code_stores_graph_blobs_and_summaries(cfg, deps, tmp_path):
     stored = graph_repo.repos[result["repo_id"]]
     assert stored["indexed_sha"] == head
     assert stored["report"]["summaries"]["flows"] == 2  # merged into the stored report
+    # Every symbol's text plus every summary is embedded (FakeEmbedder from the deps fixture).
+    texts = result["symbols"] + len(graph_repo.stored)
+    assert result["embeddings"]["embedded"] == texts == len(graph_repo.embeddings)
+    assert stored["report"]["embeddings"]["model"] == "fake-code-1"
     blobs = {f.path for f in graph_repo.blobs[result["repo_id"]]}
     # Every TypeScript blob at HEAD, the baseline for a later diff.
     assert blobs == {

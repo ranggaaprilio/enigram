@@ -26,3 +26,20 @@ note_conflict:
     "true": the code does the opposite of what the note says or lacks what it says
     "false": the note agrees with the code or the code does not address it
   threshold: 0.8   # P(true) at or above = conflict; at or below 1 - threshold = no conflict
+route:
+  type: choice
+  # Asked only when the rules in application/routing.py find no route or several. `question` is
+  # the user's question, `sources` names what is indexed. memory is not offered (no answer path).
+  instructions: "Which source answers `question`, given `sources`?"
+  criteria:
+    symbol: a named class, function, method, type or constant in the code, or its definition
+    graph_flow: what the application does step by step for a request, job or event, including errors and permissions
+    semantic: a behaviour of the code described in plain words without naming a route or a symbol
+    docs: the content of uploaded documents (papers, books, manuals, specs, design notes) or why something was decided
+    annotation: a team note about how the code behaves in production, staging or operations
+  # Dev split, jev-latest, 2026-11-04, 5 probes (the questions no single rule decides). Run 1:
+  # right 0.51, 0.50, 0.29; wrong 0.42 (b63 -> docs, the wrong source), 0.19. Run 2 (same
+  # input): right 0.51, 0.41, 0.34; wrong 0.47 (b63 -> docs), 0.27. The run-to-run spread is
+  # wider than the gap, so no threshold separates them reliably. PROVISIONAL until the owner
+  # picks the plan's fallback (2-way code/docs choice) or another threshold.
+  threshold: 0.45  # confidence below = unsure (answer from code and documents and merge)

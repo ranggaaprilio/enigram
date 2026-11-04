@@ -4,6 +4,7 @@ import pytest
 from code_fakes import (
     SHA,
     FakeCodeGraph,
+    FakeEmbedder,
     ScriptedChat,
     agent_graph,
     answer_reply,
@@ -18,6 +19,7 @@ from enigram.application.code_agent import (
     answer_with_agent,
     system_prompt,
 )
+from enigram.application.code_embeddings import embed_repo
 from enigram.application.code_query import count_tokens
 from enigram.application.code_summary import TRUNCATED
 from enigram.application.repo_store import store_path
@@ -97,6 +99,8 @@ async def test_graph_first_then_read_then_answer(cfg, graph):
         "read_calls": 1,
         "reads_on_graph_lines": 1,
         "repos_touched": ["org-app"],
+        "semantic_hits": 0,  # no embedder
+        "semantic_error": None,
         "turns": 4,
     }
     assert result.extra["diagnostics"]["graph_hits"] >= 1
@@ -370,6 +374,26 @@ async def test_turns_are_counted_and_the_cache_key_is_versioned(cfg, graph, tmp_
     assert len(list(cache.iterdir())) == 2
 
 
+async def test_the_embedder_and_a_re_index_change_the_cache_key(cfg, graph, tmp_path):
+    cache = tmp_path / "cache"
+    await answer_with_agent(cfg, ScriptedChat([answer_reply(FINAL)]), graph, "q", cache_dir=cache)
+    again = ScriptedChat([answer_reply("With vectors.")])
+    second = await answer_with_agent(
+        cfg, again, graph, "q", cache_dir=cache, embedder=FakeEmbedder()
+    )
+    assert second.answer == "With vectors."  # a miss, not the full-text-only answer
+    graph.repos[1]["indexed_at"] = "2026-11-04T10:00:00+00:00"  # same SHA, indexed again
+    third = await answer_with_agent(
+        cfg,
+        ScriptedChat([answer_reply("Re-indexed.")]),
+        graph,
+        "q",
+        cache_dir=cache,
+        embedder=FakeEmbedder(),
+    )
+    assert third.answer == "Re-indexed." and len(list(cache.iterdir())) == 3
+
+
 async def test_a_failed_graph_call_does_not_open_the_fallback(cfg, graph):
     tools = _tools(cfg, graph, open_git=FakeGit())
     path = {"repo": "org-app", "path": "src/app.controller.ts"}
@@ -516,7 +540,7 @@ async def test_a_note_change_misses_the_cache(cfg, graph, tmp_path):
 async def test_agent_guard_abstains_and_is_cached(cfg, graph, tmp_path):
     from code_fakes import FakeDecider, noul
 
-    assert code_agent.AGENT_VERSION == "3.2"
+    assert code_agent.AGENT_VERSION == "3.3"
     cache = tmp_path / "cache"
     decider = FakeDecider({"answerable": noul(0.1)}, name="jev")
     chat = ScriptedChat(
@@ -611,3 +635,83 @@ async def test_agent_does_not_cache_when_the_guard_decision_failed(cfg, graph, t
 
     assert failed.extra["abstain_guard"]["action"] == "skipped"
     assert retried.extra["abstain_guard"]["action"] == "abstained"
+
+
+# -- the semantic channel of search_code ---------------------------------------------------------
+
+
+def _pager_graph():
+    """A symbol only its summary describes, in words of three letters or fewer: the fake full
+    text search (words longer than three letters) cannot find it, the vectors can."""
+    from code_fakes import sym
+
+    pager = sym("PageMaker.slice", file="src/pager.ts", body="slice(xs, n) { return xs; }")
+    base = agent_graph()
+    graph = FakeCodeGraph(base)
+    graph.graphs[1] = base.__class__([*base.symbols, pager], base.edges, base.entrypoints, {})
+    graph.stored[(1, pager.id, "symbol")] = FlowSummary(
+        pager.id, "symbol", "Cut the set to one row per ask.", ()
+    )
+    return graph
+
+
+async def test_search_code_finds_a_symbol_only_the_vectors_match(cfg):
+    graph = _pager_graph()
+    embedder = FakeEmbedder()
+    await embed_repo(embedder, graph, 1)
+    question = "cut the set to one row"
+
+    plain = await _tools(cfg, graph).run("search_code", {"query": question})
+    tools = _tools(cfg, graph, embedder=embedder)
+    out = await tools.run("search_code", {"query": question})
+
+    assert plain.startswith("no matches")
+    assert out.splitlines()[0].startswith("repo=org-app PageMaker.slice (method)")
+    assert tools.diagnostics()["semantic_hits"] > 0
+    assert embedder.calls[-1] == ([question], "query")
+
+
+async def test_search_code_falls_back_to_full_text_when_voyage_fails(cfg, graph):
+    embedder = FakeEmbedder(error="Voyage embedding failed (fake-code-1): down")
+    tools = _tools(cfg, graph, embedder=embedder)
+
+    first = await tools.run("search_code", {"query": "users"})
+    await tools.run("search_code", {"query": "users again"})
+
+    assert "AppController.find" in first
+    assert len(embedder.calls) == 1  # off for the rest of the question
+    diagnostics = tools.diagnostics()
+    assert diagnostics["semantic_error"].startswith("Voyage embedding failed")
+    assert diagnostics["semantic_hits"] == 0
+
+
+async def test_one_query_vector_per_distinct_query(cfg, graph):
+    embedder = FakeEmbedder()
+    await embed_repo(embedder, graph, 1)
+    tools = _tools(cfg, graph, embedder=embedder)
+
+    await tools.run("search_code", {"query": "users"})
+    await tools.run("search_code", {"query": "users"})
+
+    assert [c for c in embedder.calls if c[1] == "query"] == [(["users"], "query")]
+
+
+async def test_an_answer_with_a_failed_query_embedding_is_not_cached(cfg, graph, tmp_path):
+    def run():
+        chat = ScriptedChat(
+            [tool_reply(("search_code", _args(query="users"))), answer_reply(FINAL)]
+        )
+        return answer_with_agent(
+            cfg,
+            chat,
+            graph,
+            "Who may load a user?",
+            cache_dir=tmp_path / "cache",
+            open_git=FakeGit(),
+            embedder=FakeEmbedder(error="Voyage embedding failed: down"),
+        )
+
+    result = await run()
+
+    assert result.extra["diagnostics"]["semantic_error"]
+    assert not (tmp_path / "cache").exists() or not list((tmp_path / "cache").iterdir())

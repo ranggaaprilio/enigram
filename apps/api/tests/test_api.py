@@ -2,7 +2,7 @@ import hashlib
 import hmac
 
 import pytest
-from code_fakes import FakeAnnotations, FakeCodeGraph, FakeDecider
+from code_fakes import FakeAnnotations, FakeCodeGraph, FakeDecider, FakeEmbedder, choice
 from fastapi.testclient import TestClient
 from test_query import FakeRag
 from test_server import FakeMemoryStore
@@ -48,6 +48,7 @@ def _deps(cfg, store, built):
     deps.open_store, deps.new_memory, deps.new_code_graph = open_store, new_memory, new_code_graph
     deps.new_annotations = new_annotations
     deps.decider = FakeDecider
+    deps.code_embedder = FakeEmbedder
     return deps
 
 
@@ -227,7 +228,8 @@ def test_query_failure_is_502_and_logged(env):
     client, store, rag, _ = env
     rag.response = {"status": "failure", "message": "Query failed: Connection error."}
 
-    response = client.post("/query", json={"question": "Who designed it?", "mode": "naive"})
+    body = {"question": "Who designed it?", "mode": "naive", "scope": "docs"}
+    response = client.post("/query", json=body)
 
     assert response.status_code == 502
     assert "Connection error" in response.json()["detail"]
@@ -239,9 +241,9 @@ def test_query_scope_code_uses_the_agent(env, monkeypatch):
     client, store, rag, _ = env
     seen = {}
 
-    async def fake_agent(cfg, chat, graph, question, *, repo_url, model, notes, decider):
+    async def fake_agent(cfg, chat, graph, question, *, repo_url, model, notes, decider, embedder):
         seen.update(graph=graph, question=question, repo_url=repo_url, model=model, notes=notes)
-        seen["decider"] = decider
+        seen.update(decider=decider, embedder=embedder)
         return QueryResult(question, "Only admins src/a.ts:1-2@abc1234.", [], [], mode=AGENT_MODE)
 
     monkeypatch.setattr(api, "answer_with_agent", fake_agent)
@@ -253,8 +255,82 @@ def test_query_scope_code_uses_the_agent(env, monkeypatch):
     assert isinstance(seen["graph"], FakeCodeGraph) and seen["repo_url"] == body["repo"]
     assert isinstance(seen["notes"], FakeAnnotations)
     assert isinstance(seen["decider"], FakeDecider)
+    assert isinstance(seen["embedder"], FakeEmbedder)
     assert rag.params == []  # the document index is not asked
     assert store.queries[0]["mode"] == "enigram-agent"
+
+
+def _routed(client, monkeypatch):
+    """One indexed repository and a fake agent; returns the questions the agent was asked."""
+    graph = client.app.state.code_graph
+    graph.repos[1] = {
+        "id": 1,
+        "url": "https://github.com/o/a",
+        "ref": None,
+        "indexed_sha": "a" * 40,
+    }
+    asked = []
+
+    async def fake_agent(cfg, chat, graph, question, **kw):
+        asked.append((question, kw["repo_url"]))
+        return QueryResult(question, "Code says so src/a.ts:1-2@abc1234.", [], [], mode=AGENT_MODE)
+
+    monkeypatch.setattr(api, "answer_with_agent", fake_agent)
+    return asked
+
+
+def test_query_auto_is_the_default_and_routes_a_flow_question_to_code(env, monkeypatch):
+    client, store, rag, _ = env
+    asked = _routed(client, monkeypatch)
+
+    response = client.post("/query", json={"question": "Walk through POST /auth/refresh"})
+
+    body = response.json()
+    assert response.status_code == 200 and body["mode"] == "enigram-agent"
+    assert len(asked) == 1 and rag.params == []
+    assert body["extra"]["route"]["method"] == "rule"
+    stored = client.get(f"/queries/{body['id']}").json()
+    assert stored["mode"] == "enigram-agent"
+    assert stored["result"]["extra"]["route"]["targets"] == ["code"]
+
+
+def test_query_scope_docs_asks_no_route_choice(env, monkeypatch):
+    client, _, rag, _ = env
+    asked = _routed(client, monkeypatch)
+
+    body = {"question": "How can an admin filter users?", "scope": "docs"}
+    response = client.post("/query", json=body)
+
+    assert response.json()["mode"] == "mix" and asked == [] and len(rag.params) == 1
+    assert response.json()["extra"]["route"]["method"] == "forced"
+    decider = client.app.state.decider
+    assert all("route" not in purposes for _, purposes in decider.calls)
+
+
+def test_query_unsure_answers_from_both_and_merges(env, monkeypatch):
+    client, store, rag, _ = env
+    asked = _routed(client, monkeypatch)
+    client.app.state.decider.answers["route"] = choice("docs", 0.3)
+
+    response = client.post("/query", json={"question": "How can an admin filter users?"})
+
+    body = response.json()
+    assert body["mode"] == "auto" and len(asked) == 1 and len(rag.params) == 1
+    assert body["answer"].startswith("**From the code**")
+    assert body["extra"]["route"]["method"] == "unsure"
+    assert body["extra"]["decisions"][0]["purpose"] == "route"
+    assert store.queries[0]["mode"] == "auto"
+
+
+def test_query_with_a_repo_is_a_code_question(env, monkeypatch):
+    client, _, rag, _ = env
+    asked = _routed(client, monkeypatch)
+
+    body = {"question": "Why was Twitter login removed?", "repo": "https://github.com/o/a"}
+    response = client.post("/query", json=body)
+
+    assert response.json()["mode"] == "enigram-agent" and rag.params == []
+    assert asked == [(body["question"], body["repo"])]
 
 
 def test_query_scope_code_errors_are_502(env):

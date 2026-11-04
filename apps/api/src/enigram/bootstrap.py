@@ -19,7 +19,7 @@ from enigram.adapters.driven.postgres_jobs import PostgresJobStore, open_store
 from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
 from enigram.adapters.driven.ragas_scorer import RagasScorer
 from enigram.adapters.driven.ts_graph_sidecar import TsGraphSidecar
-from enigram.adapters.driven.voyage_embedding import make_embedding_func
+from enigram.adapters.driven.voyage_embedding import VoyageCodeEmbedder, make_embedding_func
 from enigram.application.decisions import FallbackDecider
 from enigram.application.ports import (
     AnnotationRepository,
@@ -46,7 +46,7 @@ async def _new_memory(cfg: Config, store: JobRepository) -> MemoryRepository:
 async def _new_code_graph(cfg: Config, store: JobRepository) -> CodeGraphRepository:
     # Like _new_memory: the code tables share the job store's pool.
     assert isinstance(store, PostgresJobStore)
-    graph = PostgresCodeGraph(store.pool, cfg.workspace)
+    graph = PostgresCodeGraph(store.pool, cfg.workspace, cfg.code_embed_dim)
     await graph.ensure_schema()
     return graph
 
@@ -81,6 +81,7 @@ def build_deps(cfg: Config) -> Deps:
         judge=partial(OpenAIChatModel, cfg.judge),
         answer_scorer=partial(RagasScorer, cfg),
         decider=partial(_decider, cfg),
+        code_embedder=partial(VoyageCodeEmbedder, cfg),
         query_budget={
             "max_entity_tokens": QUERY_MAX_ENTITY_TOKENS,
             "max_relation_tokens": QUERY_MAX_RELATION_TOKENS,

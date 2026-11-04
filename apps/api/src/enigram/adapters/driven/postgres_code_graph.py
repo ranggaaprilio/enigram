@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Sequence
 from typing import Any
 
 import asyncpg
@@ -10,6 +11,7 @@ from enigram.application.ports import ParsedGraph
 from enigram.domain.code import (
     IDENTIFIER,
     IMPLEMENTATION_CALL,
+    NAME_MATCH_RANK,
     CodeEdge,
     CodeEntrypoint,
     CodeFile,
@@ -17,6 +19,7 @@ from enigram.domain.code import (
     FlowSummary,
     is_abstract,
 )
+from enigram.domain.errors import EnigramError
 
 # CREATE ... IF NOT EXISTS is the whole migration story (as postgres_jobs.SCHEMA). `ref` is ''
 # for the default branch: NULL never conflicts in a UNIQUE constraint.
@@ -105,6 +108,24 @@ CREATE TABLE IF NOT EXISTS code_symbol_changes (
 CREATE INDEX IF NOT EXISTS code_symbol_changes_repo ON code_symbol_changes (repo_id, at);
 """
 
+
+def embeddings_schema(dim: int) -> str:
+    # The dimension is fixed by CODE_EMBED_MODEL; another CODE_EMBED_DIM needs this table dropped.
+    return f"""
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE TABLE IF NOT EXISTS code_embeddings (
+    repo_id BIGINT NOT NULL REFERENCES code_repos(id) ON DELETE CASCADE,
+    symbol_id TEXT NOT NULL,
+    -- "flow" | "symbol" (a summary of that kind) or "code" (the symbol's own text)
+    source TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    embedding vector({int(dim)}) NOT NULL,
+    PRIMARY KEY (repo_id, symbol_id, source)
+);
+"""
+
+
 # The question's stemmed words OR-ed: any word may match, ts_rank prefers more matches.
 _OR_QUERY = (
     "(SELECT array_to_string(array(SELECT quote_literal(l) "
@@ -112,7 +133,6 @@ _OR_QUERY = (
 )
 # "/api/v1/auth/refresh" asks for the route Nest declares as "/auth/refresh".
 _ROUTE_PREFIX = re.compile(r"^(/api)?(/v\d+)?(?=/)", re.IGNORECASE)
-NAME_MATCH_RANK = 1.0
 # A body hit ranks below a summary hit of the same words: bodies are noisier than summaries.
 BODY_MATCH_WEIGHT = 0.5
 _REPO_TABLES = ("code_files", "code_symbols", "code_edges", "code_entrypoints")
@@ -123,6 +143,11 @@ _SYMBOL_COLUMNS = (
 # The joined symbol's columns as s_<column>, for _symbol(row, "s_").
 _JOINED_SYMBOL_COLUMNS = ", ".join(f"s.{c} AS s_{c}" for c in _SYMBOL_COLUMNS.split(", "))
 _EDGE_COLUMNS = "e.src, e.dst, e.kind AS e_kind, e.src_file, e.line, e.resolved"
+
+
+def _vector(values: Sequence[float]) -> str:
+    """pgvector's text form, cast with ::vector, so no Python codec is needed."""
+    return "[" + ",".join(f"{float(v):.7g}" for v in values) + "]"
 
 
 def _loads(value: str | None) -> Any:
@@ -186,12 +211,25 @@ class PostgresCodeGraph:
     """Repositories are scoped to one workspace; every other table hangs off a repo id that
     get_repo / list_repos returned for that workspace. Shares the job store's pool."""
 
-    def __init__(self, pool: asyncpg.Pool, workspace: str):
+    def __init__(self, pool: asyncpg.Pool, workspace: str, embed_dim: int = 1024):
         self.pool = pool
         self.workspace = workspace
+        self.embed_dim = embed_dim
 
     async def ensure_schema(self) -> None:
         await self.pool.execute(SCHEMA)
+        await self.pool.execute(embeddings_schema(self.embed_dim))
+        # CREATE TABLE IF NOT EXISTS keeps an older dimension; pgvector stores it as the typmod.
+        stored = await self.pool.fetchval(
+            "SELECT atttypmod FROM pg_attribute WHERE attrelid = 'code_embeddings'::regclass "
+            "AND attname = 'embedding'"
+        )
+        if stored is not None and stored != self.embed_dim:
+            raise EnigramError(
+                f"code_embeddings holds vector({stored}) but CODE_EMBED_DIM={self.embed_dim}; "
+                "drop the table (DROP TABLE code_embeddings) and re-index, or set CODE_EMBED_DIM "
+                "back"
+            )
 
     async def replace_repo(
         self,
@@ -484,6 +522,54 @@ class PostgresCodeGraph:
             [f"{symbol}:{kind}" for symbol, kind in keep],
         )
         return int(status.split()[-1])
+
+    async def embedding_hashes(self, repo_id: int, model: str) -> dict[tuple[str, str], str]:
+        rows = await self.pool.fetch(
+            "SELECT symbol_id, source, text_hash FROM code_embeddings "
+            "WHERE repo_id = $1 AND model = $2",
+            repo_id,
+            model,
+        )
+        return {(r["symbol_id"], r["source"]): r["text_hash"] for r in rows}
+
+    async def save_embeddings(
+        self, repo_id: int, model: str, rows: list[tuple[str, str, str, list[float]]]
+    ) -> None:
+        await self.pool.executemany(
+            "INSERT INTO code_embeddings (repo_id, symbol_id, source, text_hash, model, embedding) "
+            "VALUES ($1, $2, $3, $4, $5, $6::vector) "
+            "ON CONFLICT (repo_id, symbol_id, source) DO UPDATE SET "
+            "text_hash = EXCLUDED.text_hash, model = EXCLUDED.model, "
+            "embedding = EXCLUDED.embedding",
+            [(repo_id, symbol, source, h, model, _vector(v)) for symbol, source, h, v in rows],
+        )
+
+    async def delete_embeddings_except(
+        self, repo_id: int, keep: list[tuple[str, str]], model: str
+    ) -> int:
+        status = await self.pool.execute(
+            "DELETE FROM code_embeddings WHERE repo_id = $1 "
+            "AND (model <> $3 OR NOT (symbol_id || ':' || source = ANY($2::text[])))",
+            repo_id,
+            [f"{symbol}:{source}" for symbol, source in keep],
+            model,
+        )
+        return int(status.split()[-1])
+
+    async def search_vectors(
+        self, repo_id: int, vector: list[float], model: str, limit: int
+    ) -> list[tuple[str, float]]:
+        # Exact scan (no HNSW): a repository holds a few thousand rows at most.
+        rows = await self.pool.fetch(
+            "SELECT symbol_id, max(1 - (embedding <=> $2::vector)) AS sim FROM code_embeddings "
+            "WHERE repo_id = $1 AND model = $3 GROUP BY symbol_id "
+            "ORDER BY sim DESC, symbol_id LIMIT $4",
+            repo_id,
+            _vector(vector),
+            model,
+            limit,
+        )
+        return [(r["symbol_id"], float(r["sim"])) for r in rows]
 
     async def routes(self, repo_id: int, verb_path: str) -> list[tuple[CodeEntrypoint, CodeSymbol]]:
         verb, _, path = verb_path.strip().partition(" ")
