@@ -8,7 +8,7 @@ src/enigram/
 ├── application/   use cases and ports (application/ports.py)
 ├── adapters/
 │   ├── driving/   cli, http_api, mcp_server, worker
-│   └── driven/    LightRAG, Docling, DeepSeek (OpenAI-compatible), Voyage, Postgres, Ragas, ts-morph sidecar
+│   └── driven/    LightRAG, Docling, DeepSeek (OpenAI-compatible), Voyage, Jev, Postgres, Ragas, ts-morph sidecar
 └── bootstrap.py   picks the adapters behind the ports
 ```
 

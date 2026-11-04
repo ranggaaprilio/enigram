@@ -263,16 +263,24 @@ async def test_eval_with_judge_scores_and_measures_agreement(cfg, deps, two_syst
     code, agent, sheet = two_systems
     deps.answer_scorer = FakeScorer
     judged = []
+    decided = []
 
     async def llm(judge, claims, contexts):
         return [True] * len(claims)
+
+    async def decision(decider, claims, contexts, used=None):
+        decided.append((type(decider).__name__, contexts))
+        used["jev jev-latest"] += 1  # the provider that answered, not the configured one
+        return [(False, 0.1, 0.9)] * len(claims)
 
     async def abstention(judge, question, answer):
         judged.append(question)
         return False
 
     monkeypatch.setattr(evaluate, "judge_claims_llm", llm)
+    monkeypatch.setattr(evaluate, "judge_claims_decision", decision)
     monkeypatch.setattr(evaluate, "judge_abstention", abstention)
+    monkeypatch.setattr(evaluate, "checkout_pinned", lambda cfg, repo: tmp_root(cfg))
     for path in (code, agent):
         run = json.loads(path.read_text())
         for item in run["items"]:
@@ -289,10 +297,105 @@ async def test_eval_with_judge_scores_and_measures_agreement(cfg, deps, two_syst
     assert overall["context_recall"]["n"] == 0  # code answers carry no chunk evidence
     assert data["agreement"]["labelled_claims"] == 2  # b01 in both systems
     assert data["agreement"]["llm"]["accuracy"] == 0.0
+    # Both judges see the same labels: the decision judge said False, the human said False.
+    decision = data["agreement"]["decision"]
+    assert (decision["n"], decision["accuracy"], decision["low_confidence"]) == (2, 1.0, 0)
+    assert decision["auroc"] is None  # one class only among the labelled claims
+    assert decision["cv"]["threshold"] is None and "need" in decision["cv"]["reason"]
+    assert data["metadata"]["models"]["decision_provider"] == "llm_judge"
+    assert data["metadata"]["models"]["decision_model"] == cfg.judge_model
+    assert overall["claim_faithfulness_decision"] == {"mean": 0.0, "n": 11, "missing": 0}
+    judgment = data["items"]["code"][0]["claim_judgments"][0]
+    assert (judgment["decision"], judgment["decision_p"], judgment["decision_confidence"]) == (
+        False,
+        0.1,
+        0.9,
+    )
+    assert decided and all(name == "FakeDecider" for name, _ in decided)
     # The LLM judge decides abstention only for answers that did not say "no context".
     assert "What does u01 do?" in judged  # agent answered u01; code's u01 had found=False
     assert any(r["metric"] == "answer_correctness" for r in data["missing"])
-    assert "| LLM claim judge" in run.report_path.read_text()
+    report = run.report_path.read_text()
+    assert "| LLM claim judge" in report and "| AUROC |" in report
+    assert decision["providers"] == {"jev jev-latest": len(decided)}
+    assert f"| Decision claim judge (`jev jev-latest` ×{len(decided)}) | 2 | 1.000" in report
+    assert f"decision provider `llm_judge` (`{cfg.judge_model}`)" in report
+
+
+def tmp_root(cfg):
+    root = cfg.eval_dir / "fake-clone"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_claim_contexts_agent_reads_cited_ranges(cfg, tmp_path):
+    root = tmp_path / "clone"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "a.ts").write_text("\n".join(f"line {n}" for n in range(1, 301)))
+    item = {
+        "mode": "enigram-agent",
+        "chunks": [{"text": "chunk"}],
+        "citations": [
+            {"file": "src/a.ts", "start": 2, "end": 3, "sha": "abc"},
+            {"file": "src/a.ts", "start": 2, "end": 3, "sha": "abc"},  # a repeat
+            {"file": "src/a.ts", "start": 1, "end": 300, "sha": "abc"},  # over READ_MAX_LINES
+            {"file": "src/missing.ts", "start": 1, "end": 2, "sha": "abc"},
+            {"file": None, "start": 0, "end": 0, "sha": ""},
+        ],
+        "sources": [
+            {"origin": "code", "title": "src/a.ts"},
+            {"origin": "human", "title": "note#7 on src/a.ts#A.run"},
+        ],
+    }
+
+    contexts = evaluate._claim_contexts(item, root)
+
+    assert contexts[0] == "src/a.ts:2-3\n2: line 2\n3: line 3"
+    assert contexts[1].startswith("src/a.ts:1-300\n1: line 1\n")
+    assert contexts[1].endswith("200: line 200")  # clipped to READ_MAX_LINES lines
+    assert contexts[2] == "note#7 on src/a.ts#A.run"
+    assert len(contexts) == 3
+    # Without a clone, or for a non-agent system, the chunks are the contexts.
+    assert evaluate._claim_contexts(item, None) == ["chunk"]
+    assert evaluate._claim_contexts({**item, "mode": "code"}, root) == ["chunk"]
+
+
+def test_claim_contexts_stop_at_the_state_limit(cfg, tmp_path, monkeypatch):
+    root = tmp_path / "clone"
+    root.mkdir()
+    (root / "big.ts").write_text("x" * 50 + "\n" + "y" * 50)
+    item = {
+        "mode": "agent+repo",
+        "chunks": [],
+        "citations": [
+            {"file": "big.ts", "start": 1, "end": 1, "sha": "a"},
+            {"file": "big.ts", "start": 2, "end": 2, "sha": "a"},
+        ],
+        "sources": [],
+    }
+    monkeypatch.setattr(evaluate, "STATE_MAX_CHARS", 80)
+    contexts = evaluate._claim_contexts(item, root)
+    assert len(contexts) == 1 and contexts[0].startswith("big.ts:1-1")
+
+
+async def test_pinned_root_only_for_agent_runs_with_a_repo(cfg, monkeypatch):
+    calls = []
+
+    def fake_checkout(cfg_, repo):
+        calls.append(repo.pinned_sha)
+        return cfg.eval_dir
+
+    monkeypatch.setattr(evaluate, "checkout_pinned", fake_checkout)
+    assert evaluate._pinned_root(cfg, "code", {"repo": REPO}) is None
+    assert evaluate._pinned_root(cfg, "enigram-agent", {"repo": None}) is None
+    assert evaluate._pinned_root(cfg, "enigram-agent", {"repo": REPO}) == cfg.eval_dir
+    assert calls == [REPO["pinned_sha"]]
+
+    def failing(cfg_, repo):
+        raise EnigramError("clone failed")
+
+    monkeypatch.setattr(evaluate, "checkout_pinned", failing)
+    assert evaluate._pinned_root(cfg, "enigram-agent", {"repo": REPO}) is None
 
 
 async def test_abstention_without_context_skips_the_judge(cfg, monkeypatch):
@@ -450,3 +553,15 @@ def test_phase2_annotation_and_conflict_criteria():
     empty = {"enigram-agent": {"items": items[-1:]}}
     assert ev._annotation_followed(empty, "enigram-agent")["verdict"] == ev.INSUFFICIENT
     assert ev._conflict_shown(empty, "enigram-agent")["verdict"] == ev.INSUFFICIENT
+
+
+def test_claim_contexts_clip_chunks_to_the_state_limit():
+    from enigram.application.decisions import STATE_MAX_CHARS
+
+    big = "x" * (STATE_MAX_CHARS // 2 + 10)
+    item = {"mode": "mix", "chunks": [{"text": big}, {"text": big}, {"text": "never read"}]}
+
+    contexts = evaluate._claim_contexts(item, None)
+
+    assert contexts[0] == big
+    assert sum(map(len, contexts)) <= STATE_MAX_CHARS and "never read" not in contexts

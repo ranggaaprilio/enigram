@@ -360,7 +360,9 @@ Every sentence of an answer ends with its origin, taken from its citations: `[co
 `[summary]`, `[human]`, `[document]` or `[unsupported]` (no citation). When a cited note is not
 plainly verified, a warning line follows the answer: `⚠ note#7 needs verification (reason:
 deps)`, `is orphaned`, `is a proposal` or `is marked as conflicting with the code; both are shown
-above`. Conflicts are marked by hand (`PATCH {"conflict": true}`).
+above`. Conflicts are marked by the [decision layer](#decision-layer) when a symbol note is
+verified and when a re-index flags it, or by hand (`PATCH {"conflict": true}`, which wins over the
+decider in the same request).
 
 Who may do what: the author is the API key's name (`web` for the UI, `anonymous` without
 `ENIGRAM_API_KEYS`) and owns the note unless `owner` names another key. A note created by its
@@ -383,6 +385,53 @@ The Annotations page lists notes by status (the re-verification queue is
 each note's history. Trace links entity names and code sources to it. Seed notes from a file with
 `uv run enigram annotations seed <file.yaml> --repo <url> [--ref <ref>]` (`annotations:` list of
 `{target, text, scope?}`; same target and text are skipped).
+
+### Decision layer
+
+Small yes/no and multiple-choice decisions go through one `DecisionProvider`. With
+`DECISION_PROVIDER=jev` the provider is Jev (TypeSafe System One, `TYPESAFE_API_KEY`, model
+`JEV_MODEL`, default `jev-latest`; `JEV_BASE_URL` defaults to `https://api.typesafe.ai/v1`): one
+HTTP request of about 0.3 s per decision, at $0.042 per million input tokens. When Jev is not
+configured (the default, `llm_judge`) or a Jev call fails after its retries, the judge model
+(`JUDGE_MODEL`) answers the same questions as a JSON prompt, which takes seconds and spends
+DeepSeek tokens. `uv run enigram check` prints which provider is active.
+
+The questions are data in `apps/api/src/enigram/application/decisions.yaml`, with their
+thresholds. They are used in four places:
+
+- **Abstain guard.** After every answer (`POST /query`, MCP, `enigram query`, `golden answer`),
+  `answerable` asks whether the evidence the system read (the agent's tool outputs, or the
+  retrieved chunks) is enough to answer it, counting "there is none" when the evidence shows
+  where the thing would have to be. At or below its threshold (0.25), an answer that did not
+  already abstain is replaced by "The indexed sources do not answer this question."
+  (`found: false`), but only when Jev decided: the judge answers 0 or 1, so a low judge verdict
+  is recorded (`action: skipped`, `reason: uncalibrated provider`) and the answer is kept. With
+  `DECISION_PROVIDER` unset the guard therefore never replaces an answer. Threshold `0` turns
+  the guard off.
+- **Conflict detection.** `note_conflict` reads a symbol note against the symbol's body and up
+  to five direct callees when the note is verified (created by its owner, `status: verified`, or
+  a trusted text edit) and when a re-index flags it `hash` or `deps`. At or above 0.8 the note
+  gets `conflict: true`, at or below 0.2 `conflict: false`, in between nothing changes. The event
+  is `conflict_detected` or `conflict_cleared` by actor `decider`, with the probability `p`. A
+  failed decision never blocks a verification.
+- **Decision claim judge.** `enigram eval --judge` grades every claim with `claim_relation`
+  (`supports`, `contradicts`, `says_nothing`) next to the LLM claim judge (see
+  [Evaluate](#evaluate)).
+- **Origin badges.** The web UI shows the per-sentence origin tags as badges.
+
+What is sent to Jev: the question, code bodies and the files the agent read, retrieved document
+chunks, claims and note texts. With `DECISION_PROVIDER=jev`, this data leaves for TypeSafe's API
+as well as DeepSeek's. Every call is in the answer's trace: `extra.decisions` lists purpose,
+provider, model, input tokens (Jev only), seconds and the fallback reason, and
+`extra.abstain_guard` holds `answerable`, the `action` (`none`, `abstained` or `skipped`) and the
+original answer when it was replaced. Jev tokens are reported but are not counted on the
+[token caps](#token-caps); the judge fallback is.
+
+Known limit: questions about an absence ("Does registering need an invite code?" when the code
+has none) used to score at or below the threshold, so the guard replaced correct "no" answers.
+The wording and the Jev-only rule fix that on 9 probes (absence 0.32-0.57 against unanswerable
+0.04-0.23 on jev-1.14.0), a thin margin set from few cases. Measure false abstentions on the
+`dev` split before relying on the guard.
 
 Corrections made earlier as LightRAG entity edits were not migrated. The Graph page (`/graph`,
 linked from the Annotations page) remains for structural fixes such as merging duplicate
@@ -491,18 +540,23 @@ injection markers, tokens, latency and tool calls. The Phase-1 criteria (code �
 code ≥ agent+repo − 1, every code answer fully cited, unresolved calls in flows ≤ 50%) get PASS,
 FAIL or INSUFFICIENT DATA.
 
-`--judge` also grades every answer with Ragas and the LLM claim judge (60-100 s per answer); it
-is meant for Phase 7:
+`--judge` also grades every answer with Ragas and both claim judges (60-100 s per answer); it is
+meant for Phase 7:
 
 | Score | How |
 |---|---|
 | faithfulness, answer relevancy, answer correctness | Ragas 0.4 with the judge model (`JUDGE_MODEL`, e.g. deepseek-v4-pro; defaults to the generator) |
 | context recall, context precision | Deterministic: retrieved chunks vs. the golden evidence chunks |
 | claim faithfulness (LLM) | The judge model judges each sentence of the answer against the retrieved context |
+| claim faithfulness (decision) | The [decision layer](#decision-layer) asks `claim_relation` per sentence in one request; grounded = `supports` |
 | abstention | The judge model decides whether each answer declines to answer: the share of `unanswerable` questions refused (higher is better) and of answerable ones refused (false abstention, lower is better). Reported only, no target |
 
-With `--judge`, `--labels` takes claim label sheets from `golden answer` to measure the judge
-against humans; claims are matched by question and sentence text. Without `--judge`, abstention
+Both claim judges grade against the same context: the retrieved chunks, or, for `agent+repo` and
+`enigram-agent` answers, the cited `file:start-end@sha` ranges read from the pinned clone plus the
+cited notes. With `--judge`, `--labels` takes claim label sheets from `golden answer` and reports
+both judges against humans on the same labels: accuracy and Cohen's κ for each, and for the
+decision judge also AUROC of P(supports), a cross-validated threshold and how many verdicts fell
+below confidence 0.8. Claims are matched by question and sentence text. Without `--judge`, abstention
 is rule-based (the system said it has no answer). Every report lists missing scores with their
 reason and compares the headline numbers with the previous run.
 

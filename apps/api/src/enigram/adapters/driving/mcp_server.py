@@ -18,6 +18,7 @@ from enigram.application.documents import documents_overview
 from enigram.application.ports import (
     AnnotationRepository,
     CodeGraphRepository,
+    DecisionProvider,
     Deps,
     JobRepository,
     KnowledgeEngine,
@@ -39,6 +40,7 @@ class AppContext:
     memory: MemoryRepository | None = None  # set over HTTP: memories belong to an API key
     code_graph: CodeGraphRepository | None = None  # needs STORAGE_BACKEND=postgres
     notes: AnnotationRepository | None = None  # needs STORAGE_BACKEND=postgres
+    decider: DecisionProvider | None = None  # the abstain guard; None skips it
 
 
 @dataclass
@@ -94,8 +96,9 @@ def create_server(
     @asynccontextmanager
     async def open_index(server: MCPServer) -> AsyncIterator[AppContext]:
         async with deps.open_engine() as engine:
+            decider = deps.decider()
             if cfg.storage != "postgres":
-                yield AppContext(engine=engine)
+                yield AppContext(engine=engine, decider=decider)
                 return
             store = await deps.open_store()  # only for the code graph: stdio logs no queries
             try:
@@ -103,6 +106,7 @@ def create_server(
                     engine=engine,
                     code_graph=await deps.new_code_graph(store),
                     notes=await deps.new_annotations(store),
+                    decider=decider,
                 )
             finally:
                 await store.close()
@@ -153,9 +157,12 @@ def create_server(
                         repo_url=repo,
                         model=cfg.llm_model,
                         notes=app.notes,
+                        decider=app.decider,
                     )
                 else:
-                    result = await answer_question(app.engine, question, notes=app.notes)
+                    result = await answer_question(
+                        app.engine, question, notes=app.notes, decider=app.decider
+                    )
             except EnigramError as e:
                 if app.store:
                     await app.store.log_query("mcp", question, mode, error=str(e), api_key=key)

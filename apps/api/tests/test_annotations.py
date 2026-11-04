@@ -57,6 +57,7 @@ def test_deps_hash_is_order_independent():
 
 def test_parse_note_citations():
     assert parse_note_citations("x note#7. y note#12 and anote#3") == [7, 12]
+    assert parse_note_citations("team note #51 says; Note#55 claims; note# 9") == [51, 55]
 
 
 def test_note_line_and_warnings():
@@ -298,3 +299,181 @@ async def test_seed_skips_duplicates_and_lists_unresolved(cfg):
 
     assert first == {"created": 2, "skipped": 0, "unresolved": ["Ghost.run"]}
     assert second == {"created": 0, "skipped": 2, "unresolved": ["Ghost.run"]}
+
+
+# --- conflict detection by the decider (Phase 3) ----------------------------------------------
+
+
+def test_fake_decider_implements_the_port():
+    from code_fakes import FakeDecider
+
+    assert _methods(ports.DecisionProvider) <= _methods(FakeDecider) | {"name"}
+
+
+async def test_create_verified_note_detects_conflict(cfg):
+    from code_fakes import FakeDecider, fixture_graph, noul
+
+    from enigram.application.annotations import NewAnnotation, create_annotation
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+    decider = FakeDecider({"conflict": noul(0.95)})
+    new = NewAnnotation("symbol", "AppService.find", "Find never loads.", repo_id=1)
+
+    note = await create_annotation(cfg, graph, notes, new, "alice", decider=decider)
+
+    assert (note.status, note.conflict) == ("verified", True)
+    events = await notes.events(note.id)
+    assert [(e.actor, e.action) for e in events] == [
+        ("alice", "created"),
+        ("decider", "conflict_detected"),
+    ]
+    assert events[1].new == {"conflict": True, "p": 0.95}
+    ((state, ids),) = decider.calls
+    assert ids == ["conflict"] and state["note"] == "Find never loads."
+    # The symbol body and its resolved direct callees; the external bcrypt call is left out.
+    assert list(state["code"]) == [
+        SERVICE,
+        "src/app.service.ts#AppService.helper",
+        "src/repo.ts#UserRepo.load",
+        "src/repo.ts#SqlUserRepo.load",
+    ]
+
+
+async def test_create_proposal_or_entity_note_asks_no_decider(cfg):
+    from code_fakes import FakeDecider, fixture_graph, noul
+
+    from enigram.application.annotations import NewAnnotation, create_annotation
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+    decider = FakeDecider({"conflict": noul(0.95)})
+    proposal = NewAnnotation("symbol", "AppService.find", "x", repo_id=1, owner="bob")
+    entity = NewAnnotation("entity", "Login", "y")
+
+    a = await create_annotation(cfg, graph, notes, proposal, "alice", decider=decider)
+    b = await create_annotation(cfg, graph, notes, entity, "alice", decider=decider)
+
+    assert (a.status, a.conflict, b.conflict) == ("proposed", False, False)
+    assert decider.calls == []
+
+
+async def test_verify_clears_conflict_below_threshold(cfg):
+    from code_fakes import FakeDecider, noul
+
+    from enigram.application.annotations import change_annotation
+
+    graph, notes, note = await _new(cfg)
+    await notes.update(note.id, {"conflict": True, "status": "needs_verification"}, "x", "x")
+
+    verified = await change_annotation(
+        cfg,
+        graph,
+        notes,
+        note.id,
+        {"status": "verified"},
+        "alice",
+        decider=FakeDecider({"conflict": noul(0.1)}),
+    )
+
+    assert (verified.status, verified.conflict) == ("verified", False)
+    last = (await notes.events(note.id))[-1]
+    assert (last.actor, last.action, last.new) == (
+        "decider",
+        "conflict_cleared",
+        {"conflict": False, "p": 0.1},
+    )
+
+
+async def test_manual_conflict_wins_and_middle_p_leaves_it(cfg):
+    from code_fakes import FakeDecider, noul
+
+    from enigram.application.annotations import change_annotation
+
+    graph, notes, note = await _new(cfg)
+    sure = FakeDecider({"conflict": noul(0.95)})
+    manual = await change_annotation(
+        cfg, graph, notes, note.id, {"status": "verified", "conflict": False}, "alice", decider=sure
+    )
+    assert manual.conflict is False and sure.calls == []
+
+    unsure = FakeDecider({"conflict": noul(0.5)})
+    again = await change_annotation(
+        cfg, graph, notes, note.id, {"status": "verified"}, "alice", decider=unsure
+    )
+    assert again.conflict is False and len(unsure.calls) == 1
+    assert [e.action for e in await notes.events(note.id)] == ["created", "verified", "verified"]
+
+
+async def test_trusted_text_edit_rechecks_and_owner_change_does_not(cfg):
+    from code_fakes import FakeDecider, noul
+
+    from enigram.application.annotations import change_annotation
+
+    graph, notes, note = await _new(cfg)
+    decider = FakeDecider({"conflict": noul(0.9)})
+    await change_annotation(cfg, graph, notes, note.id, {"owner": "dave"}, "alice", decider=decider)
+    assert decider.calls == []  # still verified, but nothing was re-verified
+
+    edited = await change_annotation(
+        cfg, graph, notes, note.id, {"text": "Find deletes users."}, "dave", decider=decider
+    )
+    assert edited.conflict is True and decider.calls[0][0]["note"] == "Find deletes users."
+
+
+async def test_decider_failure_does_not_block_verification(cfg):
+    from code_fakes import FakeDecider
+
+    from enigram.application.annotations import change_annotation
+
+    graph, notes, note = await _new(cfg)
+    verified = await change_annotation(
+        cfg,
+        graph,
+        notes,
+        note.id,
+        {"status": "verified"},
+        "alice",
+        decider=FakeDecider(error="jev down and bad json"),
+    )
+    assert (verified.status, verified.conflict) == ("verified", False)
+
+
+async def test_conflict_state_clips_and_caps_callees(monkeypatch):
+    from code_fakes import call, sym
+
+    from enigram.application import conflicts
+    from enigram.application.ports import ParsedGraph
+
+    root = sym("A.run", body="x" * 50)
+    callees = [sym(f"B.c{i}", body="y" * 50) for i in range(8)]
+    graph = FakeCodeGraph(
+        ParsedGraph([root, *callees], [call(root, c, i) for i, c in enumerate(callees)], [], {})
+    )
+    monkeypatch.setattr(conflicts, "SUMMARY_MAX_BODY_CHARS", 30)
+    monkeypatch.setattr(conflicts, "CALLEE_MAX_CHARS", 25)
+
+    state = await conflicts.conflict_state(graph, 1, root)
+
+    code = state["code"]
+    assert len(code) == 1 + conflicts.CONFLICT_CALLEES
+    # The limit includes the truncation marker.
+    assert code[root.id].startswith("xxxxx") and code[root.id].endswith("[truncated]")
+    assert len(code[root.id]) <= 30
+    callees_code = [v for k, v in code.items() if k != root.id]
+    assert all(v.startswith("yyy") and len(v) <= 25 for v in callees_code)
+
+
+async def test_check_conflict_fills_the_trace_it_is_given():
+    from code_fakes import FakeDecider, noul, sym
+
+    from enigram.application import conflicts
+    from enigram.application.ports import ParsedGraph
+
+    root = sym("A.run", body="return 1")
+    graph = FakeCodeGraph(ParsedGraph([root], [], [], {}))
+    trace: list = []
+
+    await conflicts.check_conflict(
+        FakeDecider({"conflict": noul(0.9)}), graph, 1, root, "Returns 2.", trace
+    )
+
+    assert [t["purpose"] for t in trace] == ["note_conflict"]

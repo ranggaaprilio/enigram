@@ -7,9 +7,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from enigram.application.code_summary import reachable
-from enigram.application.ports import AnnotationRepository, CodeGraphRepository
+from enigram.application.conflicts import check_conflict
+from enigram.application.ports import AnnotationRepository, CodeGraphRepository, DecisionProvider
 from enigram.domain.annotation import MAX_CANDIDATES, Annotation, deps_hash_of
 from enigram.domain.code import CodeSymbol
+from enigram.domain.decision import DECIDER_ACTOR
 from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
@@ -60,23 +62,49 @@ async def _flag(
     return True
 
 
+async def _conflict(
+    decider: DecisionProvider | None,
+    graph: CodeGraphRepository,
+    notes: AnnotationRepository,
+    repo_id: int,
+    note: Annotation,
+    symbol: CodeSymbol,
+) -> str | None:
+    """The decider's verdict on a note just flagged for a code change: "conflicts" when the flag
+    flipped to True, "conflicts_cleared" when it flipped to False, None otherwise."""
+    conflict, p = await check_conflict(decider, graph, repo_id, symbol, note.text)
+    if conflict is None or conflict == note.conflict:
+        return None
+    event = "conflict_detected" if conflict else "conflict_cleared"
+    await notes.update(note.id, {"conflict": conflict, "p": p}, DECIDER_ACTOR, event)
+    return "conflicts" if conflict else "conflicts_cleared"
+
+
 async def _check_note(
     graph: CodeGraphRepository,
     notes: AnnotationRepository,
     repo_id: int,
     note: Annotation,
     symbol: CodeSymbol | None,
+    decider: DecisionProvider | None = None,
+    counts: dict[str, int] | None = None,
 ) -> str:
-    """The count key this note falls under."""
+    """The count key this note falls under; with `decider`, a note flagged `hash` or `deps` is
+    also checked for a conflict with the code (counted in `counts`)."""
     if symbol is not None:
         if note.status == "orphaned":  # the symbol is back
             await _flag(notes, note, "orphan", {"candidates": []})
             return "relinked"
+        outcome = "unchanged"
         if symbol.body_hash != note.target_hash:
-            return "flagged_hash" if await _flag(notes, note, "hash") else "unchanged"
-        if note.scope == "deps" and await deps_hash_for(graph, repo_id, symbol) != note.deps_hash:
-            return "flagged_deps" if await _flag(notes, note, "deps") else "unchanged"
-        return "unchanged"
+            outcome = "flagged_hash" if await _flag(notes, note, "hash") else "unchanged"
+        elif note.scope == "deps" and await deps_hash_for(graph, repo_id, symbol) != note.deps_hash:
+            outcome = "flagged_deps" if await _flag(notes, note, "deps") else "unchanged"
+        if outcome != "unchanged" and decider is not None:
+            key = await _conflict(decider, graph, notes, repo_id, note, symbol)
+            if key and counts is not None:
+                counts[key] += 1
+        return outcome
     found = await _candidates(graph, repo_id, note)
     same = [s for s in found if note.target_hash and s.body_hash == note.target_hash]
     if len(same) == 1:
@@ -101,10 +129,16 @@ async def _check_note(
 
 
 async def check_repo(
-    graph: CodeGraphRepository, notes: AnnotationRepository, repo_id: int, sha: str
+    graph: CodeGraphRepository,
+    notes: AnnotationRepository,
+    repo_id: int,
+    sha: str,
+    decider: DecisionProvider | None = None,
 ) -> dict[str, int]:
     """Every verified, flagged or orphaned symbol note of the repo against the graph just
-    stored. Proposals are skipped: their hashes are taken when they are verified."""
+    stored. Proposals are skipped: their hashes are taken when they are verified. With
+    `decider`, a note flagged `hash` or `deps` gets the conflict check (`conflicts` and
+    `conflicts_cleared` count the flips)."""
     counts = dict.fromkeys(
         (
             "checked",
@@ -113,6 +147,8 @@ async def check_repo(
             "relinked",
             "orphaned",
             "unchanged",
+            "conflicts",
+            "conflicts_cleared",
             "errors",
         ),
         0,
@@ -124,13 +160,16 @@ async def check_repo(
         counts["checked"] += 1
         try:
             counts[
-                await _check_note(graph, notes, repo_id, note, symbols.get(note.target_ref))
+                await _check_note(
+                    graph, notes, repo_id, note, symbols.get(note.target_ref), decider, counts
+                )
             ] += 1
         except EnigramError as e:
             log.warning("[stale] note %d: %s", note.id, e)
             counts["errors"] += 1
     log.info(
-        "[stale] repo %d @ %s: %d checked, %d hash, %d deps, %d relinked, %d orphaned",
+        "[stale] repo %d @ %s: %d checked, %d hash, %d deps, %d relinked, %d orphaned, "
+        "%d conflicts",
         repo_id,
         sha[:12],
         counts["checked"],
@@ -138,6 +177,7 @@ async def check_repo(
         counts["flagged_deps"],
         counts["relinked"],
         counts["orphaned"],
+        counts["conflicts"],
     )
     return counts
 

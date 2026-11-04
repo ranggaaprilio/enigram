@@ -16,7 +16,8 @@ from enigram.domain.code import (
     FlowSummary,
     is_abstract,
 )
-from enigram.domain.errors import NotFound
+from enigram.domain.decision import Decision, Decisions
+from enigram.domain.errors import EnigramError, NotFound
 
 SHA = "70ae60dbb609" + "0" * 28
 
@@ -419,18 +420,21 @@ class FakeAnnotations:
         before = self.notes.get(annotation_id)
         if before is None:
             raise NotFound(f"No annotation {annotation_id}")
-        values = dict(changes)
+        fields = {f.name for f in dataclasses.fields(Annotation)}
+        values = {k: v for k, v in changes.items() if k in fields}
         if "candidates" in values:
             values["candidates"] = tuple(values["candidates"])
         after = dataclasses.replace(before, **values, updated_at=self._now())
         self.notes[annotation_id] = after
-        keys = list(changes)
+        keys = list(values)
+        # Keys that are no field (the decider's `p`) are recorded in the event only.
+        extra = {k: v for k, v in changes.items() if k not in fields}
         self._log(
             annotation_id,
             actor,
             action,
             {k: getattr(before, k) for k in keys},
-            {k: getattr(after, k) for k in keys},
+            {k: getattr(after, k) for k in keys} | extra,
         )
         return after
 
@@ -525,3 +529,43 @@ def tool_reply(*calls, tokens=(1000, 10)):
 
 def answer_reply(text, tokens=(1500, 40)):
     return ChatReply(text, [], "stop", tokens[0], tokens[1], 0.1)
+
+
+def noul(p: float) -> Decision:
+    return Decision("noul", p, max(p, 1 - p), {"true": p, "false": 1 - p})
+
+
+def choice(name: str, confidence: float = 0.95, **probs: float) -> Decision:
+    return Decision("choice", name, confidence, probs or {name: confidence})
+
+
+class FakeDecider:
+    """DecisionProvider: answers by question id from `answers` (a Decision or a callable of the
+    state), else `default`; records every (state, question ids); raises `error` when set.
+    `name` is also the answering provider ("jev" for a decision the abstain guard acts on)."""
+
+    name = "fake"
+
+    def __init__(
+        self,
+        answers=None,
+        default: Decision | None = None,
+        error: str | None = None,
+        name: str | None = None,
+    ):
+        if name is not None:
+            self.name = name
+        self.answers = dict(answers or {})
+        self.default = default if default is not None else noul(0.5)
+        self.error = error
+        self.calls: list[tuple[Any, list[str]]] = []
+
+    async def decide(self, state, questions) -> Decisions:
+        self.calls.append((state, list(questions)))
+        if self.error:
+            raise EnigramError(self.error)
+        answers = {}
+        for k in questions:
+            a = self.answers.get(k, self.default)
+            answers[k] = a(state) if callable(a) else a
+        return Decisions(answers, self.name, "fake-1", 123, 0.01)

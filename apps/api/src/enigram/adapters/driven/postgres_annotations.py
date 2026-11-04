@@ -238,13 +238,15 @@ class PostgresAnnotations:
                 *[_param(k, changes[k]) for k in keys],
             )
             after = _annotation(row)
+            # Keys that are no column (the decider's `p`) are recorded in the event only.
+            extra = {k: v for k, v in changes.items() if k not in _COLUMNS}
             await self._log(
                 conn,
                 annotation_id,
                 actor,
                 action,
                 _snapshot(before, keys),
-                _snapshot(after, keys),
+                _snapshot(after, keys) | extra,
             )
         return after
 

@@ -23,7 +23,9 @@ DEFAULT_VERIFY_DAYS = 90
 ANNOTATION_MAX_CHARS = 4000
 MAX_CANDIDATES = 5
 NOTE_LINE_CHARS = 200
-NOTE_CITATION = re.compile(r"\bnote#(\d+)\b")
+NOTE_CITATION = re.compile(
+    r"\bnote\s*#(\d+)\b", re.IGNORECASE
+)  # `note #51`, `Note#51`: models drift
 
 
 @dataclass(frozen=True)

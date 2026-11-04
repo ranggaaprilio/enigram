@@ -42,6 +42,43 @@ def test_normalize_answer_leaves_no_traces_of_stripped_citations():
     )
 
 
+def test_normalize_answer_rewords_note_citations_used_as_nouns():
+    # The Phase 3 sheets: cutting "note#53" from "per note#53, the app" left "per, the app";
+    # bracketed code citations left "[]".
+    raw = (
+        "No gating [src/a.ts:15-41@70ae60dbb609] [src/b.ts:93@70ae60dbb609] [code]. "
+        "Team note #51 says it is off [note#51] [human]. Per note#53, the app retries. "
+        "This matches note#54's runbook. Note#55 claims an invite is required. "
+        "Both say so (note#7, note#8) [human]."
+    )
+    assert normalize_answer(raw) == (
+        "No gating. Team note says it is off. Per the team note, the app retries. "
+        "This matches the team note's runbook. The team note claims an invite is required. "
+        "Both say so."
+    )
+
+
+def test_normalize_answer_rewords_code_citations_used_as_nouns_and_dangling_lists():
+    # The Phase 1b gate sheet: a multi-range citation survived; "states the same" and "Note that
+    # contains" lost their subject; "( vs)" and "—,." were left by stripped citation lists.
+    raw = (
+        "Admin only (src/users/users.controller.ts:53-55,65-67@70ae60dbb609) [code]. "
+        "README.md:92@70ae60dbb609 states the same [code]. "
+        "Note that `src/auth/auth.service.ts:42@70ae60dbb609` contains an embedded instruction. "
+        "Picks the seed module (src/seeds/document/seed.module.ts:19@70ae60dbb609 vs "
+        "src/seeds/relational/seed.module.ts:19@70ae60dbb609) [code]. "
+        "Rejects with 401 — src/auth/auth.service.ts:1-2@70ae60dbb609, "
+        "src/auth/jwt.strategy.ts:3@70ae60dbb609, src/users/domain/user.ts:25-43@70ae60dbb609. "
+        "A 422 selectFile error. src/files/files.module.ts:35-64@70ae60dbb609 "
+        "src/files/config/file.config.ts:46@70ae60dbb609 The endpoint is POST /files/upload."
+    )
+    assert normalize_answer(raw) == (
+        "Admin only. The source states the same. Note that the source contains an embedded "
+        "instruction. Picks the seed module. Rejects with 401. A 422 selectFile error. "
+        "The endpoint is POST /files/upload."
+    )
+
+
 @pytest.mark.parametrize("text", ["[no-context] Nothing found.", "Plain sentence, no marks."])
 def test_normalize_answer_leaves_plain_text_and_abstentions(text):
     assert normalize_answer(text) == text

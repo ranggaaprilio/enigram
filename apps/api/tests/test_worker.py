@@ -202,8 +202,8 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, deps, 
     async def fake_new_annotations(s):
         return "notes"
 
-    async def stop(cfg, store, deps, code_graph, notes):
-        seen.append((code_graph, notes))
+    async def stop(cfg, store, deps, code_graph, notes, decider):
+        seen.append((code_graph, notes, decider))
         raise _Stop
 
     deps.open_store = fake_open_store
@@ -216,7 +216,8 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, deps, 
 
     assert (await store.get_job(interrupted.id)).status == "queued"
     assert store.closed
-    assert seen == [(graph, "notes")]  # built once, passed to every job
+    ((code_graph, notes, decider),) = seen  # built once, passed to every job
+    assert (code_graph, notes, type(decider).__name__) == (graph, "notes", "FakeDecider")
 
 
 @pytest.fixture
@@ -324,7 +325,7 @@ async def test_repo_job_indexes_the_repository(
 
     graph = object()
 
-    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None):
+    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None):
         calls.append((url, ref, graph))
         return result
 
@@ -340,7 +341,7 @@ async def test_repo_job_indexes_the_repository(
 
 
 async def test_repo_job_exception_fails_the_job(cfg, store, deps, monkeypatch):
-    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None):
+    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None):
         raise EnigramError("git clone failed: repository not found")
 
     monkeypatch.setattr(worker, "index_repo", fake_index_repo)
@@ -417,7 +418,7 @@ async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplo
 
 
 async def test_repo_job_records_trigger_metadata(cfg, store, deps, monkeypatch):
-    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None):
+    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None):
         return {"failed": []}
 
     monkeypatch.setattr(worker, "index_repo", fake_index_repo)
@@ -494,3 +495,19 @@ async def test_job_under_the_caps_records_its_tokens(cfg, store, deps, monkeypat
 
     assert (await store.get_job(job.id)).status == "done"
     assert store.tokens == [("job:index", None, 15)]
+
+
+async def test_worker_forwards_the_decider_to_index_repo(cfg, store, deps, monkeypatch):
+    seen = []
+
+    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None):
+        seen.append(decider)
+        return {"failed": []}
+
+    monkeypatch.setattr(worker, "index_repo", fake_index_repo)
+    await store.enqueue("index_repo", {"url": "https://github.com/org/h"})
+    decider = object()
+
+    await worker.process_next(cfg, store, deps, "graph", "notes", decider)
+
+    assert seen == [decider]

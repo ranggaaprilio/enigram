@@ -33,6 +33,10 @@ CONFIG_ENV = (
     "MAX_TOKENS_PER_JOB",
     "DAILY_TOKEN_BUDGET",
     "PER_KEY_DAILY_TOKENS",
+    "DECISION_PROVIDER",
+    "TYPESAFE_API_KEY",
+    "JEV_MODEL",
+    "JEV_BASE_URL",
 )
 
 
@@ -47,6 +51,7 @@ def pytest_collection_modifyitems(config, items):
         "postgres": (
             None if os.environ.get("ENIGRAM_TEST_PG_DSN") else "ENIGRAM_TEST_PG_DSN not set"
         ),
+        "live_jev": None if os.environ.get("TYPESAFE_API_KEY") else "TYPESAFE_API_KEY not set",
     }
     for item in items:
         for marker, reason in skips.items():
@@ -82,10 +87,16 @@ def cfg(clean_env, monkeypatch, tmp_path) -> Config:
 
 @pytest.fixture
 def deps(cfg):
-    """The real adapters for cfg; tests replace single fields with fakes."""
+    """The real adapters for cfg; tests replace single fields with fakes. The decision layer is
+    a FakeDecider (undecided answers): every query path asks it, and a unit test must never
+    reach the judge model."""
+    from code_fakes import FakeDecider
+
     from enigram.bootstrap import build_deps
 
-    return build_deps(cfg)
+    deps = build_deps(cfg)
+    deps.decider = FakeDecider
+    return deps
 
 
 @pytest.fixture

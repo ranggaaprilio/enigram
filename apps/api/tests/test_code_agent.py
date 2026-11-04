@@ -280,9 +280,9 @@ def test_tool_set_schemas_and_prompt_stay_small():
     names = [t["function"]["name"] for t in TOOLS]
     assert names == ["search_code", "find_symbol", "entrypoint_flow", "read_file", "grep"]
     # Resent on every turn: tiktoken before this iteration 677 (8 tools) and 233; Phase 2 adds
-    # the team-notes sentence (257).
+    # the team-notes sentence (257); Phase 3 the note-outside-the-repo sentence (299).
     assert count_tokens(json.dumps(TOOLS)) <= 440
-    assert count_tokens(system_prompt([f"org-app {SHA[:12]}"])) <= 265
+    assert count_tokens(system_prompt([f"org-app {SHA[:12]}"])) <= 305
 
 
 async def test_system_prompt_lists_the_indexed_repos(cfg, graph):
@@ -511,3 +511,103 @@ async def test_a_note_change_misses_the_cache(cfg, graph, tmp_path):
 
     assert hit.answer.startswith("Only admins") and again.replies == []
     assert miss.answer.startswith("A different answer")
+
+
+async def test_agent_guard_abstains_and_is_cached(cfg, graph, tmp_path):
+    from code_fakes import FakeDecider, noul
+
+    assert code_agent.AGENT_VERSION == "3.2"
+    cache = tmp_path / "cache"
+    decider = FakeDecider({"answerable": noul(0.1)}, name="jev")
+    chat = ScriptedChat(
+        [tool_reply(("find_symbol", _args(name="AppController"))), answer_reply(FINAL)]
+    )
+
+    first = await answer_with_agent(cfg, chat, graph, "q", cache_dir=cache, decider=decider)
+    second = await answer_with_agent(
+        cfg,
+        ScriptedChat([]),
+        graph,
+        "q",
+        cache_dir=cache,
+        decider=FakeDecider(error="unused", name="jev"),
+    )
+
+    assert (first.answer, first.found) == (code_agent_guarded(), False)
+    assert first.extra["abstain_guard"]["action"] == "abstained"
+    assert first.extra["abstain_guard"]["answer"].startswith("Only admins")
+    # The evidence is the tool output the loop saw.
+    ((state, _),) = decider.calls
+    assert "AppController" in state["evidence"] and state["question"] == "q"
+    assert (second.answer, second.found) == (first.answer, False)
+    assert second.extra["abstain_guard"] == first.extra["abstain_guard"]
+
+
+async def test_agent_guard_keeps_an_answerable_answer(cfg, graph):
+    from code_fakes import FakeDecider, noul
+
+    chat = ScriptedChat(
+        [tool_reply(("find_symbol", _args(name="AppController"))), answer_reply(FINAL)]
+    )
+    result = await answer_with_agent(
+        cfg, chat, graph, "q", decider=FakeDecider({"answerable": noul(0.9)})
+    )
+    assert result.found and result.answer.startswith("Only admins")
+    assert result.extra["abstain_guard"] == {"answerable": 0.9, "action": "none"}
+    assert result.extra["decisions"][0]["purpose"] == "abstain_guard"
+
+
+def code_agent_guarded():
+    from enigram.application.abstain import GUARDED_ANSWER
+
+    return GUARDED_ANSWER
+
+
+async def test_agent_cache_is_keyed_by_the_decider(cfg, graph, tmp_path):
+    from code_fakes import FakeDecider, noul
+
+    cache = tmp_path / "cache"
+    script = [tool_reply(("find_symbol", _args(name="AppController"))), answer_reply(FINAL)]
+
+    await answer_with_agent(cfg, ScriptedChat(list(script)), graph, "q", cache_dir=cache)
+
+    class Jev(FakeDecider):
+        name = "jev"
+
+    guarded = await answer_with_agent(
+        cfg,
+        ScriptedChat(list(script)),
+        graph,
+        "q",
+        cache_dir=cache,
+        decider=Jev({"answerable": noul(0.1)}),
+    )
+    # The unguarded cached answer is not served once a guard is configured.
+    assert guarded.extra["abstain_guard"]["action"] == "abstained"
+
+
+async def test_agent_does_not_cache_when_the_guard_decision_failed(cfg, graph, tmp_path):
+    from code_fakes import FakeDecider, noul
+
+    cache = tmp_path / "cache"
+    script = [tool_reply(("find_symbol", _args(name="AppController"))), answer_reply(FINAL)]
+
+    failed = await answer_with_agent(
+        cfg,
+        ScriptedChat(list(script)),
+        graph,
+        "q",
+        cache_dir=cache,
+        decider=FakeDecider(error="jev down, judge down"),
+    )
+    retried = await answer_with_agent(
+        cfg,
+        ScriptedChat(list(script)),
+        graph,
+        "q",
+        cache_dir=cache,
+        decider=FakeDecider({"answerable": noul(0.1)}, name="jev"),
+    )
+
+    assert failed.extra["abstain_guard"]["action"] == "skipped"
+    assert retried.extra["abstain_guard"]["action"] == "abstained"

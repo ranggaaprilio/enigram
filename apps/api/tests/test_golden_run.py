@@ -212,7 +212,7 @@ async def test_enigram_agent_system_answers_from_the_graph(cfg, deps, tmp_path, 
     diagnostics = {"graph_first": True, "graph_hits": 3, "read_calls": 1}
 
     async def fake_agent(
-        cfg_, chat, graph_, question, *, repo_url, repo_ref, cache_dir, model, notes
+        cfg_, chat, graph_, question, *, repo_url, repo_ref, cache_dir, model, notes, decider
     ):
         seen.update(
             graph=graph_,
@@ -221,6 +221,7 @@ async def test_enigram_agent_system_answers_from_the_graph(cfg, deps, tmp_path, 
             cache_dir=cache_dir,
             model=model,
             notes=notes,
+            decider=decider,
         )
         text = f"It checks the hash [1] src/auth/auth.service.ts:2-4@{PINNED[:12]}."
         citation = f"src/auth/auth.service.ts:2-4@{PINNED[:12]}"
@@ -248,7 +249,9 @@ async def test_enigram_agent_system_answers_from_the_graph(cfg, deps, tmp_path, 
         "cache_dir": cfg.eval_dir / "enigram-agent-cache",
         "model": cfg.llm_model,
         "notes": deps.notes,
+        "decider": seen["decider"],
     }
+    assert type(seen["decider"]).__name__ == "FakeDecider"
     item, annotated = data["items"]  # enigram-agent also answers behavior_annotation
     assert annotated["id"] == "a01" and annotated["error"] is None
     assert item["diagnostics"] == diagnostics and item["tool_calls"] == 3

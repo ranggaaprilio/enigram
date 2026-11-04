@@ -435,3 +435,53 @@ async def test_cli_annotations_seed(cfg, deps, monkeypatch, tmp_path, capsys):
     seeds.write_text("annotations: [{target: x}]\n")
     with pytest.raises(EnigramError, match="expected `annotations:`"):
         await cli._annotations_seed(cfg, args)
+
+
+async def test_docs_path_guard_uses_chunks():
+    from code_fakes import FakeDecider, noul
+
+    from enigram.application.abstain import GUARDED_ANSWER
+
+    rag = FakeRag()
+    decider = FakeDecider({"answerable": noul(0.05)}, name="jev")
+    result = await querying.answer_question(
+        lightrag_engine.LightRagEngine(rag), "Who is Mira Okafor?", decider=decider
+    )
+
+    ((state, _),) = decider.calls
+    assert "Captain Mira Okafor designed it." in state["evidence"]
+    assert (result.answer, result.found, result.sources) == (GUARDED_ANSWER, False, [])
+    assert result.extra["abstain_guard"]["answer"] == "Mira Okafor [1] [document]."
+
+
+async def test_docs_path_guard_sees_notes_entities_and_relations():
+    from code_fakes import FakeAnnotations, FakeDecider, noul
+
+    notes = FakeAnnotations()
+    await notes.create(
+        {
+            "target_kind": "entity",
+            "target_ref": "Mira Okafor",
+            "text": "Mira led the 1987 team.",
+            "author": "web",
+            "owner": "web",
+            "status": "verified",
+        },
+        "web",
+    )
+    decider = FakeDecider({"answerable": noul(0.9)})
+
+    await querying.answer_question(
+        lightrag_engine.LightRagEngine(FakeRag()),
+        "Who is Mira Okafor?",
+        notes=notes,
+        decider=decider,
+    )
+
+    ((state, _),) = decider.calls
+    evidence = state["evidence"]
+    assert "Mira led the 1987 team." in evidence  # the note in the instructions
+    assert "Coordinates ships." in evidence  # an entity description
+    assert "Mira designed it." in evidence  # a relation description
+    assert "Captain Mira Okafor designed it." in evidence  # a chunk
+    assert evidence.index("1987 team") < evidence.index("Captain Mira")  # precedence order

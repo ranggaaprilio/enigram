@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from enigram.application.ports import AnnotationRepository, CodeGraphRepository
+from enigram.application.conflicts import check_conflict
+from enigram.application.ports import AnnotationRepository, CodeGraphRepository, DecisionProvider
 from enigram.application.staleness import hashes_for
 from enigram.config import Config
 from enigram.domain.annotation import (
@@ -22,6 +23,7 @@ from enigram.domain.annotation import (
 )
 from enigram.domain.answer import QueryResult
 from enigram.domain.code import CodeSymbol
+from enigram.domain.decision import DECIDER_ACTOR
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
 from enigram.domain.origin import tag_origins
 
@@ -93,13 +95,31 @@ def _verify_fields(actor: str, verify_by: datetime | None) -> dict[str, Any]:
     }
 
 
+async def _detect_conflict(
+    decider: DecisionProvider | None,
+    graph: CodeGraphRepository | None,
+    repo_id: int | None,
+    symbol: CodeSymbol | None,
+    text: str,
+) -> tuple[bool | None, float | None]:
+    """The decider's verdict on a symbol note that is being verified; (None, None) when there is
+    nothing to decide with."""
+    if decider is None or graph is None or repo_id is None or symbol is None:
+        return None, None
+    return await check_conflict(decider, graph, repo_id, symbol, text)
+
+
 async def create_annotation(
     cfg: Config,
     graph: CodeGraphRepository | None,
     notes: AnnotationRepository,
     new: NewAnnotation,
     actor: str,
+    *,
+    decider: DecisionProvider | None = None,
 ) -> Annotation:
+    """With `decider`, a symbol note verified on creation is checked against the code and gets
+    `conflict` set by the decider (event `conflict_detected` by actor `decider`)."""
     if new.target_kind not in TARGET_KINDS:
         raise EnigramError(f"target_kind must be one of {TARGET_KINDS}")
     if new.scope not in SCOPES:
@@ -135,12 +155,21 @@ async def create_annotation(
         raise EnigramError("Only a symbol annotation belongs to a repository")
     if not fields["target_ref"]:
         raise EnigramError("An annotation needs a target")
+    p = None
     if actor == owner or actor in cfg.annotation_verifiers:
         fields |= _verify_fields(actor, verify_by)
+        if new.target_kind == "symbol":
+            conflict, p = await _detect_conflict(decider, graph, new.repo_id, symbol, text)
+            if conflict is not None:
+                fields["conflict"] = conflict
     else:
         fields["status"] = "proposed"
     note = await notes.create(fields, actor)
     log.info("[notes] %s created %d on %s (%s)", actor, note.id, note.target_kind, note.status)
+    if fields.get("conflict"):
+        note = await notes.update(
+            note.id, {"conflict": True, "p": p}, DECIDER_ACTOR, "conflict_detected"
+        )
     return note
 
 
@@ -176,7 +205,12 @@ async def change_annotation(
     annotation_id: int,
     changes: dict[str, Any],
     actor: str,
+    *,
+    decider: DecisionProvider | None = None,
 ) -> Annotation:
+    """With `decider`, a symbol note that becomes `verified` here is checked against the code
+    and its `conflict` flag follows the verdict (events `conflict_detected` /
+    `conflict_cleared` by actor `decider`); an explicit `conflict` in `changes` wins."""
     note = await notes.get(annotation_id)
     if note is None:
         raise NotFound(f"No annotation {annotation_id}")
@@ -252,6 +286,26 @@ async def change_annotation(
     )
     changed = await notes.update(annotation_id, updates, actor, action)
     log.info("[notes] %s %s %d", actor, action, annotation_id)
+    if (
+        changed.status == "verified"
+        and "conflict" not in changes
+        and changed.target_kind == "symbol"
+        and updates.get("status") == "verified"
+    ):
+        found = (
+            await graph.symbols_by_id(changed.repo_id, [changed.target_ref])
+            if graph and changed.repo_id
+            else {}
+        )
+        conflict, p = await _detect_conflict(
+            decider, graph, changed.repo_id, found.get(changed.target_ref), changed.text
+        )
+        if conflict is not None and conflict != changed.conflict:
+            event = "conflict_detected" if conflict else "conflict_cleared"
+            changed = await notes.update(
+                annotation_id, {"conflict": conflict, "p": p}, DECIDER_ACTOR, event
+            )
+            log.info("[notes] %s %s %d (p=%.2f)", DECIDER_ACTOR, event, annotation_id, p or 0.0)
     return changed
 
 

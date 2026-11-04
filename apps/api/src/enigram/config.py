@@ -30,6 +30,12 @@ CHUNK_TOKENIZER = "tiktoken:cl100k_base"
 # Where LightRAG keeps the index: JSON/GraphML files under rag_dir, or PostgreSQL (pgvector).
 STORAGE_BACKENDS = ("file", "postgres")
 
+# The decision layer: Jev (TypeSafe System One) with the DeepSeek judge as automatic fallback,
+# or the judge alone (the default when DECISION_PROVIDER is empty).
+DECISION_PROVIDERS = ("jev", "llm_judge")
+JEV_BASE_URL = "https://api.typesafe.ai/v1"
+JEV_DEFAULT_MODEL = "jev-latest"
+
 MIN_API_KEY_LENGTH = 16
 
 # Hosts `index_repo` may clone from (https only), so a key holder cannot make the worker fetch
@@ -111,6 +117,13 @@ class Config:
     max_tokens_per_job: int
     daily_token_budget: int
     per_key_daily_tokens: int
+    # The decision layer (DECISION_PROVIDER): jev = TypeSafe System One (TYPESAFE_API_KEY,
+    # JEV_MODEL, JEV_BASE_URL) with the DeepSeek judge as automatic fallback; llm_judge (the
+    # default) = the judge only.
+    decision_provider: str
+    jev_api_key: str = field(repr=False)
+    jev_model: str
+    jev_base_url: str
     data_dir: Path
     # Bare partial clones the code agent reads source from (application/repo_store.py).
     repo_store: Path
@@ -166,6 +179,16 @@ class Config:
         for name, value in caps.items():
             if value < 0:
                 raise EnigramError(f"{name} must be 0 (off) or more, got {value}")
+        decision_provider = os.environ.get("DECISION_PROVIDER", "").strip() or "llm_judge"
+        if decision_provider not in DECISION_PROVIDERS:
+            raise EnigramError(
+                f"DECISION_PROVIDER must be one of {DECISION_PROVIDERS}, got {decision_provider!r}"
+            )
+        jev_api_key = (
+            _required("TYPESAFE_API_KEY")
+            if decision_provider == "jev"
+            else os.environ.get("TYPESAFE_API_KEY", "").strip()
+        )
         if os.environ.get("POSTGRES_WORKSPACE", "").strip():
             # LightRAG lets it override the workspace passed in code, which would put the
             # `index --pages` dev run into the main index.
@@ -209,6 +232,10 @@ class Config:
             max_tokens_per_job=caps["MAX_TOKENS_PER_JOB"],
             daily_token_budget=caps["DAILY_TOKEN_BUDGET"],
             per_key_daily_tokens=caps["PER_KEY_DAILY_TOKENS"],
+            decision_provider=decision_provider,
+            jev_api_key=jev_api_key,
+            jev_model=os.environ.get("JEV_MODEL", "").strip() or JEV_DEFAULT_MODEL,
+            jev_base_url=(os.environ.get("JEV_BASE_URL", "").strip() or JEV_BASE_URL).rstrip("/"),
             data_dir=data_dir,
             repo_store=Path(
                 os.environ.get("REPO_STORE", "").strip() or data_dir / "repos"

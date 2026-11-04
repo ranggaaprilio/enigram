@@ -244,6 +244,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             memory=app.state.memory,
             code_graph=app.state.code_graph,
             notes=app.state.notes,
+            decider=app.state.decider,
         )
 
     mcp = create_server(cfg, lifespan=mcp_lifespan, deps=deps)
@@ -269,6 +270,8 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         app.state.code_graph = await deps.new_code_graph(store)
         # Written synchronously by the annotation routes; the worker writes staleness flags.
         app.state.notes = await deps.new_annotations(store)
+        # The decision layer: the abstain guard on /query, conflict checks on verification.
+        app.state.decider = deps.decider()
         try:
             # require_index=False: a fresh deployment has no index yet and must still start.
             async with deps.open_engine(query_cache=False, require_index=False) as engine:
@@ -514,7 +517,12 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         )
         try:
             note = await create_annotation(
-                cfg, request.app.state.code_graph, request.app.state.notes, new, _actor(request)
+                cfg,
+                request.app.state.code_graph,
+                request.app.state.notes,
+                new,
+                _actor(request),
+                decider=request.app.state.decider,
             )
         except EnigramError as e:
             raise _raise_http(e) from e
@@ -542,6 +550,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
                 annotation_id,
                 changes,
                 _actor(request),
+                decider=request.app.state.decider,
             )
         except EnigramError as e:
             raise _raise_http(e) from e
@@ -574,6 +583,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
                         repo_url=body.repo,
                         model=cfg.llm_model,
                         notes=request.app.state.notes,
+                        decider=request.app.state.decider,
                     )
                 else:
                     result = await answer_question(
@@ -581,6 +591,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
                         body.question,
                         body.mode,
                         notes=request.app.state.notes,
+                        decider=request.app.state.decider,
                     )
             except EnigramError as e:
                 await store.log_query("api", body.question, mode, error=str(e), api_key=key)

@@ -1,9 +1,12 @@
-"""LLM judges: per-claim grounding and abstention. Ragas is a scorer adapter."""
+"""Judges: per-claim grounding (the LLM judge and the decision judge) and abstention. Ragas is
+a scorer adapter."""
 
 import json
 import logging
+from collections import Counter
 
-from enigram.application.ports import ChatModel
+from enigram.application.decisions import question
+from enigram.application.ports import ChatModel, DecisionProvider
 from enigram.domain.claims import JUDGE_TEMPERATURE  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
@@ -48,10 +51,39 @@ async def judge_claims_llm(
     return verdicts
 
 
-def _abstention_prompt(question: str, answer: str) -> str:
+async def judge_claims_decision(
+    decider: DecisionProvider,
+    claims: list[str],
+    contexts: list[str],
+    used: Counter[str] | None = None,
+) -> list[tuple[bool | None, float | None, float | None]]:
+    """(grounded, P(supports), confidence) per claim from one decision request: `claim_relation`
+    per claim over the shared context; grounded = the choice is `supports`. `used` counts the
+    "<provider> <model>" that actually answered (the fallback may have stood in for Jev)."""
+    if not claims:
+        return []
+    state = {"context": contexts, "claims": {str(i): c for i, c in enumerate(claims, 1)}}
+    questions = {
+        str(i): question("claim_relation", claim=f"claims.{i}") for i in range(1, len(claims) + 1)
+    }
+    decisions = await decider.decide(state, questions)
+    if used is not None:
+        used[f"{decisions.provider} {decisions.model}"] += 1
+    out: list[tuple[bool | None, float | None, float | None]] = []
+    for i in range(1, len(claims) + 1):
+        answer = decisions.answers.get(str(i))
+        if answer is None or answer.kind != "choice":
+            out.append((None, None, None))
+            continue
+        p = answer.probabilities.get("supports")
+        out.append((answer.value == "supports", p, answer.confidence))
+    return out
+
+
+def _abstention_prompt(asked: str, answer: str) -> str:
     return (
         "You check whether an assistant declined to answer a question.\n\n"
-        f"Question: {question}\n\nAnswer:\n{answer}\n\n"
+        f"Question: {asked}\n\nAnswer:\n{answer}\n\n"
         "Answer true if the answer says the requested information is not in its sources or "
         "that it cannot answer, even when it adds related facts; answer false if it gives the "
         'requested information. Return a JSON object {"abstained": true} or '
