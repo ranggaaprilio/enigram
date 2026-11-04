@@ -134,6 +134,9 @@ export interface Annotation {
   verify_by: string | null
   created_at: string
   updated_at: string
+  via: 'api' | 'mcp' // mcp: an agent's proposal; only another verifier key may approve it
+  question: string | null // the question an MCP proposal answers
+  memory_id: number | null // the agent memory it was promoted from
 }
 
 export interface AnnotationEvent {

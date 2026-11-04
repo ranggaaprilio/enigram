@@ -159,6 +159,7 @@ async def index_code(
     changes = symbol_changes(old_hashes, parsed.symbols)
     if previous:  # the first index is not a change
         await graph_repo.record_symbol_changes(repo_id, sha, changes)
+    await graph_repo.record_index(repo_id, sha)
     staleness = await check_repo(graph_repo, notes, repo_id, sha, decider) if notes else {}
     summary = await build_summaries(cfg, deps.generator(), graph_repo, repo_id, sha, limit=limit)
     embeddings = await embed_repo(

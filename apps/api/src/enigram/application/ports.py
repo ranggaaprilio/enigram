@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from enigram.domain.code import CodeEdge, CodeEntrypoint, CodeFile, CodeSymbol, FlowSummary
     from enigram.domain.decision import Decisions, Question
     from enigram.domain.job import Job
-    from enigram.domain.memory import MemorySearch
+    from enigram.domain.memory import Memory, MemorySearch
 
 
 @dataclass(frozen=True)
@@ -133,6 +133,10 @@ class MemoryRepository(Protocol):
 
     async def search(self, query: str, api_key: str | None, limit: int = 5) -> "MemorySearch": ...
 
+    async def get(self, memory_id: int, api_key: str | None) -> "Memory | None":
+        """One memory of this key (score 0); None when missing or another key's."""
+        ...
+
 
 class AnnotationRepository(Protocol):
     """Human notes on symbols, entities and documents, scoped to one workspace."""
@@ -189,9 +193,23 @@ class AnnotationRepository(Protocol):
         target_kind: str | None = None,
         repo_id: int | None = None,
         target_ref: str | None = None,
+        via: str | None = None,
+        conflict: bool | None = None,
         limit: int = 200,
     ) -> list["Annotation"]:
         """Newest first; `rejected` only when asked for by status."""
+        ...
+
+    async def events_since(
+        self,
+        since: datetime,
+        actions: tuple[str, ...],
+        limit: int = 200,
+        *,
+        repo_ids: "list[int] | None" = None,  # quoted: `list` is a method here
+    ) -> "list[tuple[AnnotationEvent, Annotation]]":
+        """Events of these actions after `since`, oldest first, each with its note as it is
+        now. With `repo_ids`, symbol notes only of those repositories (other notes always)."""
         ...
 
 
@@ -426,6 +444,63 @@ class CodeGraphRepository(Protocol):
 
     async def symbols_by_hash(self, repo_id: int, body_hashes: list[str]) -> list["CodeSymbol"]: ...
 
+    async def record_index(self, repo_id: int, sha: str) -> None:
+        """One row per index of a repository, written after its symbol changes."""
+        ...
+
+    async def indexed_at(self, repo_id: int, sha: str) -> datetime | None:
+        """When commit `sha` (a prefix) was last indexed for this repository, after its own
+        symbol changes; None when it never was."""
+        ...
+
+    async def symbol_changes(
+        self, repo_id: int, since: datetime | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        """{"symbol_id", "old_hash", "new_hash", "sha", "at"} oldest first, after `since`. Rows
+        exist only from the second index of a repository on (the first has nothing to diff)."""
+        ...
+
+
+class ConflictRepository(Protocol):
+    """Docs-vs-code detection results (entity <-> symbol links, contradictions, one run per
+    repository) and the LightRAG tables they are read from, scoped to one workspace."""
+
+    async def ensure_schema(self) -> None: ...
+
+    async def entities(self, books: list[str]) -> list[dict[str, Any]]:
+        """{"name", "type", "description", "chunk_ids"} of the graph entities with a source
+        chunk in one of `books` (only those chunk ids); [] before any document was indexed."""
+        ...
+
+    async def chunks(self, ids: list[str]) -> dict[str, str]:
+        """Chunk id -> text; {} before any document was indexed."""
+        ...
+
+    async def replace(
+        self,
+        repo_id: int,
+        sha: str,
+        links: list[dict[str, Any]],
+        conflicts: list[dict[str, Any]],
+        report: dict[str, Any],
+    ) -> None:
+        """One transaction: the repo's links and conflicts become these; its run row is
+        upserted."""
+        ...
+
+    async def links(self, repo_id: int) -> list[dict[str, Any]]:
+        """{"entity", "symbol_id", "p"}."""
+        ...
+
+    async def conflicts(self, repo_ids: list[int]) -> list[dict[str, Any]]:
+        """{"repo_id", "entity", "symbol_id", "chunk_ids", "doc_excerpt", "p", "provider"},
+        highest p first."""
+        ...
+
+    async def runs(self, repo_ids: list[int]) -> list[dict[str, Any]]:
+        """{"repo_id", "sha", "at", "report"}."""
+        ...
+
 
 @dataclass
 class Deps:
@@ -447,6 +522,8 @@ class Deps:
     new_code_graph: Callable[[JobRepository], Awaitable[CodeGraphRepository]]
     # new_annotations(store): human notes, sharing the store's pool like new_memory.
     new_annotations: Callable[[JobRepository], Awaitable[AnnotationRepository]]
+    # new_conflicts(store): docs-vs-code results; open it after new_code_graph (FK to code_repos).
+    new_conflicts: Callable[[JobRepository], Awaitable[ConflictRepository]]
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)

@@ -16,12 +16,19 @@ from enigram.domain.errors import EnigramError, ProviderUnavailableError
 
 
 def test_questions_load_and_validate():
-    assert set(QUESTIONS) == {"claim_relation", "answerable", "note_conflict", "route"}
+    assert set(QUESTIONS) == {
+        "claim_relation",
+        "answerable",
+        "note_conflict",
+        "route",
+        "entity_symbol_same",
+        "doc_code_conflict",
+    }
     relation = QUESTIONS["claim_relation"]
     assert relation.kind == "choice"
     assert list(relation.criteria) == ["supports", "contradicts", "says_nothing"]
     assert relation.threshold == 0.8
-    for name in ("answerable", "note_conflict"):
+    for name in ("answerable", "note_conflict", "entity_symbol_same", "doc_code_conflict"):
         q = QUESTIONS[name]
         assert q.kind == "noul"
         # YAML would turn unquoted true/false keys into booleans.
@@ -29,6 +36,7 @@ def test_questions_load_and_validate():
         assert all(isinstance(k, str) for k in q.criteria)
     assert QUESTIONS["answerable"].threshold == 0.25
     assert QUESTIONS["note_conflict"].threshold == 0.8
+    assert QUESTIONS["doc_code_conflict"].threshold == 0.8
     # The yaml is packaged next to the module.
     assert decisions._QUESTIONS_PATH.is_file()
 

@@ -15,6 +15,7 @@ from enigram.adapters.driven.llm_decider import LlmDecider
 from enigram.adapters.driven.openai_llm import OpenAIChatModel, check_providers
 from enigram.adapters.driven.postgres_annotations import PostgresAnnotations
 from enigram.adapters.driven.postgres_code_graph import PostgresCodeGraph
+from enigram.adapters.driven.postgres_conflicts import PostgresConflicts
 from enigram.adapters.driven.postgres_jobs import PostgresJobStore, open_store
 from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
 from enigram.adapters.driven.ragas_scorer import RagasScorer
@@ -24,6 +25,7 @@ from enigram.application.decisions import FallbackDecider
 from enigram.application.ports import (
     AnnotationRepository,
     CodeGraphRepository,
+    ConflictRepository,
     DecisionProvider,
     Deps,
     JobRepository,
@@ -59,6 +61,14 @@ async def _new_annotations(cfg: Config, store: JobRepository) -> AnnotationRepos
     return notes
 
 
+async def _new_conflicts(cfg: Config, store: JobRepository) -> ConflictRepository:
+    # Like _new_memory; the tables reference code_repos, so call it after _new_code_graph.
+    assert isinstance(store, PostgresJobStore)
+    conflicts = PostgresConflicts(store.pool, cfg.workspace)
+    await conflicts.ensure_schema()
+    return conflicts
+
+
 def _decider(cfg: Config) -> DecisionProvider:
     """Jev first when DECISION_PROVIDER=jev, the judge model as the automatic fallback."""
     fallback = LlmDecider(OpenAIChatModel(cfg.judge), cfg.judge_model)
@@ -78,6 +88,7 @@ def build_deps(cfg: Config) -> Deps:
         code_parser=partial(TsGraphSidecar, cfg),
         new_code_graph=partial(_new_code_graph, cfg),
         new_annotations=partial(_new_annotations, cfg),
+        new_conflicts=partial(_new_conflicts, cfg),
         judge=partial(OpenAIChatModel, cfg.judge),
         answer_scorer=partial(RagasScorer, cfg),
         decider=partial(_decider, cfg),

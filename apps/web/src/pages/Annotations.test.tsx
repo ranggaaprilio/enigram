@@ -28,6 +28,9 @@ function note(id: number, overrides: Partial<Annotation> = {}): Annotation {
     verify_by: null,
     created_at: '2026-11-02T09:00:00Z',
     updated_at: '2026-11-02T09:00:00Z',
+    via: 'api',
+    question: null,
+    memory_id: null,
     ...overrides,
   }
 }
@@ -79,6 +82,32 @@ describe('Annotations', () => {
 
     expect(await screen.findByText('No annotations.')).toBeInTheDocument()
     expect(fetch.mock.calls.map(([url]) => url)).toContain('/api/annotations?status=orphaned')
+  })
+
+  it('shows who proposed an MCP note, its question and its memory', async () => {
+    mockFetch({
+      'GET /api/annotations': {
+        body: [
+          note(4, {
+            status: 'proposed',
+            reason: null,
+            via: 'mcp',
+            author: 'laptop-a',
+            question: 'Does logout revoke the refresh token?',
+            memory_id: 12,
+          }),
+          note(5, { text: 'A plain note.' }),
+        ],
+      },
+      'GET /api/repos': { body: REPOS },
+    })
+
+    renderAt('/annotations')
+
+    expect(await screen.findByText('via MCP by laptop-a')).toBeInTheDocument()
+    expect(screen.getByText('Question: Does logout revoke the refresh token?')).toBeInTheDocument()
+    expect(screen.getByText('from memory #12')).toBeInTheDocument()
+    expect(screen.getAllByText(/via MCP/)).toHaveLength(1) // not on the plain note
   })
 
   it('creates a note on a symbol found through the picker', async () => {

@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS annotation_events (
     at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS annotation_events_note ON annotation_events (annotation_id, id);
+-- Phase 5: agent proposals over MCP (domain.VIAS), their question and the memory they promote.
+ALTER TABLE annotations ADD COLUMN IF NOT EXISTS via TEXT NOT NULL DEFAULT 'api';
+ALTER TABLE annotations ADD COLUMN IF NOT EXISTS question TEXT;
+ALTER TABLE annotations ADD COLUMN IF NOT EXISTS memory_id BIGINT;
+CREATE INDEX IF NOT EXISTS annotation_events_at ON annotation_events (at);
 """
 
 # Annotation field -> column; `by` is a SQL keyword.
@@ -70,6 +75,9 @@ _COLUMNS = {
     "verified_by": "verified_by",
     "verified_at": "verified_at",
     "verify_by": "verify_by",
+    "via": "via",
+    "question": "question",
+    "memory_id": "memory_id",
 }
 
 
@@ -103,6 +111,9 @@ def _annotation(row: asyncpg.Record) -> Annotation:
         verify_by=row["verify_by"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        via=row["via"],
+        question=row["question"],
+        memory_id=row["memory_id"],
     )
 
 
@@ -303,6 +314,8 @@ class PostgresAnnotations:
         target_kind: str | None = None,
         repo_id: int | None = None,
         target_ref: str | None = None,
+        via: str | None = None,
+        conflict: bool | None = None,
         limit: int = 200,
     ) -> list[Annotation]:
         where, args = ["workspace = $1"], [self.workspace]
@@ -311,6 +324,8 @@ class PostgresAnnotations:
             ("target_kind", target_kind),
             ("repo_id", repo_id),
             ("target_ref", target_ref),
+            ("via", via),
+            ("conflict", conflict),
         ):
             if value is not None:
                 args.append(value)
@@ -324,6 +339,28 @@ class PostgresAnnotations:
             *args,
         )
         return [_annotation(r) for r in rows]
+
+    async def events_since(
+        self,
+        since: datetime,
+        actions: tuple[str, ...],
+        limit: int = 200,
+        *,
+        repo_ids: "list[int] | None" = None,  # quoted: `list` is a method here
+    ) -> "list[tuple[AnnotationEvent, Annotation]]":
+        rows = await self.pool.fetch(
+            "SELECT e.id AS e_id, e.annotation_id, e.actor, e.action, e.old, e.new, e.at, a.* "
+            "FROM annotation_events e JOIN annotations a ON a.id = e.annotation_id "
+            "WHERE a.workspace = $1 AND e.at > $2 AND e.action = ANY($3::text[]) "
+            "AND ($5::bigint[] IS NULL OR a.target_kind <> 'symbol' OR a.repo_id = ANY($5)) "
+            "ORDER BY e.id LIMIT $4",
+            self.workspace,
+            since,
+            list(actions),
+            limit,
+            repo_ids,
+        )
+        return [(_event({**dict(r), "id": r["e_id"]}), _annotation(r)) for r in rows]
 
 
 def _snapshot(note: Annotation, keys: list[str]) -> dict[str, Any]:

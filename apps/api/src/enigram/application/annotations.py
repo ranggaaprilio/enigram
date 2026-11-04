@@ -1,5 +1,5 @@
-"""Annotation use cases shared by the API, the CLI and the golden runner: create and change with
-the verifier rule (owner or ANNOTATION_VERIFIERS), one event per change."""
+"""Annotation use cases shared by the API, MCP, the CLI and the golden runner: create, propose
+(agents over MCP) and change with the verifier rule (domain.may_verify), one event per change."""
 
 import dataclasses
 import logging
@@ -8,12 +8,18 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from enigram.application.conflicts import check_conflict
-from enigram.application.ports import AnnotationRepository, CodeGraphRepository, DecisionProvider
+from enigram.application.ports import (
+    AnnotationRepository,
+    CodeGraphRepository,
+    DecisionProvider,
+    MemoryRepository,
+)
 from enigram.application.staleness import hashes_for
 from enigram.config import Config
 from enigram.domain.annotation import (
     ANNOTATION_MAX_CHARS,
     DEFAULT_VERIFY_DAYS,
+    QUESTION_MAX_CHARS,
     SCOPES,
     TARGET_KINDS,
     Annotation,
@@ -45,6 +51,19 @@ class NewAnnotation:
     verify_by: datetime | str | None = None
 
 
+@dataclass(frozen=True)
+class Proposal:
+    """An agent's note (MCP propose_annotation): `text`, or the text of memory `memory_id`."""
+
+    target_kind: str
+    target_ref: str
+    text: str | None = None
+    repo_id: int | None = None
+    question: str | None = None
+    memory_id: int | None = None
+    scope: str = "deps"
+
+
 def _text(text: str) -> str:
     text = text.strip()
     if not text:
@@ -68,7 +87,8 @@ def _when(value: datetime | str | None) -> datetime | None:
 
 
 async def resolve_symbol(graph: CodeGraphRepository, repo_id: int, ref: str) -> CodeSymbol:
-    """`ref` is a symbol id or a qualified name; exactly one match, else EnigramError."""
+    """`ref` is a symbol id or a qualified name; exactly one match, else NotFound (none) or
+    EnigramError (several)."""
     if "#" in ref:
         found = list((await graph.symbols_by_id(repo_id, [ref])).values())
     else:
@@ -78,7 +98,7 @@ async def resolve_symbol(graph: CodeGraphRepository, repo_id: int, ref: str) -> 
     if len(found) == 1:
         return found[0]
     if not found:
-        raise EnigramError(f"No symbol {ref!r} in repository {repo_id}")
+        raise NotFound(f"No symbol {ref!r} in repository {repo_id}")
     names = ", ".join(s.id for s in found[:5])
     raise EnigramError(f"{ref!r} matches {len(found)} symbols ({names}); give the symbol id")
 
@@ -109,6 +129,48 @@ async def _detect_conflict(
     return await check_conflict(decider, graph, repo_id, symbol, text)
 
 
+def _check_kind(target_kind: str, scope: str) -> None:
+    if target_kind not in TARGET_KINDS:
+        raise EnigramError(f"target_kind must be one of {TARGET_KINDS}")
+    if scope not in SCOPES:
+        raise EnigramError(f"scope must be one of {SCOPES}")
+
+
+async def _target_fields(
+    graph: CodeGraphRepository | None,
+    target_kind: str,
+    target_ref: str,
+    repo_id: int | None,
+    scope: str,
+) -> tuple[dict[str, Any], CodeSymbol | None]:
+    """The target columns of a new note (a symbol resolved, with its hashes) and the symbol."""
+    fields: dict[str, Any] = {
+        "target_kind": target_kind,
+        "target_ref": target_ref.strip(),
+        "repo_id": None,
+        "scope": scope,
+    }
+    symbol = None
+    if target_kind == "symbol":
+        if repo_id is None or graph is None:
+            raise EnigramError("A symbol annotation needs the repository id")
+        if await graph.get_repo_by_id(repo_id) is None:
+            raise NotFound(f"No repository {repo_id}")
+        symbol = await resolve_symbol(graph, repo_id, target_ref.strip())
+        target_hash, deps_hash = await hashes_for(graph, repo_id, symbol, scope)
+        fields |= {
+            "target_ref": symbol.id,
+            "repo_id": repo_id,
+            "target_hash": target_hash,
+            "deps_hash": deps_hash,
+        }
+    elif repo_id is not None:
+        raise EnigramError("Only a symbol annotation belongs to a repository")
+    if not fields["target_ref"]:
+        raise EnigramError("An annotation needs a target")
+    return fields, symbol
+
+
 async def create_annotation(
     cfg: Config,
     graph: CodeGraphRepository | None,
@@ -120,41 +182,21 @@ async def create_annotation(
 ) -> Annotation:
     """With `decider`, a symbol note verified on creation is checked against the code and gets
     `conflict` set by the decider (event `conflict_detected` by actor `decider`)."""
-    if new.target_kind not in TARGET_KINDS:
-        raise EnigramError(f"target_kind must be one of {TARGET_KINDS}")
-    if new.scope not in SCOPES:
-        raise EnigramError(f"scope must be one of {SCOPES}")
+    _check_kind(new.target_kind, new.scope)
     text = _text(new.text)
     verify_by = _when(new.verify_by)
     owner = new.owner or actor
+    target, symbol = await _target_fields(
+        graph, new.target_kind, new.target_ref, new.repo_id, new.scope
+    )
     fields: dict[str, Any] = {
-        "target_kind": new.target_kind,
-        "target_ref": new.target_ref.strip(),
-        "repo_id": None,
-        "scope": new.scope,
+        **target,
         "text": text,
         "author": actor,
         "by": new.by.strip(),
         "owner": owner,
         "verify_by": verify_by,
     }
-    if new.target_kind == "symbol":
-        if new.repo_id is None or graph is None:
-            raise EnigramError("A symbol annotation needs the repository id")
-        if await graph.get_repo_by_id(new.repo_id) is None:
-            raise NotFound(f"No repository {new.repo_id}")
-        symbol = await resolve_symbol(graph, new.repo_id, new.target_ref.strip())
-        target_hash, deps_hash = await hashes_for(graph, new.repo_id, symbol, new.scope)
-        fields |= {
-            "target_ref": symbol.id,
-            "repo_id": new.repo_id,
-            "target_hash": target_hash,
-            "deps_hash": deps_hash,
-        }
-    elif new.repo_id is not None:
-        raise EnigramError("Only a symbol annotation belongs to a repository")
-    if not fields["target_ref"]:
-        raise EnigramError("An annotation needs a target")
     p = None
     if actor == owner or actor in cfg.annotation_verifiers:
         fields |= _verify_fields(actor, verify_by)
@@ -170,6 +212,63 @@ async def create_annotation(
         note = await notes.update(
             note.id, {"conflict": True, "p": p}, DECIDER_ACTOR, "conflict_detected"
         )
+    return note
+
+
+async def propose_annotation(
+    cfg: Config,
+    graph: CodeGraphRepository | None,
+    notes: AnnotationRepository,
+    proposal: Proposal,
+    actor: str,
+    *,
+    api_key: str | None = None,
+    memory: MemoryRepository | None = None,
+) -> Annotation:
+    """An agent's note: always `proposed`, via "mcp"; only a verifier other than `actor` may
+    approve it (domain.may_verify), and the conflict check runs then. With `memory_id`, the text
+    defaults to that memory, which must belong to `api_key` (None on stdio and without keys)."""
+    _check_kind(proposal.target_kind, proposal.scope)
+    found = None
+    if proposal.memory_id is not None:  # checked even with `text`: it is stored on the note
+        if memory is None:
+            raise EnigramError("memory_id needs the HTTP server (enigram api)")
+        found = await memory.get(proposal.memory_id, api_key)
+        if found is None:
+            raise NotFound(f"No memory {proposal.memory_id}")
+    if proposal.text is not None and proposal.text.strip():
+        text = proposal.text
+    elif found is not None:
+        if len(found.text.strip()) > ANNOTATION_MAX_CHARS:
+            raise EnigramError(
+                f"Memory {proposal.memory_id} is longer than an annotation "
+                f"({ANNOTATION_MAX_CHARS} characters): pass a shorter `text` with it"
+            )
+        text = found.text
+    else:
+        raise EnigramError("A proposal needs text or memory_id")
+    text = _text(text)
+    question = (proposal.question or "").strip() or None
+    if question and len(question) > QUESTION_MAX_CHARS:
+        raise EnigramError(f"A question is at most {QUESTION_MAX_CHARS} characters")
+    target, _ = await _target_fields(
+        graph, proposal.target_kind, proposal.target_ref, proposal.repo_id, proposal.scope
+    )
+    note = await notes.create(
+        {
+            **target,
+            "text": text,
+            "author": actor,
+            "owner": actor,
+            "by": "agent",
+            "status": "proposed",
+            "via": "mcp",
+            "question": question,
+            "memory_id": proposal.memory_id,
+        },
+        actor,
+    )
+    log.info("[notes] %s proposed %d on %s", actor, note.id, note.target_kind)
     return note
 
 
@@ -226,10 +325,12 @@ async def change_annotation(
     if not trusted and (
         status in ("verified", "rejected") or "owner" in changes or "verify_by" in changes
     ):
-        raise Forbidden(
-            f"Only the owner ({note.owner}) or a key in ANNOTATION_VERIFIERS may "
-            "verify, reject, reassign or extend this note"
+        who = (
+            f"Only a key in ANNOTATION_VERIFIERS other than the proposer ({note.author})"
+            if note.via == "mcp"
+            else f"Only the owner ({note.owner}) or a key in ANNOTATION_VERIFIERS"
         )
+        raise Forbidden(f"{who} may verify, reject, reassign or extend this note")
     verify_by = _when(changes.get("verify_by"))
     updates: dict[str, Any] = {}
     target_ref = note.target_ref

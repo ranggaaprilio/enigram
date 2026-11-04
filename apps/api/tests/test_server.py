@@ -39,6 +39,9 @@ class FakeMemoryStore:
         hits.sort(key=lambda m: -m.score)
         return MemorySearch(hits[:limit], embed_secs=0.01, search_secs=0.002)
 
+    async def get(self, memory_id, api_key):
+        return next((m for key, m in self.notes if m.id == memory_id and key == api_key), None)
+
 
 @pytest.fixture
 def fake_rag(cfg, monkeypatch):
@@ -68,6 +71,10 @@ async def test_lists_tools_without_ctx_in_schema(cfg, fake_rag):
         "list_documents",
         "add_memory",
         "search_memory",
+        "what_changed_since",
+        "get_annotations",
+        "propose_annotation",
+        "get_conflicts",
     ]
     assert set(tools[0].input_schema["properties"]) == {
         "question",
@@ -267,3 +274,221 @@ async def test_memory_needs_the_http_server(cfg, fake_rag):
 
     assert result.is_error
     assert "HTTP server" in result.content[0].text
+
+
+SERVICE = "src/app.service.ts#AppService.find"
+REPO = "https://github.com/org/app"
+
+
+def _agent_world(memory=None, graph=True):
+    """A lifespan with the code graph, notes, memory and conflicts fakes, as over HTTP."""
+    from code_fakes import FakeAnnotations, FakeCodeGraph, FakeConflicts, fixture_graph
+
+    state = {
+        "graph": FakeCodeGraph(fixture_graph()) if graph else None,
+        "notes": FakeAnnotations(),
+        "memory": memory or FakeMemoryStore(),
+        "conflicts": FakeConflicts(),
+    }
+
+    @asynccontextmanager
+    async def lifespan(server):
+        yield AppContext(
+            engine=lightrag_engine.LightRagEngine(FakeRag()),
+            memory=state["memory"],
+            code_graph=state["graph"],
+            notes=state["notes"],
+            conflicts=state["conflicts"],
+        )
+
+    return lifespan, state
+
+
+async def test_propose_then_get_annotations(cfg):
+    memory = FakeMemoryStore()
+    mid, _ = await memory.add("find is cached for 5 minutes in prod", None)
+    lifespan, state = _agent_world(memory)
+
+    async with Client(create_server(cfg, lifespan=lifespan)) as client:
+        proposed = await client.call_tool(
+            "propose_annotation",
+            {"target": "AppService.find", "memory_id": mid, "question": "Is find cached?"},
+        )
+        notes = await client.call_tool("get_annotations", {"symbol": "AppService.find"})
+
+    assert proposed.structured_content == {
+        "id": 1,
+        "status": "proposed",
+        "target": SERVICE,
+        "repo": REPO,
+    }
+    [info] = notes.structured_content["result"]
+    assert {k: info[k] for k in ("id", "target", "repo", "status", "text", "via", "owner")} == {
+        "id": 1,
+        "target": SERVICE,
+        "repo": REPO,
+        "status": "proposed",
+        "text": "find is cached for 5 minutes in prod",
+        "via": "mcp",
+        "owner": "mcp-anonymous",
+    }
+    assert info["line"] == 'note#1 [proposed] "find is cached for 5 minutes in prod"'
+    note = state["notes"].notes[1]
+    assert (note.question, note.memory_id, note.author) == (
+        "Is find cached?",
+        mid,
+        "mcp-anonymous",  # not the key-less HTTP actor, so a key-less verifier can approve it
+    )
+
+
+async def test_propose_and_lookup_errors_are_tool_errors(cfg):
+    lifespan, state = _agent_world()
+    state["graph"].repos[2] = {**state["graph"].repos[1], "id": 2, "ref": "v2"}
+    state["graph"].graphs[2] = state["graph"].graphs[1]
+
+    async with Client(create_server(cfg, lifespan=lifespan)) as client:
+        two_refs = await client.call_tool("propose_annotation", {"target": "x", "text": "t"})
+        same_url = await client.call_tool(
+            "propose_annotation", {"target": "x", "text": "t", "repo": REPO}
+        )
+        by_ref = await client.call_tool(
+            "propose_annotation",
+            {"target": "AppService.find", "text": "t", "repo": REPO, "ref": "v2"},
+        )
+        bad_ref = await client.call_tool(
+            "propose_annotation", {"target": "x", "text": "t", "repo": REPO, "ref": "v9"}
+        )
+        unknown = await client.call_tool(
+            "propose_annotation", {"target": "x", "text": "t", "repo": "https://x/y"}
+        )
+        entity_repo = await client.call_tool(
+            "propose_annotation",
+            {"target": "E", "text": "t", "target_kind": "entity", "repo": REPO},
+        )
+        foreign = await client.call_tool(
+            "propose_annotation", {"target": "E", "memory_id": 9, "target_kind": "entity"}
+        )
+        ambiguous = await client.call_tool("get_annotations", {"symbol": "find"})
+        missing = await client.call_tool("get_annotations", {"symbol": "Nope"})
+        # "matches" in a missing symbol's name is not an ambiguity
+        missing_matches = await client.call_tool("get_annotations", {"symbol": "Router.matches"})
+
+    for err in (two_refs, same_url, bad_ref):
+        assert err.is_error and "pass repo (and ref): one of " + f"{REPO}, {REPO}@v2" in (
+            err.content[0].text
+        )
+    assert (
+        not by_ref.is_error and state["notes"].notes[by_ref.structured_content["id"]].repo_id == 2
+    )
+    assert unknown.is_error and "is not indexed; indexed: " + REPO in unknown.content[0].text
+    assert entity_repo.is_error and "only for symbol targets" in entity_repo.content[0].text
+    assert foreign.is_error and "No memory 9" in foreign.content[0].text
+    assert ambiguous.is_error and "matches" in ambiguous.content[0].text
+    assert missing.is_error and "No symbol 'Nope'" in missing.content[0].text
+    assert missing_matches.is_error and "No symbol 'Router.matches' in the indexed" in (
+        missing_matches.content[0].text
+    )
+
+
+async def test_what_changed_since(cfg):
+    lifespan, state = _agent_world()
+    await state["graph"].record_symbol_changes(1, "aaaaaaa1", [(SERVICE, "h0", "h1")])
+
+    async with Client(create_server(cfg, lifespan=lifespan)) as client:
+        result = await client.call_tool("what_changed_since", {"since": "2026-10-20"})
+        bad = await client.call_tool("what_changed_since", {"since": "yesterday"})
+
+    assert result.structured_content == {
+        "since": "2026-10-20",
+        "repos": [
+            {
+                "repo": REPO,
+                "ref": None,
+                "indexed_sha": state["graph"].repos[1]["indexed_sha"],
+                "changes": [
+                    {
+                        "symbol": SERVICE,
+                        "change": "changed",
+                        "sha": "aaaaaaa1",
+                        "at": "2026-11-01T00:00:00+00:00",
+                    }
+                ],
+                "truncated": False,
+                "error": None,
+            }
+        ],
+        "notes": [],
+        "notes_truncated": False,
+    }
+    assert bad.is_error and "ISO date" in bad.content[0].text
+
+
+async def test_get_conflicts(cfg):
+    from datetime import UTC, datetime
+
+    lifespan, state = _agent_world()
+    sha = state["graph"].repos[1]["indexed_sha"]
+    await state["conflicts"].replace(
+        1,
+        sha,
+        [],
+        [
+            {
+                "entity": "Email Verified Flag",
+                "symbol_id": SERVICE,
+                "chunk_ids": ["b-c00001-chunk-000"],
+                "doc_excerpt": "Providers reject unverified emails.",
+                "p": 0.91,
+                "provider": "jev",
+            }
+        ],
+        {"conflicts": 1},
+    )
+    await state["notes"].create(
+        {
+            "target_kind": "entity",
+            "target_ref": "E",
+            "text": "t",
+            "author": "w",
+            "owner": "w",
+            "status": "verified",
+            "conflict": True,
+        },
+        "w",
+    )
+
+    async with Client(create_server(cfg, lifespan=lifespan)) as client:
+        everything = await client.call_tool("get_conflicts", {})
+        one_repo = await client.call_tool("get_conflicts", {"repo": REPO})
+
+    content = everything.structured_content
+    assert [n["target"] for n in content["notes"]] == ["E"]
+    assert content["documents"] == [
+        {
+            "repo": REPO,
+            "ref": None,
+            "entity": "Email Verified Flag",
+            "symbol": SERVICE,
+            "location": f"src/app.service.ts:10-15@{sha[:12]}",
+            "chunk_ids": ["b-c00001-chunk-000"],
+            "doc_excerpt": "Providers reject unverified emails.",
+            "p": 0.91,
+            "provider": "jev",
+        }
+    ]
+    at = datetime(2026, 11, 4, tzinfo=UTC).isoformat()
+    assert content["runs"] == [{"repo": REPO, "ref": None, "sha": sha, "at": at, "conflicts": 1}]
+    assert one_repo.structured_content["notes"] == []  # entity notes only without `repo`
+
+
+async def test_agent_tools_need_the_code_graph(cfg):
+    lifespan, _ = _agent_world(graph=False)
+    async with Client(create_server(cfg, lifespan=lifespan)) as client:
+        for name, args in [
+            ("what_changed_since", {"since": "2026-10-20"}),
+            ("get_annotations", {"symbol": "A.b"}),
+            ("get_conflicts", {}),
+            ("propose_annotation", {"target": "A.b", "text": "t"}),
+        ]:
+            result = await client.call_tool(name, args)
+            assert result.is_error and "STORAGE_BACKEND=postgres" in result.content[0].text

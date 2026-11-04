@@ -142,3 +142,14 @@ class PostgresMemoryStore:
             embed_secs=round(embedded - start, 4),
             search_secs=round(done - embedded, 4),
         )
+
+    async def get(self, memory_id: int, api_key: str | None) -> Memory | None:
+        """Another key's memory looks missing: no existence leak."""
+        row = await self.pool.fetchrow(
+            "SELECT id, text, created_at FROM enigram_memories "
+            "WHERE workspace = $1 AND id = $2 AND api_key IS NOT DISTINCT FROM $3",
+            self.workspace,
+            memory_id,
+            api_key,
+        )
+        return Memory(row["id"], row["text"], 0.0, row["created_at"]) if row else None

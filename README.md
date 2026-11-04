@@ -170,6 +170,52 @@ Measure the latency against your Postgres and embedding model (scratch rows, rem
 uv run python apps/api/scripts/memory_latency.py --notes 200 --searches 50
 ```
 
+### Agent surface: changes, notes, proposals, conflicts
+
+With `STORAGE_BACKEND=postgres` and an indexed repository, four tools give an agent trust
+metadata, not just text:
+
+- `what_changed_since(since, repo?)`: the symbols added, removed or changed per repository since
+  an ISO date (`2026-10-20`) or an indexed commit SHA (oldest first, at most 200 per repository),
+  plus the notes flagged, orphaned, relinked, verified, rejected or marked as conflicting since
+  then. Changes are recorded from the second index of a repository on; a commit that was never
+  indexed is an error on that repository (pass a date).
+- `get_annotations(symbol, repo?)`: the notes on one symbol with status, reason, conflict flag,
+  verifier and expiry.
+- `propose_annotation(target, text?, repo?, ref?, question?, memory_id?, target_kind?, scope?)`:
+  an agent's note, always `proposed`; `ref` picks the branch or tag when `repo` is indexed at
+  several. `memory_id` promotes one of the caller's own memories (the text defaults to it;
+  another key's memory is "not found"); `question` is kept for the regression export below.
+  Without an API key the proposer is `mcp-anonymous`, so a key-less verifier can approve it.
+- `get_conflicts(repo?)`: notes marked as conflicting with the code, and the stored
+  docs-vs-code contradictions (entity, symbol with `file:start-end@sha`, document excerpt,
+  probability), plus when detection last ran (`runs` empty = never).
+
+An MCP proposal can be verified or rejected only by a key in `ANNOTATION_VERIFIERS`, and never
+by the key that proposed it, even when it is the owner or a verifier itself (403). To approve
+proposals in the web UI, put `web` in `ANNOTATION_VERIFIERS`; the Annotations page shows "via
+MCP by <key>", the question and the memory id.
+
+Docs-vs-code detection is a worker job, started by hand (`POST /conflicts/detect` with
+`{"url", "ref"?}`, or inline with the CLI below); `GET /conflicts?repo=<id>` and `get_conflicts`
+only read its stored result. For every LightRAG entity of the documents indexed from that
+repository it ranks five candidate symbols as `search_code` does (full text + code vectors) and
+asks the [decision layer](#decision-layer) per candidate whether the document contradicts that
+code (`doc_code_conflict`, symbol body and callees; stored at p ≥ 0.8). A dry run (`--entity`)
+also asks whether entity and symbol are the same thing (`entity_symbol_same`, shown as
+`link p`, not a gate). That is about five calls per entity: run it with Jev (`DECISION_PROVIDER=jev`); on the DeepSeek
+fallback it costs thousands of LLM calls and `MAX_TOKENS_PER_JOB` stops it as
+`budget_exceeded`.
+
+```bash
+# dry run on a few entities: prints each candidate's link p and conflict p; stores nothing
+uv run enigram conflicts detect --url https://github.com/org/app --ref v1 --entity "Some Entity"
+# full run: replaces the repository's stored links and conflicts
+uv run enigram conflicts detect --url https://github.com/org/app --ref v1
+# approved MCP proposals that carry a question -> eval/regression.yaml (not the golden set)
+uv run enigram regression export [--out eval/regression.yaml]
+```
+
 ## Run as a service
 
 `docker compose up -d --build` starts Postgres, the HTTP API on `127.0.0.1:8080`, the index

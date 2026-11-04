@@ -4,7 +4,8 @@ API (`http_api.py`), which supplies its own knowledge engine and job store."""
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Annotated, Literal
+from datetime import datetime
+from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
@@ -12,13 +13,18 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from enigram.application.annotations import Proposal, resolve_symbol
+from enigram.application.annotations import propose_annotation as propose_note
 from enigram.application.budget import query_allowance
+from enigram.application.changes_feed import changes_since
 from enigram.application.code_agent import answer_with_agent, repo_name
+from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.ports import (
     AnnotationRepository,
     CodeEmbedder,
     CodeGraphRepository,
+    ConflictRepository,
     DecisionProvider,
     Deps,
     JobRepository,
@@ -29,9 +35,15 @@ from enigram.application.querying import answer_question
 from enigram.application.routing import answer_routed, resolve_scope, scope_mode
 from enigram.bootstrap import build_deps
 from enigram.config import Config
+from enigram.domain.annotation import (
+    ANNOTATION_MAX_CHARS,
+    QUESTION_MAX_CHARS,
+    Annotation,
+    note_line,
+)
 from enigram.domain.answer import QUERY_MODE, ContextChunk, Source
 from enigram.domain.budget import BudgetExceeded, metered
-from enigram.domain.errors import EnigramError
+from enigram.domain.errors import EnigramError, NotFound
 from enigram.domain.memory import MEMORY_MAX_CHARS, MEMORY_SEARCH_MAX
 
 
@@ -44,6 +56,7 @@ class AppContext:
     notes: AnnotationRepository | None = None  # needs STORAGE_BACKEND=postgres
     decider: DecisionProvider | None = None  # the abstain guard and the route; None skips them
     code_embedder: CodeEmbedder | None = None  # search_code's semantic channel; None = full text
+    conflicts: ConflictRepository | None = None  # docs-vs-code results; needs postgres
 
 
 @dataclass
@@ -84,6 +97,119 @@ class MemoryResults:
     search_secs: float
 
 
+@dataclass
+class SymbolChange:
+    symbol: str  # symbol id "<file>#<qualified name>"
+    change: str  # added | removed | changed
+    sha: str  # the indexed commit that recorded it
+    at: str  # ISO 8601
+
+
+@dataclass
+class RepoChanges:
+    repo: str  # URL
+    ref: str | None
+    indexed_sha: str
+    changes: list[SymbolChange]  # oldest first
+    truncated: bool  # more changes than returned
+    error: str | None  # e.g. the commit was never indexed for this repository
+
+
+@dataclass
+class NoteEvent:
+    note: int
+    target: str
+    action: str  # flagged | orphaned | relinked | verified | rejected | conflict | conflict_*
+    actor: str
+    at: str
+    status: str  # the note's status now
+    reason: str | None
+
+
+@dataclass
+class ChangesSince:
+    since: str
+    repos: list[RepoChanges]
+    notes: list[NoteEvent]
+    notes_truncated: bool  # more note events than returned
+
+
+@dataclass
+class NoteInfo:
+    id: int
+    target: str
+    repo: str | None  # URL, symbol notes only
+    status: str  # verified | needs_verification | orphaned | proposed
+    reason: str | None
+    conflict: bool  # marked as contradicting the code
+    text: str
+    owner: str
+    verified_by: str | None
+    verified_at: str | None
+    verify_by: str | None
+    via: str  # api | mcp (an agent proposal)
+    line: str  # how answers cite it
+
+
+@dataclass
+class Proposed:
+    id: int
+    status: str
+    target: str
+    repo: str | None
+
+
+@dataclass
+class DocConflict:
+    repo: str
+    ref: str | None
+    entity: str  # the knowledge-graph entity from the documents
+    symbol: str
+    location: str  # file:start-end@sha, "" when the symbol is gone
+    chunk_ids: list[str]
+    doc_excerpt: str
+    p: float  # P(the document contradicts the code)
+    provider: str
+
+
+@dataclass
+class ConflictRun:
+    repo: str
+    ref: str | None
+    sha: str  # the indexed commit detection ran on
+    at: str
+    conflicts: int
+
+
+@dataclass
+class Conflicts:
+    notes: list[NoteInfo]
+    documents: list[DocConflict]
+    runs: list[ConflictRun]  # empty: detection never ran
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _note_info(n: Annotation, urls: dict[int, str]) -> NoteInfo:
+    return NoteInfo(
+        id=n.id,
+        target=n.target_ref,
+        repo=urls.get(n.repo_id) if n.repo_id is not None else None,
+        status=n.status,
+        reason=n.reason,
+        conflict=n.conflict,
+        text=n.text,
+        owner=n.owner,
+        verified_by=n.verified_by,
+        verified_at=_iso(n.verified_at),
+        verify_by=_iso(n.verify_by),
+        via=n.via,
+        line=note_line(n, full=True),
+    )
+
+
 def _api_key(ctx: Context[AppContext]) -> str | None:
     """The key name the API's auth middleware put on the HTTP request; None on stdio."""
     return getattr(getattr(ctx.request_context.request, "state", None), "api_key", None)
@@ -105,12 +231,14 @@ def create_server(
                 return
             store = await deps.open_store()  # only for the code graph: stdio logs no queries
             try:
+                code_graph = await deps.new_code_graph(store)
                 yield AppContext(
                     engine=engine,
-                    code_graph=await deps.new_code_graph(store),
+                    code_graph=code_graph,
                     notes=await deps.new_annotations(store),
                     decider=decider,
                     code_embedder=deps.code_embedder(),
+                    conflicts=await deps.new_conflicts(store),  # after the code graph (FK)
                 )
             finally:
                 await store.close()
@@ -258,6 +386,237 @@ def create_server(
             ],
             embed_secs=found.embed_secs,
             search_secs=found.search_secs,
+        )
+
+    async def _repos(app: AppContext, repo: str | None) -> list[dict[str, Any]]:
+        """The indexed repositories, or those with URL `repo` (every ref)."""
+        if app.code_graph is None:
+            raise ToolError("This needs STORAGE_BACKEND=postgres and an indexed repository")
+        repos = await app.code_graph.list_repos()
+        if repo is None:
+            return repos
+        picked = [r for r in repos if r["url"] == repo]
+        if not picked:
+            urls = ", ".join(sorted({r["url"] for r in repos})) or "none"
+            raise ToolError(f"{repo} is not indexed; indexed: {urls}")
+        return picked
+
+    def notes_of(app: AppContext) -> AnnotationRepository:
+        if app.notes is None:
+            raise ToolError("Annotations need STORAGE_BACKEND=postgres")
+        return app.notes
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+    async def what_changed_since(
+        since: Annotated[
+            str,
+            Field(description="An ISO date (2026-10-20) or date-time, or an indexed commit SHA."),
+        ],
+        ctx: Context[AppContext],
+        repo: Annotated[
+            str | None, Field(description="Only this repository URL (default: all).")
+        ] = None,
+    ) -> ChangesSince:
+        """What changed in the indexed code since a date or commit: the symbols added, removed
+        or changed per repository (oldest first, at most 200), and the team notes flagged,
+        orphaned, verified or marked as conflicting since then. Call it at the start of a task
+        to know which earlier knowledge (yours or the answers you got) may be stale. A commit
+        works only if it was indexed; otherwise pass a date."""
+        app = ctx.request_context.lifespan_context
+        repos = await _repos(app, repo)
+        try:
+            result = await changes_since(app.code_graph, app.notes, repos, since)
+        except EnigramError as e:
+            raise ToolError(str(e)) from e
+        return ChangesSince(
+            since=result["since"],
+            repos=[
+                RepoChanges(
+                    repo=r["repo"],
+                    ref=r["ref"],
+                    indexed_sha=r["indexed_sha"],
+                    changes=[
+                        SymbolChange(c["symbol"], c["change"], c["sha"], c["at"].isoformat())
+                        for c in r["changes"]
+                    ],
+                    truncated=r["truncated"],
+                    error=r["error"],
+                )
+                for r in result["repos"]
+            ],
+            notes=[
+                NoteEvent(
+                    n["note"],
+                    n["target"],
+                    n["action"],
+                    n["actor"],
+                    n["at"].isoformat(),
+                    n["status"],
+                    n["reason"],
+                )
+                for n in result["notes"]
+            ],
+            notes_truncated=result["notes_truncated"],
+        )
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+    async def get_annotations(
+        symbol: Annotated[
+            str,
+            Field(description="A qualified name (AuthService.logout) or a symbol id (file#name)."),
+        ],
+        ctx: Context[AppContext],
+        repo: Annotated[
+            str | None, Field(description="Only this repository URL (default: all).")
+        ] = None,
+    ) -> list[NoteInfo]:
+        """The team notes on one code symbol with their trust state: status (verified,
+        needs_verification when the code changed since, orphaned, proposed), the conflict flag
+        when the note contradicts the code, who verified it and when it expires. Read them
+        before relying on or changing the symbol; a note that is not plainly verified is a lead,
+        not a fact."""
+        app = ctx.request_context.lifespan_context
+        notes = notes_of(app)
+        out: list[NoteInfo] = []
+        resolved = False
+        for r in await _repos(app, repo):
+            try:
+                s = await resolve_symbol(app.code_graph, r["id"], symbol)
+            except NotFound:
+                continue
+            except EnigramError as e:  # ambiguous: the agent must narrow it down
+                raise ToolError(str(e)) from e
+            resolved = True
+            found = await notes.list(target_kind="symbol", repo_id=r["id"], target_ref=s.id)
+            out += [_note_info(n, {r["id"]: r["url"]}) for n in found]
+        if not resolved:
+            raise ToolError(f"No symbol {symbol!r} in the indexed repositories")
+        return out
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=False,
+            idempotent_hint=False,
+            open_world_hint=False,
+        )
+    )
+    async def propose_annotation(
+        target: Annotated[
+            str,
+            Field(
+                description="The symbol (qualified name or id), entity name or document name "
+                "the note is about."
+            ),
+        ],
+        ctx: Context[AppContext],
+        text: Annotated[
+            str | None,
+            Field(
+                description=f"The note, at most {ANNOTATION_MAX_CHARS} characters; defaults to "
+                "the text of memory_id."
+            ),
+        ] = None,
+        repo: Annotated[
+            str | None,
+            Field(description="The repository URL of a symbol target (needed when several)."),
+        ] = None,
+        ref: Annotated[
+            str | None,
+            Field(description="The indexed branch or tag of `repo` (needed when several)."),
+        ] = None,
+        question: Annotated[
+            str | None,
+            Field(
+                description=f"The question this note answers (at most {QUESTION_MAX_CHARS} "
+                "characters), kept for the team's regression set."
+            ),
+        ] = None,
+        memory_id: Annotated[
+            int | None,
+            Field(description="Promote one of your memories (add_memory) into this note."),
+        ] = None,
+        target_kind: Annotated[
+            Literal["symbol", "entity", "document"], Field(description="What `target` names.")
+        ] = "symbol",
+        scope: Annotated[
+            Literal["deps", "body"],
+            Field(
+                description="deps (default): the note goes stale when the symbol or a callee "
+                "changes; body: only the symbol's own body."
+            ),
+        ] = "deps",
+    ) -> Proposed:
+        """Propose a team note on a code symbol, an entity or a document: something you
+        learned that the code or the documents do not say (behaviour in production, a pitfall,
+        a reason). It is stored as `proposed` and is only cited in answers after a human
+        verifier approves it; your own key can never approve it. Pass `question` with the
+        question it answers, and `memory_id` to promote one of your saved memories."""
+        app = ctx.request_context.lifespan_context
+        notes = notes_of(app)
+        repo_id, url = None, None
+        if target_kind == "symbol":
+            indexed = await _repos(app, repo)
+            repos = [r for r in indexed if ref is None or (r["ref"] or None) == (ref or None)]
+            if len(repos) != 1:
+                urls = ", ".join(
+                    sorted({r["url"] + (f"@{r['ref']}" if r["ref"] else "") for r in indexed})
+                )
+                raise ToolError(f"pass repo (and ref): one of {urls or 'none indexed'}")
+            repo_id, url = repos[0]["id"], repos[0]["url"]
+        elif repo is not None or ref is not None:
+            raise ToolError("repo and ref are only for symbol targets")
+        key = _api_key(ctx)
+        proposal = Proposal(
+            target_kind=target_kind,
+            target_ref=target,
+            text=text,
+            repo_id=repo_id,
+            question=question,
+            memory_id=memory_id,
+            scope=scope,
+        )
+        try:
+            note = await propose_note(
+                cfg,
+                app.code_graph,
+                notes,
+                proposal,
+                key or "mcp-anonymous",  # not HTTP's key-less "anonymous": it may verify
+                api_key=key,
+                memory=app.memory,
+            )
+        except EnigramError as e:
+            raise ToolError(str(e)) from e
+        return Proposed(note.id, note.status, note.target_ref, url)
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+    async def get_conflicts(
+        ctx: Context[AppContext],
+        repo: Annotated[
+            str | None, Field(description="Only this repository URL (default: all).")
+        ] = None,
+    ) -> Conflicts:
+        """Known contradictions: team notes marked as conflicting with the code, and places
+        where the indexed documents say something the code contradicts (entity, symbol with
+        file:start-end@sha, document excerpt, probability). Where they disagree, trust the code
+        and say so. `runs` tells when detection last ran per repository; an empty `runs` means
+        it never ran (ask the owner to run `enigram conflicts detect`)."""
+        app = ctx.request_context.lifespan_context
+        repos = await _repos(app, repo)
+        view = await conflicts_view(
+            app.code_graph, app.notes, app.conflicts, repos, all_notes=repo is None
+        )
+        urls = {r["id"]: r["url"] for r in repos}
+        return Conflicts(
+            notes=[_note_info(n, urls) for n in view["notes"]],
+            documents=[DocConflict(**d) for d in view["documents"]],
+            runs=[
+                ConflictRun(
+                    r["repo"], r["ref"], r["sha"], r["at"].isoformat(), r["report"]["conflicts"]
+                )
+                for r in view["runs"]
+            ],
         )
 
     return mcp

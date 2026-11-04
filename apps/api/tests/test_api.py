@@ -2,7 +2,14 @@ import hashlib
 import hmac
 
 import pytest
-from code_fakes import FakeAnnotations, FakeCodeGraph, FakeDecider, FakeEmbedder, choice
+from code_fakes import (
+    FakeAnnotations,
+    FakeCodeGraph,
+    FakeConflicts,
+    FakeDecider,
+    FakeEmbedder,
+    choice,
+)
 from fastapi.testclient import TestClient
 from test_query import FakeRag
 from test_server import FakeMemoryStore
@@ -45,8 +52,11 @@ def _deps(cfg, store, built):
     async def new_annotations(store):
         return FakeAnnotations()
 
+    async def new_conflicts(store):
+        return FakeConflicts()
+
     deps.open_store, deps.new_memory, deps.new_code_graph = open_store, new_memory, new_code_graph
-    deps.new_annotations = new_annotations
+    deps.new_annotations, deps.new_conflicts = new_annotations, new_conflicts
     deps.decider = FakeDecider
     deps.code_embedder = FakeEmbedder
     return deps
@@ -473,7 +483,16 @@ def test_mcp_over_http_lists_the_tools(keyed_env):
     response = _mcp(client, "tools/list", {}, _bearer(LAPTOP_KEY))
 
     names = [t["name"] for t in response.json()["result"]["tools"]]
-    assert names == ["query_knowledge_base", "list_documents", "add_memory", "search_memory"]
+    assert names == [
+        "query_knowledge_base",
+        "list_documents",
+        "add_memory",
+        "search_memory",
+        "what_changed_since",
+        "get_annotations",
+        "propose_annotation",
+        "get_conflicts",
+    ]
 
 
 def test_mcp_memories_belong_to_the_key(keyed_env, fake_memory):
@@ -1028,3 +1047,79 @@ def _decider_init(answer):
         original(self, answers, answer, error)
 
     return init
+
+
+def test_mcp_proposal_needs_another_verifier(notes_env):
+    """An agent's MCP proposal: its own key may not verify it, even listed as a verifier; a
+    verifier key ("web") may."""
+    client, _, _, notes, build = notes_env
+    call = {
+        "name": "propose_annotation",
+        "arguments": {"target": "AppService.find", "text": "Find is slow on staging."},
+    }
+    result = _mcp(client, "tools/call", call, _bearer(LAPTOP_KEY)).json()["result"]
+    proposed = result["structuredContent"]
+    assert (proposed["status"], notes.notes[proposed["id"]].author) == ("proposed", "laptop-a")
+    path = f"/annotations/{proposed['id']}"
+
+    with build("laptop-a,web") as trusted:
+        refused = trusted.patch(path, json={"status": "verified"}, headers=_bearer(LAPTOP_KEY))
+        assert refused.status_code == 403
+        assert "other than the proposer (laptop-a)" in refused.json()["detail"]
+        ok = trusted.patch(path, json={"status": "verified"}, headers=_bearer(WEB_KEY))
+        assert ok.status_code == 200 and ok.json()["verified_by"] == "web"
+        listed = trusted.get("/annotations", headers=_bearer(WEB_KEY)).json()
+        assert [(n["via"], n["question"], n["memory_id"]) for n in listed] == [("mcp", None, None)]
+
+
+def test_conflicts_routes(notes_env):
+    client, store, _, _, _ = notes_env
+    web = _bearer(WEB_KEY)
+    sha = client.get("/repos", headers=web).json()[0]["indexed_sha"]
+
+    assert client.get("/conflicts", headers=web).json() == {
+        "notes": [],
+        "documents": [],
+        "runs": [],
+    }
+    assert client.get("/conflicts?repo=9", headers=web).status_code == 404
+    unknown = client.post(
+        "/conflicts/detect", json={"url": "https://github.com/org/none"}, headers=web
+    )
+    assert unknown.status_code == 404
+
+    queued = client.post(
+        "/conflicts/detect", json={"url": "https://github.com/org/app"}, headers=web
+    )
+    assert queued.status_code == 202
+    assert (store.jobs[-1].kind, store.jobs[-1].payload) == (
+        "detect_conflicts",
+        {"url": "https://github.com/org/app", "api_key": "web"},
+    )
+    again = client.post(
+        "/conflicts/detect", json={"url": "https://github.com/org/app"}, headers=web
+    )
+    assert again.status_code == 409
+
+    client.portal.call(
+        client.app.state.conflicts.replace,
+        1,
+        sha,
+        [],
+        [
+            {
+                "entity": "E",
+                "symbol_id": "src/app.service.ts#AppService.find",
+                "chunk_ids": ["b-c00001-chunk-000"],
+                "doc_excerpt": "x",
+                "p": 0.9,
+                "provider": "jev",
+            }
+        ],
+        {"conflicts": 1},
+    )
+    view = client.get("/conflicts?repo=1", headers=web).json()
+    assert [(d["entity"], d["location"]) for d in view["documents"]] == [
+        ("E", f"src/app.service.ts:10-15@{sha[:12]}")
+    ]
+    assert [(r["sha"], r["report"]) for r in view["runs"]] == [(sha, {"conflicts": 1})]
