@@ -467,13 +467,19 @@ async def test_get_conflicts(cfg):
         {
             "repo": REPO,
             "ref": None,
-            "entity": "Email Verified Flag",
-            "symbol": SERVICE,
-            "location": f"src/app.service.ts:10-15@{sha[:12]}",
             "chunk_ids": ["b-c00001-chunk-000"],
             "doc_excerpt": "Providers reject unverified emails.",
             "p": 0.91,
-            "provider": "jev",
+            "entities": ["Email Verified Flag"],
+            "symbols": [
+                {
+                    "symbol": SERVICE,
+                    "location": f"src/app.service.ts:10-15@{sha[:12]}",
+                    "entity": "Email Verified Flag",
+                    "p": 0.91,
+                    "provider": "jev",
+                }
+            ],
         }
     ]
     at = datetime(2026, 11, 4, tzinfo=UTC).isoformat()

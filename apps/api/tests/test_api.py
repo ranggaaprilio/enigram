@@ -1119,7 +1119,7 @@ def test_conflicts_routes(notes_env):
         {"conflicts": 1},
     )
     view = client.get("/conflicts?repo=1", headers=web).json()
-    assert [(d["entity"], d["location"]) for d in view["documents"]] == [
-        ("E", f"src/app.service.ts:10-15@{sha[:12]}")
+    assert [(d["entities"], [s["location"] for s in d["symbols"]]) for d in view["documents"]] == [
+        (["E"], [f"src/app.service.ts:10-15@{sha[:12]}"])
     ]
     assert [(r["sha"], r["report"]) for r in view["runs"]] == [(sha, {"conflicts": 1})]

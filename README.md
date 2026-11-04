@@ -188,8 +188,10 @@ metadata, not just text:
   another key's memory is "not found"); `question` is kept for the regression export below.
   Without an API key the proposer is `mcp-anonymous`, so a key-less verifier can approve it.
 - `get_conflicts(repo?)`: notes marked as conflicting with the code, and the stored
-  docs-vs-code contradictions (entity, symbol with `file:start-end@sha`, document excerpt,
-  probability), plus when detection last ran (`runs` empty = never).
+  docs-vs-code contradictions, one item per document passage (excerpt, entities, and the
+  symbols with `file:start-end@sha` and probability), plus when detection last ran (`runs`
+  empty = never). The document matches are automatic and often wrong; the tool tells the agent
+  to read the cited code first.
 
 An MCP proposal can be verified or rejected only by a key in `ANNOTATION_VERIFIERS`, and never
 by the key that proposed it, even when it is the owner or a verifier itself (403). To approve
@@ -201,10 +203,12 @@ Docs-vs-code detection is a worker job, started by hand (`POST /conflicts/detect
 only read its stored result. For every LightRAG entity of the documents indexed from that
 repository it ranks five candidate symbols as `search_code` does (full text + code vectors) and
 asks the [decision layer](#decision-layer) per candidate whether the document contradicts that
-code (`doc_code_conflict`, symbol body and callees; stored at p ≥ 0.8). A dry run (`--entity`)
-also asks whether entity and symbol are the same thing (`entity_symbol_same`, shown as
-`link p`, not a gate). That is about five calls per entity: run it with Jev (`DECISION_PROVIDER=jev`); on the DeepSeek
-fallback it costs thousands of LLM calls and `MAX_TOKENS_PER_JOB` stops it as
+code (`doc_code_conflict`, symbol body and callees; stored at p ≥ 0.8). Files that make no claim
+about the code are skipped: agent instructions (`CLAUDE.md`, `AGENTS.md`, `.claude/`,
+`.cursor/`), changelogs, codes of conduct and GitHub templates. A dry run (`--entity`) also
+asks whether entity and symbol are the same thing (`entity_symbol_same`, shown as `link p`, not
+a gate). That is about five calls per entity: run it with Jev (`DECISION_PROVIDER=jev`); on the
+DeepSeek fallback it costs thousands of LLM calls and `MAX_TOKENS_PER_JOB` stops it as
 `budget_exceeded`.
 
 ```bash

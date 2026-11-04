@@ -5,6 +5,7 @@ dry run (`only`) also asks whether entity and symbol are the same thing (the bri
 candidates. get_conflicts (MCP) and GET /conflicts only read what the last run stored."""
 
 import asyncio
+import fnmatch
 import logging
 import time
 from typing import Any
@@ -34,12 +35,41 @@ DOC_MAX_CHARS = 6000  # entity + chunk texts in the conflict state
 EXCERPT_CHARS = 500
 CONFLICT_NOTES_MAX = 500
 PURPOSE_LINK, PURPOSE_CONFLICT = "entity_link", "doc_conflict"
+# Repository files that make no claim about the current code: instructions for coding agents
+# (CLAUDE.md's "never generate a File entity" is not contradicted by FileEntity), history and
+# templates. Matched case-insensitively against the manifest's repo_path (2026-11-04: 9 of 42
+# stored conflicts came from CLAUDE.md, .claude/skills and CHANGELOG.md).
+NOT_CLAIMS = (
+    "claude.md",
+    "*/claude.md",
+    "agents.md",
+    "*/agents.md",
+    "gemini.md",
+    ".claude/*",
+    ".cursor/*",
+    ".cursorrules",
+    ".github/copilot-instructions.md",
+    ".github/issue_template/*",
+    ".github/pull_request_template*",
+    "changelog*",
+    "code_of_conduct*",
+)
+
+
+def makes_claims(repo_path: str | None) -> bool:
+    path = (repo_path or "").lower()
+    return not any(fnmatch.fnmatchcase(path, pattern) for pattern in NOT_CLAIMS)
 
 
 def repo_books(books: dict[str, dict[str, Any]], url: str, ref: str | None) -> list[str]:
-    """The manifest books indexed from repository `url` at `ref` (None = default branch)."""
+    """The manifest books indexed from repository `url` at `ref` (None = default branch),
+    without the files that make no claim about the code (NOT_CLAIMS)."""
     return sorted(
-        b for b, e in books.items() if e.get("repo") == url and (e.get("repo_ref") or None) == ref
+        b
+        for b, e in books.items()
+        if e.get("repo") == url
+        and (e.get("repo_ref") or None) == ref
+        and makes_claims(e.get("repo_path"))
     )
 
 
@@ -216,8 +246,9 @@ async def conflicts_view(
 ) -> dict[str, Any]:
     """{"notes": [Annotation], "documents": [...], "runs": [...]}: notes marked as conflicting
     with the code of these repositories (plus entity and document notes when `all_notes`), the
-    stored docs-vs-code conflicts with each symbol's file:start-end@sha ("" when the symbol is
-    gone), and when detection last ran per repository (none = never)."""
+    stored docs-vs-code conflicts grouped per document passage (one item per repository and
+    first chunk: its entities and its symbols with file:start-end@sha, "" when the symbol is
+    gone, highest p first), and when detection last ran per repository (none = never)."""
     by_id = {r["id"]: r for r in repos}
     flagged: list[Annotation] = (
         await notes.list(conflict=True, limit=CONFLICT_NOTES_MAX) if notes else []
@@ -236,22 +267,37 @@ async def conflicts_view(
             repo = by_id[repo_id]
             ids = [r["symbol_id"] for r in rows if r["repo_id"] == repo_id]
             symbols = await graph.symbols_by_id(repo_id, ids)
-            for r in (r for r in rows if r["repo_id"] == repo_id):
-                symbol = symbols.get(r["symbol_id"])
-                documents.append(
+            # one passage of a document gives one row per (entity, candidate symbol): group them
+            passages: dict[str, dict[str, Any]] = {}
+            for r in sorted((r for r in rows if r["repo_id"] == repo_id), key=lambda r: -r["p"]):
+                chunk_ids = list(r["chunk_ids"])
+                doc = passages.setdefault(
+                    chunk_ids[0] if chunk_ids else r["entity"],
                     {
                         "repo": repo["url"],
                         "ref": repo["ref"],
-                        "entity": r["entity"],
+                        "chunk_ids": [],
+                        "doc_excerpt": r["doc_excerpt"],
+                        "p": r["p"],
+                        "entities": [],
+                        "symbols": [],
+                    },
+                )
+                doc["chunk_ids"] += [c for c in chunk_ids if c not in doc["chunk_ids"]]
+                if r["entity"] not in doc["entities"]:
+                    doc["entities"].append(r["entity"])
+                symbol = symbols.get(r["symbol_id"])
+                doc["symbols"].append(
+                    {
                         "symbol": r["symbol_id"],
                         "location": code_citation(symbol, repo["indexed_sha"]) if symbol else "",
-                        "chunk_ids": list(r["chunk_ids"]),
-                        "doc_excerpt": r["doc_excerpt"],
+                        "entity": r["entity"],
                         "p": r["p"],
                         "provider": r["provider"],
                     }
                 )
-        documents.sort(key=lambda d: (-d["p"], d["repo"], d["entity"], d["symbol"]))
+            documents += passages.values()
+        documents.sort(key=lambda d: (-d["p"], d["repo"], d["chunk_ids"]))
         runs = [
             {
                 "repo": by_id[r["repo_id"]]["url"],

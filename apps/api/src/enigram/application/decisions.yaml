@@ -45,8 +45,8 @@ route:
   threshold: 0.45  # confidence below = unsure (answer from code and documents and merge)
 entity_symbol_same:
   type: noul
-  # The entity <-> symbol bridge (application/doc_conflicts.py): recorded, not a gate (owner,
-  # 2026-11-04). jev, K=5: eval README docs-vs-code #1 (Email Verified Flag x
+  # The entity <-> symbol bridge (application/doc_conflicts.py): dry runs only, not a gate
+  # (owner, 2026-11-04). jev, K=5: eval README docs-vs-code #1 (Email Verified Flag x
   # AuthFacebookService.getProfileByToken) p=0.30, while pairs that only share words scored
   # 0.19-0.36, so no threshold separates them; doc_code_conflict on that pair p=0.84.
   instructions: "`entity` from the documents and `symbol` in the code are about the same thing."
@@ -56,8 +56,11 @@ entity_symbol_same:
   threshold: 0.5   # P(true) at or above counts as `linked` in the run report only
 doc_code_conflict:
   type: noul
-  instructions: "`doc` states something that `code` contradicts."
+  # Full run 2026-11-04 (nestjs-boilerplate@eval-v1, 42 stored): most were tutorial steps read
+  # as claims ("2. Create user.factory.ts") and passages about another driver than the code
+  # (s3-presigned upload doc vs the local and s3 controllers). The "false" criteria name both.
+  instructions: "`doc` makes a claim about what `code` does, and `code` contradicts it."
   criteria:
-    "true": the code does the opposite of what the document states, or lacks behaviour the document says it has
-    "false": the code agrees with the document or does not address what it states
+    "true": the document describes this code (the same component, endpoint, driver or flow) and the code does the opposite of what it states, or lacks behaviour it says this code has
+    "false": the code agrees with the document; or the document describes something else (another driver, module, provider or variant); or the text is a tutorial step, an example, a command or an instruction to the reader (such as "create this file"), not a claim about the existing code
   threshold: 0.8   # P(true) at or above = conflict (as note_conflict)
