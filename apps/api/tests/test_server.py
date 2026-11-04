@@ -81,8 +81,8 @@ async def test_lists_tools_without_ctx_in_schema(cfg, fake_rag):
     assert tools[3].annotations.read_only_hint and not tools[2].annotations.read_only_hint
 
 
-async def test_query_returns_answer_and_sources_without_context(cfg, fake_rag):
-    async with Client(create_server(cfg), raise_exceptions=True) as client:
+async def test_query_returns_answer_and_sources_without_context(cfg, deps, fake_rag):
+    async with Client(create_server(cfg, deps=deps), raise_exceptions=True) as client:
         result = await client.call_tool(
             "query_knowledge_base", {"question": "Who designed the protocol?"}
         )
@@ -97,8 +97,8 @@ async def test_query_returns_answer_and_sources_without_context(cfg, fake_rag):
     assert fake_rag.initialized == fake_rag.finalized == 1
 
 
-async def test_query_with_context_returns_chunks(cfg, fake_rag):
-    async with Client(create_server(cfg), raise_exceptions=True) as client:
+async def test_query_with_context_returns_chunks(cfg, deps, fake_rag):
+    async with Client(create_server(cfg, deps=deps), raise_exceptions=True) as client:
         result = await client.call_tool(
             "query_knowledge_base",
             {"question": "Who designed the protocol?", "include_context": True},

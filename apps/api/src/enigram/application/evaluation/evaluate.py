@@ -1,24 +1,28 @@
 """Score `golden answer` files against blind labels and write the evaluation report.
 
 Answering and labelling come first (`golden answer`, `golden blind`, labelling, `golden
-unblind`); this scores what exists. With `judge=True` Ragas and the LLM claim judge also grade
-every answer (Phase 7)."""
+unblind`); this scores what exists. With `judge=True` Ragas, the LLM claim judge and the decision
+claim judge (Phase 3) also grade every answer, both claim judges on the same contexts (Phase 7)."""
 
 import json
 import logging
 import math
 import subprocess
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from enigram.application.agent_loop import READ_MAX_LINES
+from enigram.application.decisions import STATE_MAX_CHARS, clip
 from enigram.application.evaluation.blind import key_path, load_answers, read_blind_labels
 from enigram.application.evaluation.citations import (
     check_answers,
     citations_path,
+    file_lines,
     sentences_without_citation,
 )
 from enigram.application.evaluation.claims import read_labelled_claims
@@ -28,16 +32,21 @@ from enigram.application.evaluation.golden import (
     CATEGORIES,
     INJECTION,
     UNANSWERABLE,
+    GoldenRepo,
+    checkout_pinned,
 )
+from enigram.application.evaluation.golden_run import AGENT_SYSTEMS
 from enigram.application.evaluation.judges import (
     JUDGE_TEMPERATURE,
     judge_abstention,
+    judge_claims_decision,
     judge_claims_llm,
 )
 from enigram.application.files import atomic_write_text
-from enigram.application.ports import AnswerScorer, ChatModel, Deps
+from enigram.application.ports import AnswerScorer, ChatModel, DecisionProvider, Deps
 from enigram.config import Config
 from enigram.domain import stats
+from enigram.domain.decision import AUTO_ACCEPT
 from enigram.domain.errors import EnigramError
 from enigram.domain.normalize import normalize_answer
 
@@ -50,6 +59,7 @@ METRICS = (
     "context_recall",
     "context_precision",
     "claim_faithfulness_llm",
+    "claim_faithfulness_decision",
 )
 # PRD Phase 1 success signal and kill criteria.
 PHASE1_DEV_QUESTIONS = 10
@@ -112,31 +122,99 @@ async def _score_abstention(judge: ChatModel, item: dict[str, Any]) -> None:
         item["score_errors"]["abstention"] = "judge gave no verdict"
 
 
-async def _score_item(judge: ChatModel, scorer: AnswerScorer, item: dict[str, Any]) -> None:
-    contexts = [c["text"] for c in item["chunks"]]
+def _claim_contexts(item: dict[str, Any], root: Path | None) -> list[str]:
+    """What both claim judges grade against: the retrieved chunks, or, for an agent answer with
+    the pinned clone at `root`, the cited `file:start-end@sha` ranges read from it (numbered,
+    at most READ_MAX_LINES lines each, STATE_MAX_CHARS in all) plus one line per cited note."""
+    if root is None or item.get("mode") not in AGENT_SYSTEMS:
+        # STATE_MAX_CHARS in all, like the agent branch: over Jev's per-question limit it fails
+        # and the fallback silently answers instead.
+        contexts, total = [], 0
+        for c in item["chunks"]:
+            text = clip(c["text"], STATE_MAX_CHARS - total)
+            if total >= STATE_MAX_CHARS or not text:
+                break
+            contexts.append(text)
+            total += len(text)
+        return contexts
+    root = root.resolve()
+    cache: dict[str, list[str] | None] = {}
+    contexts: list[str] = []
+    total = 0
+    seen: set[tuple[str, int, int]] = set()
+    for c in item.get("citations") or []:
+        key = (c.get("file") or "", int(c.get("start") or 0), int(c.get("end") or 0))
+        if not key[0] or key in seen:
+            continue
+        seen.add(key)
+        lines = file_lines(root, key[0], cache)
+        if lines is None:
+            continue
+        start = max(1, key[1])
+        end = min(len(lines), key[2] or start, start + READ_MAX_LINES - 1)
+        numbered = "\n".join(f"{n}: {lines[n - 1]}" for n in range(start, end + 1))
+        text = f"{key[0]}:{key[1]}-{key[2]}\n{numbered}"
+        if total + len(text) > STATE_MAX_CHARS:
+            break
+        contexts.append(text)
+        total += len(text)
+    for source in item.get("sources") or []:
+        if source.get("origin") == "human" and source.get("title"):
+            contexts.append(str(source["title"]))
+    return contexts
+
+
+async def _score_item(
+    judge: ChatModel,
+    decider: DecisionProvider,
+    scorer: AnswerScorer,
+    item: dict[str, Any],
+    contexts: list[str],
+    used: Counter[str] | None = None,
+) -> None:
+    claims = item["claims"]
     evidence = {ev["chunk_id"] for ev in item["evidence"] if ev.get("chunk_id")}
     retrieved = [stats.doc_id(c["chunk_id"]) for c in item["chunks"]]
     scores, errors = await scorer.score(
         item["question"], item["answer"], contexts, item["ground_truth"]
     )
     try:
-        llm = await judge_claims_llm(judge, item["claims"], contexts)
+        llm = await judge_claims_llm(judge, claims, contexts)
     except Exception as e:  # noqa: BLE001 - a judge failure is reported, not fatal
-        llm = [None] * len(item["claims"])
+        llm = [None] * len(claims)
         errors["claim_faithfulness_llm"] = f"{type(e).__name__}: {e}"[:300]
+    try:
+        decision = await judge_claims_decision(decider, claims, contexts, used)
+    except Exception as e:  # noqa: BLE001 - a judge failure is reported, not fatal
+        decision = [(None, None, None)] * len(claims)
+        errors["claim_faithfulness_decision"] = f"{type(e).__name__}: {e}"[:300]
     grounded_share, judged, _ = stats.mean([None if v is None else float(v) for v in llm])
     if not judged and "claim_faithfulness_llm" not in errors:
         errors["claim_faithfulness_llm"] = "no claims judged"
+    decided_share, decided, _ = stats.mean(
+        [None if g is None else float(g) for g, _, _ in decision]
+    )
+    if not decided and "claim_faithfulness_decision" not in errors:
+        errors["claim_faithfulness_decision"] = "no claims judged"
     item["scores"] = {
         **scores,
         # Chunk-level recall needs chunk evidence: document golden sets only.
         "context_recall": stats.context_recall(evidence, retrieved),
         "context_precision": stats.context_precision(evidence, retrieved),
         "claim_faithfulness_llm": grounded_share,
+        "claim_faithfulness_decision": decided_share,
     }
     item["score_errors"] = errors
     item["claim_judgments"] = [
-        {"claim": c, "llm": v, "human": None} for c, v in zip(item["claims"], llm, strict=True)
+        {
+            "claim": c,
+            "llm": v,
+            "decision": g,
+            "decision_p": p,
+            "decision_confidence": conf,
+            "human": None,
+        }
+        for c, v, (g, p, conf) in zip(claims, llm, decision, strict=True)
     ]
 
 
@@ -280,11 +358,27 @@ def _judgments(runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
 def _agreement(judgments: list[dict[str, Any]], n_labels: int) -> dict[str, Any]:
     labelled = [j for j in judgments if j["human"] is not None]
     llm = [(j["llm"], j["human"]) for j in labelled if j["llm"] is not None]
+    decision = [(j["decision"], j["human"]) for j in labelled if j.get("decision") is not None]
+    scored = [(j["decision_p"], j["human"]) for j in labelled if j.get("decision_p") is not None]
+    ps, humans = [p for p, _ in scored], [h for _, h in scored]
     matched_keys = {(j["id"], j["claim"]) for j in labelled}
     return {
         "labelled_claims": len(labelled),
         "unmatched_labels": n_labels - len(matched_keys),
         "llm": {"n": len(llm), "accuracy": stats.accuracy(llm), "kappa": stats.cohen_kappa(llm)},
+        "decision": {
+            "n": len(decision),
+            "accuracy": stats.accuracy(decision),
+            "kappa": stats.cohen_kappa(decision),
+            "auroc": stats.auroc(ps, humans) if scored else None,
+            "cv": stats.cv_threshold(ps, humans),
+            "low_confidence": sum(
+                1
+                for j in labelled
+                if j.get("decision_confidence") is not None
+                and j["decision_confidence"] < AUTO_ACCEPT
+            ),
+        },
     }
 
 
@@ -615,6 +709,10 @@ def _metadata(
             "judge_temperature": JUDGE_TEMPERATURE,
             "judge_thinking": cfg.thinking_mode == "on",
             "ragas_version": _version("ragas"),
+            "decision_provider": cfg.decision_provider,
+            "decision_model": (
+                cfg.jev_model if cfg.decision_provider == "jev" else cfg.judge_model
+            ),
         },
         "golden": {
             "file": first.get("golden_file"),
@@ -624,6 +722,15 @@ def _metadata(
             "by_category": {c: sum(i["category"] == c for i in items) for c in CATEGORIES},
         },
     }
+
+
+def _providers(decision: dict[str, Any], models: dict[str, Any]) -> str:
+    """The providers that answered the decision claim judge with their call counts; the
+    configured one for a report written before they were recorded."""
+    used = decision.get("providers")
+    if not used:
+        return f"`{models['decision_provider']} {models['decision_model']}`"
+    return ", ".join(f"`{name}` ×{n}" for name, n in sorted(used.items()))
 
 
 def _load_runs(answer_files: list[Path]) -> dict[str, dict[str, Any]]:
@@ -654,20 +761,36 @@ async def _citations(
     return check_answers(cfg, Path(run["path"]), symbols_cache[key])
 
 
+def _pinned_root(cfg: Config, system: str, run: dict[str, Any]) -> Path | None:
+    """The pinned clone the claim contexts of an agent run are read from; None when the run has
+    no repository, is not an agent run, or the clone fails (the chunks are used then)."""
+    if system not in AGENT_SYSTEMS or not run.get("repo"):
+        return None
+    try:
+        return checkout_pinned(cfg, GoldenRepo(**run["repo"]))
+    except EnigramError as e:
+        log.warning("[eval] %s: no pinned clone for claim contexts: %s", system, e)
+        return None
+
+
 async def _judge(
-    deps: Deps, runs: dict[str, dict[str, Any]], label_files: list[Path]
+    cfg: Config, deps: Deps, runs: dict[str, dict[str, Any]], label_files: list[Path]
 ) -> dict[str, Any]:
     human = read_labelled_claims(*label_files) if label_files else {}
     scorer = deps.answer_scorer()
     judge = deps.judge()
+    decider = deps.decider()
+    used: Counter[str] = Counter()
     for system, run in runs.items():
+        root = _pinned_root(cfg, system, run)
         for i, item in enumerate(run["items"], 1):
             if item.get("error"):
                 continue
             t = time.perf_counter()
-            # Ragas and the claim judge grade answers to answerable questions only.
+            # Ragas and the claim judges grade answers to answerable questions only.
             if item["category"] != UNANSWERABLE:
-                await _score_item(judge, scorer, item)
+                contexts = _claim_contexts({**item, "mode": system}, root)
+                await _score_item(judge, decider, scorer, item, contexts, used)
             await _score_abstention(judge, item)
             for j in item.get("claim_judgments", []):
                 j["human"] = human.get((item["id"], j["claim"]))
@@ -679,7 +802,9 @@ async def _judge(
                 len(run["items"]),
                 time.perf_counter() - t,
             )
-    return _agreement(_judgments(runs), len(human))
+    agreement = _agreement(_judgments(runs), len(human))
+    agreement["decision"]["providers"] = dict(used)  # who answered, not who was configured
+    return agreement
 
 
 async def run_eval(
@@ -702,7 +827,7 @@ async def run_eval(
             item["abstained"] = None if item.get("error") else not item.get("found", True)
             item.setdefault("score_errors", {})
 
-    agreement = await _judge(deps, runs, label_files) if judge else None
+    agreement = await _judge(cfg, deps, runs, label_files) if judge else None
     symbols_cache: dict = {}
     systems = {}
     for system, run in runs.items():
@@ -869,18 +994,30 @@ def render_markdown(data: dict[str, Any]) -> str:
     lines += ["", "## Judge agreement", ""]
     agreement = data["agreement"]
     if agreement is None:
-        lines.append("Not run (pass `--judge` for Ragas and the LLM claim judge).")
+        lines.append(
+            "Not run (pass `--judge` for Ragas, the LLM claim judge and the decision judge)."
+        )
     else:
         lines += _metric_table({system: s["overall"] for system, s in systems.items()})
+        decision = agreement["decision"]
+        models = meta["models"]
         lines += [
             "",
             f"Labelled claims matched: {agreement['labelled_claims']}; labels not matched to any "
             f"claim: {agreement['unmatched_labels']}",
             "",
-            "| Judge | n | Accuracy | Cohen's κ |",
-            "|---|---|---|---|",
-            f"| LLM claim judge (`{meta['models']['judge']}`) | {agreement['llm']['n']} "
-            f"| {_fmt(agreement['llm']['accuracy'])} | {_fmt(agreement['llm']['kappa'])} |",
+            "| Judge | n | Accuracy | Cohen's κ | AUROC |",
+            "|---|---|---|---|---|",
+            f"| LLM claim judge (`{models['judge']}`) | {agreement['llm']['n']} "
+            f"| {_fmt(agreement['llm']['accuracy'])} | {_fmt(agreement['llm']['kappa'])} | — |",
+            f"| Decision claim judge ({_providers(decision, models)}) "
+            f"| {decision['n']} | {_fmt(decision['accuracy'])} | {_fmt(decision['kappa'])} "
+            f"| {_fmt(decision['auroc'])} |",
+            "",
+            f"Decision judge: CV threshold {_fmt(decision['cv']['threshold'])} (accuracy "
+            f"{_fmt(decision['cv']['accuracy'])}, κ {_fmt(decision['cv']['kappa'])}"
+            f"{', ' + decision['cv']['reason'] if decision['cv'].get('reason') else ''}); "
+            f"{decision['low_confidence']} verdicts below confidence {AUTO_ACCEPT}.",
         ]
     lines += ["", "## Failures", ""]
     if data["failures"]:
@@ -919,7 +1056,8 @@ def render_markdown(data: dict[str, Any]) -> str:
     if meta["judge_run"]:
         lines += [
             f"- Judge `{models['judge']}` (temperature {models['judge_temperature']}, thinking "
-            f"{'on' if models['judge_thinking'] else 'off'}), ragas {models['ragas_version']}",
+            f"{'on' if models['judge_thinking'] else 'off'}), ragas {models['ragas_version']}; "
+            f"decision provider `{models['decision_provider']}` (`{models['decision_model']}`)",
             (
                 "- **The same model generates and judges answers**; set JUDGE_MODEL to a "
                 "different model."

@@ -33,7 +33,12 @@ from enigram.application.evaluation.golden import (
     checkout_pinned,
 )
 from enigram.application.files import atomic_write_text, file_sha256
-from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps
+from enigram.application.ports import (
+    AnnotationRepository,
+    CodeGraphRepository,
+    DecisionProvider,
+    Deps,
+)
 from enigram.config import Config
 from enigram.domain.annotation import Annotation
 from enigram.domain.answer import QUERY_MODES, QueryResult, Source
@@ -274,19 +279,22 @@ async def _setup_annotation(
     notes: AnnotationRepository,
     repo: dict[str, Any],
     setup: dict[str, Any],
+    decider: DecisionProvider | None = None,
 ) -> Annotation:
-    """The question's annotation, created once (same target and text are reused); `conflict:
-    true` marks it as conflicting with the code."""
+    """The question's annotation, created once (same target and text are reused); a `conflict`
+    key is a manual override, without one the decider decides on creation."""
     symbol = await resolve_symbol(graph, repo["id"], str(setup["target"]))
     text = str(setup["text"]).strip()
     existing = await notes.list(target_kind="symbol", repo_id=repo["id"], target_ref=symbol.id)
     note = next((n for n in existing if n.text == text), None)
     if note is None:
         new = NewAnnotation("symbol", symbol.id, text, repo_id=repo["id"], by="golden set")
-        note = await create_annotation(cfg, graph, notes, new, GOLDEN_ACTOR)
-    if bool(setup.get("conflict")) != note.conflict:
-        changes = {"conflict": bool(setup.get("conflict"))}
-        note = await change_annotation(cfg, graph, notes, note.id, changes, GOLDEN_ACTOR)
+        note = await create_annotation(cfg, graph, notes, new, GOLDEN_ACTOR, decider=decider)
+    if "conflict" in setup and bool(setup["conflict"]) != note.conflict:
+        changes = {"conflict": bool(setup["conflict"])}
+        note = await change_annotation(
+            cfg, graph, notes, note.id, changes, GOLDEN_ACTOR, decider=decider
+        )
     return note
 
 
@@ -301,10 +309,11 @@ async def _answer_enigram_agent(
         repo = await _pinned_repo(graph, repo_spec)
         notes = await deps.new_annotations(store)
         chat = deps.generator()
+        decider = deps.decider()
 
         async def answer(q: GoldenQuestion) -> QueryResult:
             if setup := q.setup.get("annotation"):
-                await _setup_annotation(cfg, graph, notes, repo, setup)
+                await _setup_annotation(cfg, graph, notes, repo, setup, decider)
             return await answer_with_agent(
                 cfg,
                 chat,
@@ -315,6 +324,7 @@ async def _answer_enigram_agent(
                 cache_dir=cfg.eval_dir / "enigram-agent-cache",
                 model=cfg.llm_model,
                 notes=notes,
+                decider=decider,
             )
 
         return await answer_golden(answer, questions, "enigram-agent")
@@ -378,10 +388,11 @@ async def run_golden(
         from enigram.application.querying import answer_question
 
         # One LightRAG for the whole run: a second one in this process would share its state.
+        decider = deps.decider()
         async with deps.open_engine() as engine:
 
             async def answer(q: GoldenQuestion) -> QueryResult:
-                return await answer_question(engine, q.question, system)
+                return await answer_question(engine, q.question, system, decider=decider)
 
             items, failed = await answer_golden(answer, questions, system)
     answers_path, labels_path = write_golden_run(cfg, golden_path, system, items, repo=golden.repo)

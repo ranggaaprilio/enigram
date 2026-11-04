@@ -373,6 +373,58 @@ async def test_check_providers_probes_completion_json_and_embedding(cfg, monkeyp
     assert result.json_mode_ok and result.embed_dim == 1024
     assert result.embed_model == "voyage-4-lite"
     assert result.models == ["deepseek-flash", "deepseek-v4-pro"]
+    assert result.decision == "llm_judge (deepseek-flash)"
+
+
+async def test_check_providers_includes_decision(cfg, clean_env, monkeypatch):
+    monkeypatch.setenv("DECISION_PROVIDER", "jev")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-key-not-real")
+    cfg = Config.from_env(clean_env)
+    checked = []
+
+    async def fake_models(name, base_url, api_key):
+        return ["deepseek-flash", "deepseek-v4-pro"]
+
+    async def fake_complete(model, prompt, **kwargs):
+        return '{"status": "ok"}'
+
+    async def fake_check_jev(cfg):
+        checked.append(cfg.jev_model)
+        return "jev (jev-latest)"
+
+    monkeypatch.setattr(openai_llm, "_list_models", fake_models)
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    monkeypatch.setattr(openai_llm, "check_jev", fake_check_jev)
+    monkeypatch.setattr(voyage_embedding, "_client", lambda cfg: FakeVoyage())
+
+    result = await openai_llm.check_providers(cfg)
+
+    assert result.decision == "jev (jev-latest)" and checked == ["jev-latest"]
+
+
+def test_config_decision_provider_defaults_and_requires_key(cfg, clean_env, monkeypatch):
+    assert (cfg.decision_provider, cfg.jev_api_key, cfg.jev_model) == (
+        "llm_judge",
+        "",
+        "jev-latest",
+    )
+    assert cfg.jev_base_url == "https://api.typesafe.ai/v1"
+
+    monkeypatch.setenv("DECISION_PROVIDER", "jev")
+    with pytest.raises(EnigramError, match="TYPESAFE_API_KEY"):
+        Config.from_env(clean_env)
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-key-not-real")
+    monkeypatch.setenv("JEV_MODEL", "jev-1.14.0")
+    monkeypatch.setenv("JEV_BASE_URL", "https://jev.example.test/v1/")
+    loaded = Config.from_env(clean_env)
+    assert (loaded.decision_provider, loaded.jev_model) == ("jev", "jev-1.14.0")
+    assert loaded.jev_base_url == "https://jev.example.test/v1"
+    assert "ts-key-not-real" not in repr(loaded)
+
+    monkeypatch.setenv("DECISION_PROVIDER", "laya")
+    with pytest.raises(EnigramError, match="DECISION_PROVIDER"):
+        Config.from_env(clean_env)
 
 
 def test_config_rejects_unknown_storage_backend(cfg, clean_env, monkeypatch):
@@ -442,3 +494,29 @@ async def test_llm_func_passes_a_tracker_that_records_usage(cfg, monkeypatch):
         assert await openai_llm.make_llm_func(cfg)("hello") == "ok"
         assert await openai_llm.OpenAIChatModel(cfg).complete("hello") == "ok"
     assert meter.total == 20
+
+
+async def test_check_providers_survives_a_jev_outage(cfg, clean_env, monkeypatch):
+    from enigram.domain.errors import ProviderUnavailableError
+
+    monkeypatch.setenv("DECISION_PROVIDER", "jev")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-key-not-real")
+    cfg = Config.from_env(clean_env)
+
+    async def fake_models(name, base_url, api_key):
+        return ["deepseek-flash", "deepseek-v4-pro"]
+
+    async def fake_complete(model, prompt, **kwargs):
+        return '{"status": "ok"}'
+
+    async def jev_down(cfg):
+        raise ProviderUnavailableError("Cannot reach jev")
+
+    monkeypatch.setattr(openai_llm, "_list_models", fake_models)
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    monkeypatch.setattr(openai_llm, "check_jev", jev_down)
+    monkeypatch.setattr(voyage_embedding, "_client", lambda cfg: FakeVoyage())
+
+    result = await openai_llm.check_providers(cfg)
+
+    assert result.decision == (f"llm_judge ({cfg.judge_model}); jev unavailable: Cannot reach jev")

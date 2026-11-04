@@ -26,7 +26,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser(
-        "check", help="verify the DeepSeek and Voyage endpoints, thinking mode and embedding dim"
+        "check",
+        help="verify the DeepSeek, Voyage and decision endpoints, thinking mode and embedding dim",
     )
 
     index = sub.add_parser("index", help="parse PDF/Markdown files and build the LightRAG graph")
@@ -193,6 +194,7 @@ async def _check(cfg: Config) -> int:
     print(f"✓ completion {result.completion_secs:.1f}s (thinking_mode={cfg.thinking_mode})")
     print("✓ JSON mode works" if result.json_mode_ok else "✗ JSON mode failed (see log)")
     print(f"✓ voyage {result.embed_model} dim {result.embed_dim}")
+    print(f"{'✗' if 'jev unavailable' in result.decision else '✓'} decision {result.decision}")
     return 0 if result.json_mode_ok else 1
 
 
@@ -229,7 +231,14 @@ async def _query_code(cfg: Config, question: str, url: str | None) -> int:
         graph = await deps.new_code_graph(store)
         notes = await deps.new_annotations(store)
         result = await answer_with_agent(
-            cfg, deps.generator(), graph, question, repo_url=url, model=cfg.llm_model, notes=notes
+            cfg,
+            deps.generator(),
+            graph,
+            question,
+            repo_url=url,
+            model=cfg.llm_model,
+            notes=notes,
+            decider=deps.decider(),
         )
     finally:
         await store.close()
@@ -257,7 +266,9 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
     try:
         notes = await deps.new_annotations(store) if store else None
         async with deps.open_engine() as engine:
-            result = await answer_question(engine, args.question, args.mode, notes=notes)
+            result = await answer_question(
+                engine, args.question, args.mode, notes=notes, decider=deps.decider()
+            )
     finally:
         if store:
             await store.close()

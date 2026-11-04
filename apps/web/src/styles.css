@@ -271,6 +271,41 @@ td.truncate {
   color: var(--error);
 }
 
+/* Per-sentence origin badges in answers (domain/origin.py) */
+.badge {
+  display: inline-block;
+  margin-left: 0.25em;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-variant: small-caps;
+  line-height: 1.4;
+  vertical-align: baseline;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.badge-code {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.badge-summary,
+.badge-document {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.badge-human {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.badge-unsupported {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
 .ask-form textarea {
   display: block;
   width: 100%;

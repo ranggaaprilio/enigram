@@ -43,7 +43,8 @@ class CitationCheck:
         )
 
 
-def _file_lines(root: Path, rel: str, cache: dict[str, list[str] | None]) -> list[str] | None:
+def file_lines(root: Path, rel: str, cache: dict[str, list[str] | None]) -> list[str] | None:
+    """The lines of a file inside the clone, None when it is missing or escapes the root."""
     if rel not in cache:
         path = root / rel
         ok = (
@@ -72,7 +73,7 @@ def check_item(
             checks.append(CitationCheck(text, False, False, False, None, "no source with that [n]"))
             continue
         sha_ok = bool(c["sha"]) and pinned_sha.startswith(c["sha"])
-        lines = _file_lines(root, c["file"], cache)
+        lines = file_lines(root, c["file"], cache)
         exists = lines is not None
         in_file = exists and 1 <= c["start"] <= c["end"] <= len(lines)
         symbol_ok: bool | None = None

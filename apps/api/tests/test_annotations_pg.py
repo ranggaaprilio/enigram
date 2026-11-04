@@ -134,3 +134,15 @@ async def test_workspaces_are_isolated(notes, pool):
     assert await other.get(a.id) is None
     assert await other.list() == []
     assert await other.events(a.id) == []
+
+
+async def test_update_records_a_key_that_is_no_column_in_the_event_only(notes):
+    a = await notes.create(_symbol_note(), "web")
+
+    changes = {"conflict": True, "p": 0.95}
+    changed = await notes.update(a.id, changes, "decider", "conflict_detected")
+
+    assert changed.conflict is True
+    event = (await notes.events(a.id))[-1]
+    assert (event.actor, event.action) == ("decider", "conflict_detected")
+    assert (event.old, event.new) == ({"conflict": False}, {"conflict": True, "p": 0.95})

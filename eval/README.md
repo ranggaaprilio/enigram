@@ -158,7 +158,12 @@ latency, tool calls) and gives the Phase-1 criteria a verdict. With an `enigram-
 file it also scores the Phase-1b criteria (`phase1b_dev_accuracy` ≥ 9/10,
 `phase1b_not_worse_than_agent`, `phase1b_cheaper_than_agent` = mean input tokens against
 `agent+repo` on the same labelled dev questions, `phase1b_citations_valid`) and adds an "Agent
-diagnostics" table. `--judge` adds Ragas and the LLM claim judge.
+diagnostics" table. `--judge` adds Ragas and both claim judges: the LLM claim judge and the
+decision claim judge (Phase 3, `claim_relation` on Jev or its DeepSeek fallback). Both grade the
+same contexts (for agent answers, the cited line ranges read from the pinned clone) and are
+compared on the same human claim labels (κ, accuracy, and AUROC for the decision judge). With
+fewer than 60 labelled claims the comparison is informative only; Phase 7 decides which judge
+counts.
 
 Normalization removes `[n]` citations, `file:line@sha` citations, `note#N` citations, headings,
 the References section, emphasis and the origin tags. Since Phase 2 answers render a sentence's
@@ -230,7 +235,9 @@ tools. Code: `application/code_agent.py`.
   question. Violations come back to the model as text.
 - Output: like `agent+repo` plus `diagnostics` per item: `graph_first` (the first tool was a
   graph tool), `graph_hits`, `read_calls`, `reads_on_graph_lines` (reads of a file a graph result
-  named), `repos_touched`, `turns` (model calls). Cached per (`AGENT_VERSION`, question,
+  named), `repos_touched`, `turns` (model calls), and the abstain guard's verdict
+  (`extra.abstain_guard`, Phase 3). `AGENT_VERSION` 3.0 (the guard is part of the system)
+  invalidates answers cached before Phase 3. Cached per (`AGENT_VERSION`, question,
   indexed shas, repo, model) in
   `data/eval/enigram-agent-cache/`.
 - Citations stay `file:start-end@sha12` inline (no repository prefix): the sha identifies the

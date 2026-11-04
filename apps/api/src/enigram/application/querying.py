@@ -3,9 +3,10 @@
 import dataclasses
 import logging
 
+from enigram.application.abstain import guard_abstain
 from enigram.application.annotations import attach_notes, notes_prompt
-from enigram.application.ports import AnnotationRepository, KnowledgeEngine
-from enigram.domain.annotation import note_source, parse_note_citations
+from enigram.application.ports import AnnotationRepository, DecisionProvider, KnowledgeEngine
+from enigram.domain.annotation import Annotation, note_source, parse_note_citations
 from enigram.domain.answer import NO_ANSWER_MARKER, QUERY_MODE, QUERY_MODES, QueryResult
 from enigram.domain.errors import EnigramError
 
@@ -26,6 +27,16 @@ NO_ANSWER_RULE = (
 )
 
 
+def _evidence(result: QueryResult, notes: list[Annotation]) -> str:
+    """Everything the answer LLM was given, in its precedence order: the team notes put into the
+    instructions, the graph entities and relations, then the chunks."""
+    parts = [f"Team note: {n.text}" for n in notes]
+    parts += [f"{e.name} ({e.type}): {e.description}" for e in result.entities]
+    parts += [f"{r.source} -> {r.target}: {r.description}" for r in result.relations]
+    parts += [c.text for c in result.chunks]
+    return "\n\n".join(p for p in parts if p.strip())
+
+
 async def answer_question(
     engine: "KnowledgeEngine",
     question: str,
@@ -33,10 +44,12 @@ async def answer_question(
     user_prompt: str | None = PRECEDENCE,
     *,
     notes: AnnotationRepository | None = None,
+    decider: DecisionProvider | None = None,
 ) -> QueryResult:
     """The engine's answer with origin tags; with `notes`, the entity and document notes the
     question names or shares words with go into the instructions, and a cited one becomes a
-    human source (with a warning line when it is not plainly verified)."""
+    human source (with a warning line when it is not plainly verified); with `decider`, the
+    abstain guard judges the answer against the notes, entities, relations and chunks it had."""
     if mode not in QUERY_MODES:
         raise EnigramError(f"mode must be one of {QUERY_MODES}, got {mode!r}")
     # The no-answer rule is always on.
@@ -52,6 +65,7 @@ async def answer_question(
         extra = [note_source(start + k, n) for k, n in enumerate(cited.values())]
         result = dataclasses.replace(result, sources=[*result.sources, *extra])
     result = attach_notes(result, cited)
+    result = await guard_abstain(decider, result, _evidence(result, found))
     log.info(
         "[query] %s: %d sources, %d chunks (%.1fs)",
         mode,

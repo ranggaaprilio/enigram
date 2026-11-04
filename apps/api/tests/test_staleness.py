@@ -268,3 +268,72 @@ async def test_fixture_commits(cfg, deps, tmp_path):
         "orphaned",
         (),
     )
+
+
+async def test_staleness_hash_flag_runs_conflict_check(cfg):
+    from code_fakes import FakeDecider, noul
+
+    graph, notes, note = await _setup(cfg)
+    graph.graphs[1] = _swap(graph.graphs[1], SERVICE, body_hash="changed", body="find() {}")
+    decider = FakeDecider({"conflict": noul(0.9)})
+
+    counts = await check_repo(graph, notes, 1, "sha", decider)
+
+    flagged = await notes.get(note.id)
+    assert (counts["flagged_hash"], counts["conflicts"], counts["conflicts_cleared"]) == (1, 1, 0)
+    assert (flagged.status, flagged.reason) == ("needs_verification", "hash")
+    assert flagged.conflict is True
+    assert [(e.actor, e.action) for e in await notes.events(note.id)][-2:] == [
+        ("worker", "flagged"),
+        ("decider", "conflict_detected"),
+    ]
+    assert decider.calls[0][0]["code"][SERVICE] == "find() {}"
+
+
+async def test_staleness_deps_flag_clears_a_conflict(cfg):
+    from code_fakes import FakeDecider, noul
+
+    graph, notes, note = await _setup(cfg)
+    await notes.update(note.id, {"conflict": True}, "bob", "conflict")
+    graph.graphs[1] = _swap(graph.graphs[1], HELPER, body_hash="changed")
+
+    counts = await check_repo(graph, notes, 1, "sha", FakeDecider({"conflict": noul(0.05)}))
+
+    assert (counts["flagged_deps"], counts["conflicts_cleared"]) == (1, 1)
+    assert (await notes.get(note.id)).conflict is False
+
+
+async def test_staleness_unchanged_note_skips_decider(cfg):
+    from code_fakes import FakeDecider, noul
+
+    graph, notes, _ = await _setup(cfg)
+    decider = FakeDecider({"conflict": noul(0.9)})
+
+    counts = await check_repo(graph, notes, 1, "sha", decider)
+
+    assert counts["unchanged"] == 1 and counts["conflicts"] == 0 and decider.calls == []
+
+
+async def test_staleness_already_flagged_note_is_not_rechecked(cfg):
+    from code_fakes import FakeDecider, noul
+
+    graph, notes, _ = await _setup(cfg)
+    graph.graphs[1] = _swap(graph.graphs[1], SERVICE, body_hash="changed")
+    await check_repo(graph, notes, 1, "sha")
+    decider = FakeDecider({"conflict": noul(0.9)})
+
+    counts = await check_repo(graph, notes, 1, "sha2", decider)
+
+    assert counts["unchanged"] == 1 and decider.calls == []
+
+
+async def test_staleness_decider_failure_is_not_an_error(cfg):
+    from code_fakes import FakeDecider
+
+    graph, notes, note = await _setup(cfg)
+    graph.graphs[1] = _swap(graph.graphs[1], SERVICE, body_hash="changed")
+
+    counts = await check_repo(graph, notes, 1, "sha", FakeDecider(error="down"))
+
+    assert (counts["flagged_hash"], counts["errors"], counts["conflicts"]) == (1, 0, 0)
+    assert (await notes.get(note.id)).conflict is False

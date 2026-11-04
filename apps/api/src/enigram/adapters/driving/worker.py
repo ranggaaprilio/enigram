@@ -9,7 +9,13 @@ from datetime import UTC, datetime
 from enigram.application.budget import daily_exhausted
 from enigram.application.graph_edits import GRAPH_JOB_KINDS, apply_graph_job
 from enigram.application.indexing import delete_document, run_index
-from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps, JobRepository
+from enigram.application.ports import (
+    AnnotationRepository,
+    CodeGraphRepository,
+    DecisionProvider,
+    Deps,
+    JobRepository,
+)
 from enigram.application.repo_sync import delete_repo_job, index_repo, remote_head
 from enigram.application.staleness import expire_verify_by
 from enigram.bootstrap import build_deps
@@ -63,12 +69,15 @@ async def _run_repo_job(
     job: Job,
     graph: CodeGraphRepository | None,
     notes: AnnotationRepository | None = None,
+    decider: DecisionProvider | None = None,
 ) -> Job:
     url = job.payload["url"]
     trigger = job.payload.get("trigger", "manual")
     log.info("[worker] job %d: indexing repository %s (%s)", job.id, url, trigger)
     try:
-        result = await index_repo(cfg, deps, url, job.payload.get("ref"), graph=graph, notes=notes)
+        result = await index_repo(
+            cfg, deps, url, job.payload.get("ref"), graph=graph, notes=notes, decider=decider
+        )
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
         await store.finish(job.id, "failed", error=str(e))
@@ -144,9 +153,11 @@ async def process_next(
     deps: Deps,
     graph: CodeGraphRepository | None = None,
     notes: AnnotationRepository | None = None,
+    decider: DecisionProvider | None = None,
 ) -> Job | None:
     """Claim and run one job; None when the queue is empty. `graph` is the code graph that
-    repository jobs fill, `notes` the annotations they check. A job stops with status
+    repository jobs fill, `notes` the annotations they check, `decider` the decision layer
+    that checks flagged notes for conflicts. A job stops with status
     budget_exceeded when the daily budget is already used up or it crosses MAX_TOKENS_PER_JOB;
     re-queue it by hand once the budget allows."""
     job = await store.claim()
@@ -158,7 +169,7 @@ async def process_next(
         return job
     with metered(cfg.max_tokens_per_job, f"job {job.id}") as meter:
         try:
-            job = await _dispatch(cfg, store, deps, job, graph, notes)
+            job = await _dispatch(cfg, store, deps, job, graph, notes, decider)
         finally:
             if meter.total:
                 await store.add_tokens(f"job:{job.kind}", job.payload.get("api_key"), meter.total)
@@ -177,9 +188,10 @@ async def _dispatch(
     job: Job,
     graph: CodeGraphRepository | None,
     notes: AnnotationRepository | None,
+    decider: DecisionProvider | None = None,
 ) -> Job:
     if job.kind == "index_repo":
-        return await _run_repo_job(cfg, store, deps, job, graph, notes)
+        return await _run_repo_job(cfg, store, deps, job, graph, notes, decider)
     if job.kind == "delete_repo":
         return await _run_delete_repo_job(cfg, store, job, graph, notes)
     if job.kind == "delete_document":
@@ -230,6 +242,7 @@ async def run_worker(cfg: Config) -> None:
     try:
         graph = await deps.new_code_graph(store)
         notes = await deps.new_annotations(store)
+        decider = deps.decider()
         async with store.worker_lock():
             # Safe under the lock: no other worker can be running these.
             if requeued := await store.requeue_running():
@@ -237,7 +250,7 @@ async def run_worker(cfg: Config) -> None:
             log.info("[worker] waiting for jobs in workspace %r", cfg.workspace)
             last_poll = 0.0
             while True:
-                if await process_next(cfg, store, deps, graph, notes) is not None:
+                if await process_next(cfg, store, deps, graph, notes, decider) is not None:
                     continue
                 due = time.monotonic() - last_poll >= cfg.repo_poll_secs
                 if cfg.repo_poll_secs and due:

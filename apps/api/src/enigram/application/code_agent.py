@@ -19,6 +19,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from enigram.application.abstain import PURPOSE as GUARD_PURPOSE
+from enigram.application.abstain import guard_abstain, tool_evidence
 from enigram.application.agent_loop import (
     AGENT_MAX_INPUT_TOKENS,
     AGENT_MAX_TOOL_CALLS,
@@ -35,6 +37,7 @@ from enigram.application.ports import (
     ChatModel,
     ChatReply,
     CodeGraphRepository,
+    DecisionProvider,
 )
 from enigram.application.repo_store import GitTools, store_path
 from enigram.application.repo_sync import check_repo_url
@@ -48,7 +51,7 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "2.0"  # bump when tool output or the prompt changes: busts the answer cache
+AGENT_VERSION = "3.0"  # bump when tool output, the prompt or the guard changes: busts the cache
 AGENT_MAX_REPOS = 3
 GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
@@ -506,7 +509,10 @@ async def answer_with_agent(
     model: str = "",
     open_git: Callable[[Path, str], Any] = GitTools,
     notes: AnnotationRepository | None = None,
+    decider: DecisionProvider | None = None,
 ) -> QueryResult:
+    """With `decider`, the abstain guard runs on the answer (part of the system: the guarded
+    answer is what gets cached)."""
     repos = await graph_repo.list_repos()
     if not repos:
         raise EnigramError("No repository indexed; run `enigram repo <url>`")
@@ -517,7 +523,11 @@ async def answer_with_agent(
         picked = f"{selected['url']}@{selected['ref'] or ''}" if selected else ""
         # A new, changed or re-verified note must change the answer.
         notes_version = await notes.version([r["id"] for r in repos]) if notes else ""
-        cache_key = f"{AGENT_VERSION}\n{question}\n{shas}\n{picked}\n{model}\n{notes_version}"
+        # The cached result is the guarded one, so the decider is part of the key.
+        guard = decider.name if decider else ""
+        cache_key = (
+            f"{AGENT_VERSION}\n{question}\n{shas}\n{picked}\n{model}\n{notes_version}\n{guard}"
+        )
         key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
         if path.exists():
@@ -554,6 +564,7 @@ async def answer_with_agent(
     )
     cited = set(parse_note_citations(result.answer))
     result = attach_notes(result, {i: n for i, n in tools.notes_seen.items() if i in cited})
+    result = await guard_abstain(decider, result, tool_evidence(messages))
     log.info(
         "[agent] enigram: %d tool calls, %d in / %d out tokens%s",
         loop.calls,
@@ -561,6 +572,10 @@ async def answer_with_agent(
         loop.tokens_out,
         " (budget exhausted)" if loop.exhausted else "",
     )
-    if path:
+    # A guard decision that failed is transient: do not cache the unguarded answer.
+    failed = any(
+        t.get("purpose") == GUARD_PURPOSE and "error" in t for t in result.extra["decisions"]
+    )
+    if path and not failed:
         atomic_write_text(path, json.dumps(asdict(result), ensure_ascii=False))
     return result

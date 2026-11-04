@@ -2,7 +2,7 @@ import hashlib
 import hmac
 
 import pytest
-from code_fakes import FakeAnnotations, FakeCodeGraph
+from code_fakes import FakeAnnotations, FakeCodeGraph, FakeDecider
 from fastapi.testclient import TestClient
 from test_query import FakeRag
 from test_server import FakeMemoryStore
@@ -47,6 +47,7 @@ def _deps(cfg, store, built):
 
     deps.open_store, deps.new_memory, deps.new_code_graph = open_store, new_memory, new_code_graph
     deps.new_annotations = new_annotations
+    deps.decider = FakeDecider
     return deps
 
 
@@ -238,8 +239,9 @@ def test_query_scope_code_uses_the_agent(env, monkeypatch):
     client, store, rag, _ = env
     seen = {}
 
-    async def fake_agent(cfg, chat, graph, question, *, repo_url, model, notes):
+    async def fake_agent(cfg, chat, graph, question, *, repo_url, model, notes, decider):
         seen.update(graph=graph, question=question, repo_url=repo_url, model=model, notes=notes)
+        seen["decider"] = decider
         return QueryResult(question, "Only admins src/a.ts:1-2@abc1234.", [], [], mode=AGENT_MODE)
 
     monkeypatch.setattr(api, "answer_with_agent", fake_agent)
@@ -250,6 +252,7 @@ def test_query_scope_code_uses_the_agent(env, monkeypatch):
     assert response.status_code == 200 and response.json()["mode"] == "enigram-agent"
     assert isinstance(seen["graph"], FakeCodeGraph) and seen["repo_url"] == body["repo"]
     assert isinstance(seen["notes"], FakeAnnotations)
+    assert isinstance(seen["decider"], FakeDecider)
     assert rag.params == []  # the document index is not asked
     assert store.queries[0]["mode"] == "enigram-agent"
 
@@ -914,3 +917,38 @@ def test_webhook_answers_429_when_the_daily_budget_is_gone(notes_env):
     response = client.post("/repos/1/webhook", content=body, headers=_signed(body, secret))
 
     assert response.status_code == 429 and store.jobs == []
+
+
+def test_api_query_and_patch_forward_the_decider(notes_env, monkeypatch):
+    from code_fakes import noul
+
+    build = notes_env[4]
+    web = _bearer(WEB_KEY)
+    monkeypatch.setattr(FakeDecider, "__init__", _decider_init(noul(0.95)))
+    with build() as client:  # the app builds its decider at startup
+        _query_and_verify(client, web)
+
+
+def _query_and_verify(client, web):
+    answered = client.post("/query", json={"question": "Who designed the protocol?"}, headers=web)
+    assert answered.status_code == 200
+    assert answered.json()["extra"]["abstain_guard"] == {"answerable": 0.95, "action": "none"}
+
+    body = {**SYMBOL_NOTE, "owner": "laptop-a"}
+    note = client.post("/annotations", json=body, headers=web).json()
+    assert (note["status"], note["conflict"]) == ("proposed", False)
+    path = f"/annotations/{note['id']}"
+    verified = client.patch(path, json={"status": "verified"}, headers=_bearer(LAPTOP_KEY))
+    assert verified.status_code == 200 and verified.json()["conflict"] is True
+    events = client.get(path, headers=web).json()["events"]
+    assert (events[-1]["actor"], events[-1]["action"]) == ("decider", "conflict_detected")
+    assert events[-1]["new"]["p"] == 0.95
+
+
+def _decider_init(answer):
+    original = FakeDecider.__init__
+
+    def init(self, answers=None, default=None, error=None):
+        original(self, answers, answer, error)
+
+    return init

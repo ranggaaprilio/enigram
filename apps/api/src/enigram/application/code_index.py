@@ -12,7 +12,13 @@ from typing import Any
 
 from enigram.application.code_changes import affected_files, diff_files, symbol_changes
 from enigram.application.code_summary import build_summaries
-from enigram.application.ports import AnnotationRepository, CodeGraphRepository, Deps, ParsedGraph
+from enigram.application.ports import (
+    AnnotationRepository,
+    CodeGraphRepository,
+    DecisionProvider,
+    Deps,
+    ParsedGraph,
+)
 from enigram.application.staleness import check_repo
 from enigram.config import Config
 from enigram.domain.code import CodeFile
@@ -127,11 +133,13 @@ async def index_code(
     *,
     limit: int | None = None,
     notes: AnnotationRepository | None = None,
+    decider: DecisionProvider | None = None,
 ) -> dict[str, Any]:
     """Parse, store and summarise one checked-out repository; `limit` summarises only the first
     N entry points (a quick trial). Against the previous index: the file diff, the files that
-    import a changed one, the symbol changes, and (with `notes`) the staleness pass, which runs
-    before the summaries because those spend tokens and may fail."""
+    import a changed one, the symbol changes, and (with `notes`) the staleness pass (with
+    `decider`, also the conflict check of the flagged notes), which runs before the summaries
+    because those spend tokens and may fail."""
     start = time.perf_counter()
     files, loc = repo_limits(root)  # before the sidecar: a huge repository fails fast
     log.info("[code] %s: %d TypeScript files, %d lines", url, files, loc)
@@ -150,7 +158,7 @@ async def index_code(
     changes = symbol_changes(old_hashes, parsed.symbols)
     if previous:  # the first index is not a change
         await graph_repo.record_symbol_changes(repo_id, sha, changes)
-    staleness = await check_repo(graph_repo, notes, repo_id, sha) if notes else {}
+    staleness = await check_repo(graph_repo, notes, repo_id, sha, decider) if notes else {}
     summary = await build_summaries(cfg, deps.generator(), graph_repo, repo_id, sha, limit=limit)
     report = parsed.report
     result = {

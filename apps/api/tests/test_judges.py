@@ -2,6 +2,7 @@ import math
 from types import SimpleNamespace
 
 import pytest
+from code_fakes import FakeDecider, choice
 
 from enigram.adapters.driven import openai_llm
 from enigram.adapters.driven.openai_llm import OpenAIChatModel
@@ -115,6 +116,38 @@ async def test_abstention_judge(cfg, monkeypatch, reply, expected):
     prompt, kwargs = seen[0]
     assert "How many?" in prompt and "The paper does not say." in prompt
     assert kwargs["response_format"] == {"type": "json_object"}
+
+
+async def test_claim_judge_grounded_is_supports():
+    decider = FakeDecider(
+        {
+            "1": choice("supports", 0.9, supports=0.9, contradicts=0.05, says_nothing=0.05),
+            "2": choice("contradicts", 0.7, supports=0.2, contradicts=0.7, says_nothing=0.1),
+            "3": choice("says_nothing", 0.6, supports=0.3, contradicts=0.1, says_nothing=0.6),
+        }
+    )
+
+    verdicts = await judges.judge_claims_decision(decider, ["a b c d", "e f g h", "i j"], ["ctx"])
+
+    assert verdicts == [(True, 0.9, 0.9), (False, 0.2, 0.7), (False, 0.3, 0.6)]
+    ((state, ids),) = decider.calls  # one request per answer
+    assert ids == ["1", "2", "3"]
+    assert state == {"context": ["ctx"], "claims": {"1": "a b c d", "2": "e f g h", "3": "i j"}}
+
+
+async def test_claim_judge_empty_claims_and_missing_answers():
+    decider = FakeDecider({"1": choice("supports")})
+    assert await judges.judge_claims_decision(decider, [], ["ctx"]) == []
+    assert decider.calls == []
+
+    class Partial(FakeDecider):
+        async def decide(self, state, questions):
+            d = await super().decide(state, questions)
+            return type(d)({"1": d.answers["1"]}, d.provider, d.model, d.tokens_in, d.secs)
+
+    partial = Partial({"1": choice("supports")})
+    verdicts = await judges.judge_claims_decision(partial, ["a", "b"], [])
+    assert verdicts == [(True, 0.95, 0.95), (None, None, None)]
 
 
 async def test_ragas_scorer_isolates_failed_and_nan_metrics():

@@ -1,0 +1,28 @@
+# Questions the DecisionProvider answers (domain/decision.py). State keys are quoted with
+# backticks in the instructions, as Jev reads them literally; {claim} is filled with the state
+# key of one claim. The "true"/"false" criteria keys are quoted so YAML keeps them as strings.
+claim_relation:
+  type: choice
+  instructions: "How does `context` relate to `{claim}`?"
+  criteria:
+    supports: the context states the claim or directly implies it is true
+    contradicts: the context states the opposite of the claim or implies it is false
+    says_nothing: the context does not address the claim either way
+  threshold: 0.8   # confidence at or above = auto-accepted verdict (citation-check recipe)
+answerable:
+  type: noul
+  # Worded so that a "no, there is none" answer counts when the evidence shows where the thing
+  # would have to be. 9 probes on jev-1.14.0, 2026-11-04: absence questions 0.20-0.42 → 0.32-0.57,
+  # unanswerable ones 0.04-0.23; 0.25 splits them. Re-measure on the dev split.
+  instructions: "`evidence` is enough to answer `question`, including an answer that something is absent."
+  criteria:
+    "true": the evidence states what the question asks for, or it shows the whole code or text where the asked-for thing would have to appear, so its absence there answers the question
+    "false": the asked-for thing could live outside the evidence (configuration, middleware, another module or file), or the evidence only touches related things
+  threshold: 0.25  # abstain guard: P(true) at or below this replaces the answer (Jev only); 0 = guard off
+note_conflict:
+  type: noul
+  instructions: "`note` contradicts what `code` does."
+  criteria:
+    "true": the code does the opposite of what the note says or lacks what it says
+    "false": the note agrees with the code or the code does not address it
+  threshold: 0.8   # P(true) at or above = conflict; at or below 1 - threshold = no conflict

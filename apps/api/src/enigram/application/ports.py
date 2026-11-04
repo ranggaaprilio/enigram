@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from enigram.domain.answer import QueryResult
     from enigram.domain.chunk import ParsedBook
     from enigram.domain.code import CodeEdge, CodeEntrypoint, CodeFile, CodeSymbol, FlowSummary
+    from enigram.domain.decision import Decisions, Question
     from enigram.domain.job import Job
     from enigram.domain.memory import MemorySearch
 
@@ -162,7 +163,8 @@ class AnnotationRepository(Protocol):
         self, annotation_id: int, changes: dict[str, Any], actor: str, action: str
     ) -> "Annotation":
         """Apply `changes`, set updated_at, log one event with the old and new values of the
-        changed keys."""
+        changed keys; a key that is no annotation field (the decider's `p`) goes into the
+        event's `new` only."""
         ...
 
     async def events(self, annotation_id: int) -> list["AnnotationEvent"]: ...
@@ -251,6 +253,21 @@ class AnswerScorer(Protocol):
         self, question: str, answer: str, contexts: list[str], reference: str
     ) -> tuple[dict[str, float | None], dict[str, str]]:
         """Scores per metric (None when it failed) and the reason per failure."""
+        ...
+
+
+class DecisionProvider(Protocol):
+    """Calibrated small decisions (noul, choice, score) over one state; the questions are data
+    (application/decisions.yaml)."""
+
+    @property
+    def name(self) -> str:
+        """ "jev" | "llm_judge"."""
+        ...
+
+    async def decide(self, state: Any, questions: dict[str, "Question"]) -> "Decisions":
+        """Every question answered over the same state, with the provider, model, input tokens
+        and seconds of the call."""
         ...
 
 
@@ -395,4 +412,5 @@ class Deps:
     new_annotations: Callable[[JobRepository], Awaitable[AnnotationRepository]]
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
+    decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)
     query_budget: dict[str, int]  # the engine's retrieval token caps, recorded in eval reports

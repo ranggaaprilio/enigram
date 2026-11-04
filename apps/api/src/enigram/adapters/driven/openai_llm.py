@@ -11,6 +11,7 @@ import httpx
 from lightrag.llm.openai import openai_complete_if_cache
 from openai import APIError, AsyncOpenAI
 
+from enigram.adapters.driven.jev_decider import check_jev
 from enigram.application.ports import ChatReply, ToolCall
 from enigram.config import Config
 from enigram.domain.budget import record_usage
@@ -164,6 +165,7 @@ class ProviderCheck:
     json_mode_ok: bool
     embed_model: str
     embed_dim: int
+    decision: str  # "jev (jev-latest)" or "llm_judge (<judge model>)"
 
 
 async def _list_models(name: str, base_url: str, api_key: str) -> list[str]:
@@ -215,6 +217,16 @@ async def check_providers(cfg: Config) -> ProviderCheck:
         log.warning("JSON mode check failed: %s", e)
         json_mode_ok = False
 
+    if cfg.decision_provider == "jev":
+        # Not fatal: indexing never decides, and at runtime a Jev failure falls back to the judge.
+        try:
+            decision = await check_jev(cfg)
+        except ProviderUnavailableError as e:
+            log.warning("Jev check failed, decisions will use the judge: %s", e)
+            decision = f"llm_judge ({cfg.judge_model}); jev unavailable: {e}"
+    else:
+        decision = f"llm_judge ({cfg.judge_model})"
+
     vectors = await make_embedding_func(cfg).func(["embedding dimension probe"])
     embed_dim = int(np.asarray(vectors).shape[-1])
     if embed_dim != cfg.embed_dim:
@@ -228,4 +240,5 @@ async def check_providers(cfg: Config) -> ProviderCheck:
         json_mode_ok=json_mode_ok,
         embed_model=cfg.embed_model,
         embed_dim=embed_dim,
+        decision=decision,
     )
