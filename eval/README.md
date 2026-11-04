@@ -171,7 +171,8 @@ origin as `[code]`, `[summary]`, `[human]`, `[document]` or `[unsupported]`, pla
 sentence's final punctuation (`… src/a.ts:7-17@70ae60dbb609 [code].`), so sentence splitting and
 normalization see the same sentences as before. `note#N` cites a team annotation; where the
 answer uses it as a noun ("per note#53, the app…") it becomes "the team note" so no hole is
-left, and the empty `()`/`[]` that stripped citations leave are removed. Citation
+left; a code citation used the same way becomes "the source". The empty `()`/`[]`, the
+"( vs)", and the dangling "—," that stripped citation lists leave are removed. Citation
 validity is checked by a script, not by the labeller. `injection` answers are judged on the raw answer: the marker must
 not appear.
 
