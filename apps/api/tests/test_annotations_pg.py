@@ -146,3 +146,46 @@ async def test_update_records_a_key_that_is_no_column_in_the_event_only(notes):
     event = (await notes.events(a.id))[-1]
     assert (event.actor, event.action) == ("decider", "conflict_detected")
     assert (event.old, event.new) == ({"conflict": False}, {"conflict": True, "p": 0.95})
+
+
+async def test_proposal_columns_filters_and_events_since(notes, pool):
+    proposal = await notes.create(
+        _symbol_note(
+            "src/c.ts#C.go",
+            status="proposed",
+            via="mcp",
+            question="Does C.go retry?",
+            memory_id=12,
+            verified_by=None,
+            verified_at=None,
+        ),
+        "laptop-a",
+    )
+    plain = await notes.create(_symbol_note(conflict=True), "web")
+
+    got = await notes.get(proposal.id)
+    assert (got.via, got.question, got.memory_id) == ("mcp", "Does C.go retry?", 12)
+    assert (plain.via, plain.question, plain.memory_id) == ("api", None, None)
+    assert [n.id for n in await notes.list(via="mcp")] == [proposal.id]
+    assert [n.id for n in await notes.list(conflict=True)] == [plain.id]
+
+    since = datetime.now(UTC) - timedelta(seconds=1)
+    await notes.update(plain.id, {"status": "needs_verification"}, "worker", "flagged")
+    await notes.update(proposal.id, {"text": "edited"}, "web", "edited")
+    other = PostgresAnnotations(pool, f"test_{uuid4().hex[:8]}")
+    try:
+        await other.create(_symbol_note(), "web")
+        foreign = await other.list()
+        await other.update(foreign[0].id, {"status": "rejected"}, "web", "flagged")
+
+        found = await notes.events_since(since, ("flagged", "verified"))
+        mine = await notes.events_since(since, ("flagged",), repo_ids=[1])
+        elsewhere = await notes.events_since(since, ("flagged",), repo_ids=[2])
+    finally:
+        await pool.execute("DELETE FROM annotations WHERE workspace = $1", other.workspace)
+
+    assert [(e.action, e.actor, n.id, n.status) for e, n in found] == [
+        ("flagged", "worker", plain.id, "needs_verification")
+    ]
+    assert [n.id for _, n in mine] == [plain.id] and elsewhere == []  # symbol notes of repo 1
+    assert await notes.events_since(datetime.now(UTC) + timedelta(hours=1), ("flagged",)) == []

@@ -202,13 +202,17 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, deps, 
     async def fake_new_annotations(s):
         return "notes"
 
-    async def stop(cfg, store, deps, code_graph, notes, decider):
-        seen.append((code_graph, notes, decider))
+    async def fake_new_conflicts(s):
+        return "conflicts"
+
+    async def stop(cfg, store, deps, code_graph, notes, decider, conflicts):
+        seen.append((code_graph, notes, decider, conflicts))
         raise _Stop
 
     deps.open_store = fake_open_store
     deps.new_code_graph = fake_new_code_graph
     deps.new_annotations = fake_new_annotations
+    deps.new_conflicts = fake_new_conflicts
     monkeypatch.setattr(worker, "build_deps", lambda cfg: deps)
     monkeypatch.setattr(worker, "process_next", stop)
     with pytest.raises(_Stop):
@@ -216,8 +220,13 @@ async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, deps, 
 
     assert (await store.get_job(interrupted.id)).status == "queued"
     assert store.closed
-    ((code_graph, notes, decider),) = seen  # built once, passed to every job
-    assert (code_graph, notes, type(decider).__name__) == (graph, "notes", "FakeDecider")
+    ((code_graph, notes, decider, conflicts),) = seen  # built once, passed to every job
+    assert (code_graph, notes, type(decider).__name__, conflicts) == (
+        graph,
+        "notes",
+        "FakeDecider",
+        "conflicts",
+    )
 
 
 @pytest.fixture
@@ -511,3 +520,36 @@ async def test_worker_forwards_the_decider_to_index_repo(cfg, store, deps, monke
     await worker.process_next(cfg, store, deps, "graph", "notes", decider)
 
     assert seen == [decider]
+
+
+async def test_detect_conflicts_job_runs_and_reports(cfg, store, deps, monkeypatch):
+    from code_fakes import FakeCodeGraph, FakeConflicts, FakeDecider, fixture_graph
+
+    graph, conflicts, decider = FakeCodeGraph(fixture_graph()), FakeConflicts(), FakeDecider()
+    calls = []
+
+    async def fake_detect(cfg, g, c, d, embedder, repo):
+        calls.append((g, c, d, type(embedder).__name__, repo["id"]))
+        return {"conflicts": 1}
+
+    monkeypatch.setattr(worker, "detect_doc_conflicts", fake_detect)
+    job = await store.enqueue("detect_conflicts", {"url": "https://github.com/org/app"})
+    missing = await store.enqueue(
+        "detect_conflicts", {"url": "https://github.com/org/app", "ref": "v9"}
+    )
+
+    await worker.process_next(cfg, store, deps, graph, None, decider, conflicts)
+    await worker.process_next(cfg, store, deps, graph, None, decider, conflicts)
+
+    done = await store.get_job(job.id)
+    assert (done.status, done.result) == ("done", {"conflicts": 1})
+    assert calls == [(graph, conflicts, decider, "FakeEmbedder", 1)]
+    failed = await store.get_job(missing.id)
+    assert failed.status == "failed" and "is not indexed" in failed.error
+
+
+async def test_detect_conflicts_job_needs_postgres(cfg, store, deps):
+    job = await store.enqueue("detect_conflicts", {"url": "u"})
+    await worker.process_next(cfg, store, deps)
+    failed = await store.get_job(job.id)
+    assert failed.status == "failed" and "postgres" in failed.error

@@ -233,3 +233,39 @@ async def test_another_embedding_dim_is_refused(graph, pool):
     other = PostgresCodeGraph(pool, graph.workspace, embed_dim=graph.embed_dim // 2)
     with pytest.raises(EnigramError, match=r"vector\(1024\).*CODE_EMBED_DIM=512"):
         await other.ensure_schema()
+
+
+async def test_symbol_changes_since_and_limit(graph, pool):
+    from datetime import UTC, datetime, timedelta
+
+    repo_id = await graph.replace_repo(URL, None, SHA, [], fixture_graph())
+    await graph.record_symbol_changes(repo_id, "a" * 40, [(SERVICE, "h0", "h1")])
+    # The first batch an hour ago, so `since` can fall between the two.
+    await pool.execute(
+        "UPDATE code_symbol_changes SET at = now() - interval '1 hour' WHERE repo_id = $1", repo_id
+    )
+    await graph.record_symbol_changes(
+        repo_id, "b" * 40, [("src/x.ts#New", None, "n"), ("src/x.ts#Old", "o", None)]
+    )
+
+    between = datetime.now(UTC) - timedelta(minutes=30)
+    assert [c["sha"][0] for c in await graph.symbol_changes(repo_id)] == ["a", "b", "b"]
+    assert [c["symbol_id"] for c in await graph.symbol_changes(repo_id, between)] == [
+        "src/x.ts#New",
+        "src/x.ts#Old",
+    ]
+    assert len(await graph.symbol_changes(repo_id, limit=2)) == 2
+
+
+async def test_indexed_at_finds_every_indexed_commit(graph):
+    repo_id = await graph.replace_repo(URL, None, SHA, [], fixture_graph())
+    assert await graph.indexed_at(repo_id, "aaaaaaa") is None
+    await graph.record_index(repo_id, "a" * 40)  # first index: no change rows
+    first = await graph.indexed_at(repo_id, "aaaaaaa")
+    await graph.record_symbol_changes(repo_id, "b" * 40, [(SERVICE, "h0", "h1")])
+    await graph.record_index(repo_id, "b" * 40)
+
+    second = await graph.indexed_at(repo_id, "bbbbbbb")
+    [change] = await graph.symbol_changes(repo_id)
+    assert first is not None and second is not None and first <= change["at"] <= second
+    assert await graph.symbol_changes(repo_id, second) == []  # after its own changes

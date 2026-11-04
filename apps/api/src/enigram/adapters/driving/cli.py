@@ -83,6 +83,31 @@ def _build_parser() -> argparse.ArgumentParser:
     seed.add_argument("--repo", required=True, help="URL of the indexed repository")
     seed.add_argument("--ref", help="branch or tag it was indexed at")
 
+    conflicts = sub.add_parser("conflicts", help="docs-vs-code contradictions")
+    csub = conflicts.add_subparsers(dest="conflicts_command", required=True)
+    detect = csub.add_parser(
+        "detect",
+        help="link the repository's document entities to symbols and store the contradictions "
+        "(decision layer: run with Jev, thousands of calls)",
+    )
+    detect.add_argument("--url", required=True, help="URL of the indexed repository")
+    detect.add_argument("--ref", help="branch or tag it was indexed at")
+    detect.add_argument(
+        "--entity",
+        action="append",
+        metavar="NAME",
+        help="dry run on this entity only (repeat for several); nothing is stored",
+    )
+
+    regression = sub.add_parser("regression", help="the regression set from agent proposals")
+    rsub = regression.add_subparsers(dest="regression_command", required=True)
+    export = rsub.add_parser(
+        "export", help="write approved MCP proposals that carry a question as YAML"
+    )
+    export.add_argument(
+        "--out", type=Path, default=Path("eval/regression.yaml"), help="output YAML"
+    )
+
     sub.add_parser("mcp", help="run the MCP server on stdio (for Claude Code)")
 
     api = sub.add_parser("api", help="run the HTTP API (upload, query, query traces)")
@@ -383,6 +408,70 @@ async def _annotations_seed(cfg: Config, args: argparse.Namespace) -> int:
     return 1 if result["unresolved"] else 0
 
 
+async def _conflicts_detect(cfg: Config, args: argparse.Namespace) -> int:
+    import json
+    from datetime import datetime
+
+    from enigram.application.doc_conflicts import detect_doc_conflicts
+    from enigram.application.files import atomic_write_text
+    from enigram.bootstrap import build_deps
+
+    deps = build_deps(cfg)
+    store = await deps.open_store()
+    try:
+        graph = await deps.new_code_graph(store)
+        conflicts = await deps.new_conflicts(store)
+        repo = await graph.get_repo(args.url, args.ref)
+        if repo is None:
+            where = f" ({args.ref})" if args.ref else ""
+            raise EnigramError(f"{args.url}{where} is not indexed; run `enigram repo` first")
+        report = await detect_doc_conflicts(
+            cfg, graph, conflicts, deps.decider(), deps.code_embedder(), repo, only=args.entity
+        )
+    finally:
+        await store.close()
+    for item in report.get("items", []):
+        for c in item["candidates"] or [{"symbol": "(no candidate)"}]:
+            print(
+                f"{item['entity']} -> {c['symbol']}: link p={c.get('link_p')} "
+                f"conflict p={c.get('conflict_p')}"
+            )
+    for name in report.get("missing", []):
+        print(f"{name}: no such entity in the repository's documents")
+    summary = {k: v for k, v in report.items() if k not in ("items", "missing")}
+    print(json.dumps(summary))
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = cfg.reports_dir / f"conflicts-{stamp}.json"
+    atomic_write_text(path, json.dumps(report, indent=2, default=str))
+    print(f"report: {path}")
+    return 0
+
+
+async def _regression_export(cfg: Config, out: Path) -> int:
+    import yaml
+
+    from enigram.application.files import atomic_write_text
+    from enigram.application.regression import HEADER, regression_doc
+    from enigram.bootstrap import build_deps
+
+    deps = build_deps(cfg)
+    store = await deps.open_store()
+    try:
+        graph = await deps.new_code_graph(store)
+        notes = await deps.new_annotations(store)
+        found = await notes.list(via="mcp", limit=10_000)
+        repos = {}
+        for repo_id in {n.repo_id for n in found if n.repo_id is not None}:
+            if repo := await graph.get_repo_by_id(repo_id):
+                repos[repo_id] = repo
+    finally:
+        await store.close()
+    doc = regression_doc(found, repos)
+    atomic_write_text(out, HEADER + yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
+    print(f"{len(doc['questions'])} questions -> {out}")
+    return 0
+
+
 async def _graph_symbols(cfg: Config, url: str, ref: str | None, pinned_sha: str) -> list:
     """Symbols of the indexed repository at the pinned commit."""
     from enigram.bootstrap import build_deps
@@ -622,6 +711,10 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_repo(cfg, args))
         if args.command == "annotations":
             return asyncio.run(_annotations_seed(cfg, args))
+        if args.command == "conflicts":
+            return asyncio.run(_conflicts_detect(cfg, args))
+        if args.command == "regression":
+            return asyncio.run(_regression_export(cfg, args.out))
         if args.command == "mcp":
             from enigram.adapters.driving.mcp_server import create_server
 

@@ -43,3 +43,21 @@ route:
   # wider than the gap, so no threshold separates them reliably. PROVISIONAL until the owner
   # picks the plan's fallback (2-way code/docs choice) or another threshold.
   threshold: 0.45  # confidence below = unsure (answer from code and documents and merge)
+entity_symbol_same:
+  type: noul
+  # The entity <-> symbol bridge (application/doc_conflicts.py): recorded, not a gate (owner,
+  # 2026-11-04). jev, K=5: eval README docs-vs-code #1 (Email Verified Flag x
+  # AuthFacebookService.getProfileByToken) p=0.30, while pairs that only share words scored
+  # 0.19-0.36, so no threshold separates them; doc_code_conflict on that pair p=0.84.
+  instructions: "`entity` from the documents and `symbol` in the code are about the same thing."
+  criteria:
+    "true": the symbol is the thing the entity names, or implements the behaviour the entity describes
+    "false": they only share words, or the symbol is unrelated to what the entity describes
+  threshold: 0.5   # P(true) at or above counts as `linked` in the run report only
+doc_code_conflict:
+  type: noul
+  instructions: "`doc` states something that `code` contradicts."
+  criteria:
+    "true": the code does the opposite of what the document states, or lacks behaviour the document says it has
+    "false": the code agrees with the document or does not address what it states
+  threshold: 0.8   # P(true) at or above = conflict (as note_conflict)

@@ -129,3 +129,15 @@ async def test_memories_from_another_embedding_model_are_refused(pool, memory):
         await other.search("staging", "laptop-a")
     with pytest.raises(EnigramError, match="embedded with fake-embed"):
         await other.add("deploy friday", "laptop-a")
+
+
+async def test_get_is_scoped_to_the_key(memory):
+    mine, _ = await memory.add("staging database", "laptop-a")
+    keyless, _ = await memory.add("lunch noon", None)
+
+    got = await memory.get(mine, "laptop-a")
+    assert (got.id, got.text, got.score) == (mine, "staging database", 0.0)
+    assert await memory.get(mine, "web") is None  # another key's memory looks missing
+    assert await memory.get(mine, None) is None
+    assert (await memory.get(keyless, None)).text == "lunch noon"
+    assert await memory.get(999_999_999, "laptop-a") is None

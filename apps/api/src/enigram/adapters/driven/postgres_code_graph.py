@@ -3,6 +3,7 @@
 import json
 import re
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -106,6 +107,13 @@ CREATE TABLE IF NOT EXISTS code_symbol_changes (
     at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS code_symbol_changes_repo ON code_symbol_changes (repo_id, at);
+-- every index of a repository, after its symbol changes (what_changed_since resolves a SHA here)
+CREATE TABLE IF NOT EXISTS code_index_runs (
+    repo_id BIGINT NOT NULL REFERENCES code_repos(id) ON DELETE CASCADE,
+    sha TEXT NOT NULL,
+    at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS code_index_runs_repo ON code_index_runs (repo_id, sha);
 """
 
 
@@ -641,12 +649,33 @@ class PostgresCodeGraph:
             [(repo_id, symbol_id, old, new, sha) for symbol_id, old, new in changes],
         )
 
-    async def symbol_changes(self, repo_id: int) -> list[dict[str, Any]]:
-        """Recorded changes, oldest first (tests and Phase 5's what_changed_since)."""
+    async def record_index(self, repo_id: int, sha: str) -> None:
+        await self.pool.execute(
+            "INSERT INTO code_index_runs (repo_id, sha) VALUES ($1, $2)", repo_id, sha
+        )
+
+    async def indexed_at(self, repo_id: int, sha: str) -> datetime | None:
+        # code_symbol_changes too: repositories indexed before code_index_runs existed
+        prefix = sha + "%"  # hex only (changes_feed.parse_since): nothing to escape
+        return await self.pool.fetchval(
+            "SELECT max(at) FROM (SELECT at FROM code_index_runs WHERE repo_id = $1 "
+            "AND sha LIKE $2 UNION ALL SELECT at FROM code_symbol_changes WHERE repo_id = $1 "
+            "AND sha LIKE $2) runs",
+            repo_id,
+            prefix,
+        )
+
+    async def symbol_changes(
+        self, repo_id: int, since: datetime | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Recorded changes after `since`, oldest first (what_changed_since)."""
         rows = await self.pool.fetch(
             "SELECT symbol_id, old_hash, new_hash, sha, at FROM code_symbol_changes "
-            "WHERE repo_id = $1 ORDER BY at, symbol_id",
+            "WHERE repo_id = $1 AND ($2::timestamptz IS NULL OR at > $2) "
+            "ORDER BY at, symbol_id LIMIT $3",
             repo_id,
+            since,
+            limit,
         )
         return [dict(r) for r in rows]
 

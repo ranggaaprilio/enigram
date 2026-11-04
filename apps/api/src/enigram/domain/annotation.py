@@ -15,12 +15,14 @@ TARGET_KINDS = ("symbol", "entity", "document")
 STATUSES = ("verified", "needs_verification", "orphaned", "proposed", "rejected")
 REASONS = ("hash", "deps", "orphan", "verify_by")
 SCOPES = ("deps", "body")
+VIAS = ("api", "mcp")  # how a note was written: the HTTP/CLI routes, or an agent's MCP proposal
 # Shown in answers (rejected is not).
 ACTIVE_STATUSES = ("verified", "needs_verification", "orphaned", "proposed")
 # Attached to graph-tool rows; a proposal is not.
 CITED_STATUSES = ("verified", "needs_verification", "orphaned")
 DEFAULT_VERIFY_DAYS = 90
 ANNOTATION_MAX_CHARS = 4000
+QUESTION_MAX_CHARS = 1000  # the question an agent proposal answers (the regression export)
 MAX_CANDIDATES = 5
 NOTE_LINE_CHARS = 200
 NOTE_CITATION = re.compile(
@@ -50,6 +52,9 @@ class Annotation:
     verify_by: datetime | None
     created_at: datetime
     updated_at: datetime
+    via: str = "api"  # one of VIAS
+    question: str | None = None  # the question an MCP proposal answers
+    memory_id: int | None = None  # the agent memory an MCP proposal was promoted from
 
 
 @dataclass(frozen=True)
@@ -64,7 +69,10 @@ class AnnotationEvent:
 
 
 def may_verify(actor: str, note: Annotation, verifiers: tuple[str, ...]) -> bool:
-    """Who may verify, reject or change the owner of a note."""
+    """Who may verify, reject or change the owner of a note: its owner or a verifier; an agent
+    proposal (via "mcp") only a verifier other than the proposing key, even when it owns it."""
+    if note.via == "mcp":
+        return actor in verifiers and actor != note.author
     return actor == note.owner or actor in verifiers
 
 

@@ -177,6 +177,9 @@ function NoteRow(props: {
         <td>
           {n.text}
           {n.by && <div className="muted small">by {n.by}</div>}
+          {n.via === 'mcp' && <div className="muted small">via MCP by {n.author}</div>}
+          {n.question && <div className="muted small">Question: {n.question}</div>}
+          {n.memory_id !== null && <div className="muted small">from memory #{n.memory_id}</div>}
         </td>
         <td className="nowrap">
           <span className={`status status-${n.status}`}>{n.status.replace('_', ' ')}</span>

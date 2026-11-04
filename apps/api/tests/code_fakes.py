@@ -158,6 +158,9 @@ class FakeCodeGraph:
         self.calls: list[tuple[str, Any]] = []
         self.secrets: dict[int, str] = {}
         self.changes: list[tuple[int, str, str, str | None, str | None]] = []
+        self.change_at: list[datetime] = []  # parallel to `changes`: when each was recorded
+        self.index_runs: list[tuple[int, str, datetime]] = []
+        self.now = datetime(2026, 11, 1, tzinfo=UTC)  # the next batch's `at`; +1 h per batch
         # (repo_id, symbol_id, source) -> (text_hash, model, vector)
         self.embeddings: dict[tuple[int, str, str], tuple[str, str, list[float]]] = {}
         if graph:
@@ -344,7 +347,12 @@ class FakeCodeGraph:
             table.pop(repo_id, None)
         self.stored = {k: v for k, v in self.stored.items() if k[0] != repo_id}
         self.embeddings = {k: v for k, v in self.embeddings.items() if k[0] != repo_id}
-        self.changes = [c for c in self.changes if c[0] != repo_id]
+        kept = [
+            (c, at) for c, at in zip(self.changes, self.change_at, strict=True) if c[0] != repo_id
+        ]
+        self.changes = [c for c, _ in kept]
+        self.change_at = [at for _, at in kept]
+        self.index_runs = [r for r in self.index_runs if r[0] != repo_id]
 
     async def symbol_hashes(self, repo_id):
         return {s.id: s.body_hash for s in self.graphs[repo_id].symbols}
@@ -363,6 +371,32 @@ class FakeCodeGraph:
 
     async def record_symbol_changes(self, repo_id, sha, changes):
         self.changes.extend((repo_id, sha, *c) for c in changes)
+        self.change_at.extend(self.now for _ in changes)
+        self.now += timedelta(hours=1)
+
+    async def record_index(self, repo_id, sha):
+        self.index_runs.append((repo_id, sha, self.now))
+        self.now += timedelta(hours=1)
+
+    async def indexed_at(self, repo_id, sha):
+        seen = [at for r, s, at in self.index_runs if r == repo_id and s.startswith(sha)]
+        seen += [
+            at
+            for c, at in zip(self.changes, self.change_at, strict=True)
+            if c[0] == repo_id and c[1].startswith(sha)
+        ]
+        return max(seen, default=None)
+
+    async def symbol_changes(self, repo_id, since=None, limit=None):
+        rows = sorted(
+            (
+                {"symbol_id": c[2], "old_hash": c[3], "new_hash": c[4], "sha": c[1], "at": at}
+                for c, at in zip(self.changes, self.change_at, strict=True)
+                if c[0] == repo_id and (since is None or at > since)
+            ),
+            key=lambda r: (r["at"], r["symbol_id"]),
+        )
+        return rows if limit is None else rows[:limit]
 
     async def symbols_by_hash(self, repo_id, body_hashes):
         wanted = set(body_hashes)
@@ -416,7 +450,15 @@ class FakeAnnotations:
         return self.notes.get(annotation_id)
 
     async def list(
-        self, *, status=None, target_kind=None, repo_id=None, target_ref=None, limit=200
+        self,
+        *,
+        status=None,
+        target_kind=None,
+        repo_id=None,
+        target_ref=None,
+        via=None,
+        conflict=None,
+        limit=200,
     ):
         out = [
             n
@@ -425,8 +467,24 @@ class FakeAnnotations:
             and (target_kind is None or n.target_kind == target_kind)
             and (repo_id is None or n.repo_id == repo_id)
             and (target_ref is None or n.target_ref == target_ref)
+            and (via is None or n.via == via)
+            and (conflict is None or n.conflict == conflict)
         ]
         return out[:limit]
+
+    async def events_since(self, since, actions, limit=200, *, repo_ids=None):
+        hits = [
+            e
+            for e in self.events_
+            if e.at > since
+            and e.action in actions
+            and (
+                repo_ids is None
+                or self.notes[e.annotation_id].target_kind != "symbol"
+                or self.notes[e.annotation_id].repo_id in repo_ids
+            )
+        ]
+        return [(e, self.notes[e.annotation_id]) for e in hits[:limit]]
 
     async def for_symbols(self, repo_id, symbol_ids):
         out: dict[str, list[Annotation]] = {}
@@ -504,6 +562,50 @@ class FakeAnnotations:
         ]
         latest = max((n.updated_at for n in notes), default=None)
         return f"{len(notes)}:{latest.isoformat() if latest else ''}"
+
+
+class FakeConflicts:
+    """ConflictRepository in memory: `entities_` and `chunks_` stand in for the LightRAG tables;
+    `replaced` records every replace() call."""
+
+    def __init__(self, entities=None, chunks=None):
+        self.entities_: list[dict[str, Any]] = list(entities or [])
+        self.chunks_: dict[str, str] = dict(chunks or {})
+        self.links_: dict[int, list[dict[str, Any]]] = {}
+        self.conflicts_: dict[int, list[dict[str, Any]]] = {}
+        self.runs_: dict[int, dict[str, Any]] = {}
+        self.replaced: list[int] = []
+        self.clock = datetime(2026, 11, 4, tzinfo=UTC)
+
+    async def ensure_schema(self):
+        pass
+
+    async def entities(self, books):
+        out = []
+        for e in self.entities_:
+            ids = [c for c in e["chunk_ids"] if any(c.startswith(f"{b}-c") for b in books)]
+            if ids:
+                out.append({**e, "chunk_ids": ids})
+        return out
+
+    async def chunks(self, ids):
+        return {i: self.chunks_[i] for i in ids if i in self.chunks_}
+
+    async def replace(self, repo_id, sha, links, conflicts, report):
+        self.replaced.append(repo_id)
+        self.links_[repo_id] = [dict(x) for x in links]
+        self.conflicts_[repo_id] = [{**x, "repo_id": repo_id} for x in conflicts]
+        self.runs_[repo_id] = {"repo_id": repo_id, "sha": sha, "at": self.clock, "report": report}
+
+    async def links(self, repo_id):
+        return list(self.links_.get(repo_id, []))
+
+    async def conflicts(self, repo_ids):
+        rows = [c for r in repo_ids for c in self.conflicts_.get(r, [])]
+        return sorted(rows, key=lambda c: (-c["p"], c["entity"], c["symbol_id"]))
+
+    async def runs(self, repo_ids):
+        return [self.runs_[r] for r in repo_ids if r in self.runs_]
 
 
 class FakeChat:

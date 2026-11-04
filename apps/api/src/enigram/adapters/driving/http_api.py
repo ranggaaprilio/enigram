@@ -30,6 +30,7 @@ from enigram.application.annotations import (
 )
 from enigram.application.budget import daily_exhausted, query_allowance
 from enigram.application.code_agent import answer_with_agent, repo_name
+from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
 from enigram.application.ports import Deps, JobRepository
@@ -137,6 +138,11 @@ class AnnotationPatch(BaseModel):
         if not self.model_fields_set:
             raise ValueError("Give at least one field to change")
         return self
+
+
+class ConflictDetect(BaseModel):
+    url: Name  # an indexed repository
+    ref: str | None = None  # the ref it was indexed at; the default branch when missing
 
 
 class RepoRequest(BaseModel):
@@ -249,6 +255,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             notes=app.state.notes,
             decider=app.state.decider,
             code_embedder=app.state.code_embedder,
+            conflicts=app.state.conflicts,
         )
 
     mcp = create_server(cfg, lifespan=mcp_lifespan, deps=deps)
@@ -272,6 +279,8 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         store = await deps.open_store()
         app.state.memory = await deps.new_memory(store)
         app.state.code_graph = await deps.new_code_graph(store)
+        # Docs-vs-code results, written by the worker's detect_conflicts job (FK to code_repos).
+        app.state.conflicts = await deps.new_conflicts(store)
         # Written synchronously by the annotation routes; the worker writes staleness flags.
         app.state.notes = await deps.new_annotations(store)
         # The decision layer: the abstain guard on /query, conflict checks on verification.
@@ -490,6 +499,44 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         job = await store.enqueue("index_repo", payload)
         log.info("[api] queued job %d: webhook for repository %d", job.id, repo_id)
         return JSONResponse({"job": jsonable_encoder(asdict(job))}, status_code=202)
+
+    @app.get("/conflicts")
+    async def list_conflicts(request: Request, repo: int | None = None) -> dict[str, Any]:
+        """Notes in conflict with the code and the stored docs-vs-code conflicts, for one
+        repository or all (then with entity and document notes too)."""
+        graph = request.app.state.code_graph
+        repos = (
+            [await _repo_or_404(request, repo)] if repo is not None else await graph.list_repos()
+        )
+        view = await conflicts_view(
+            graph,
+            request.app.state.notes,
+            request.app.state.conflicts,
+            repos,
+            all_notes=repo is None,
+        )
+        return jsonable_encoder({**view, "notes": [_note_json(n) for n in view["notes"]]})
+
+    @app.post("/conflicts/detect", status_code=202)
+    async def detect_conflicts_route(request: Request, body: ConflictDetect) -> Any:
+        ref = body.ref or None
+        if await request.app.state.code_graph.get_repo(body.url, ref) is None:
+            raise HTTPException(404, f"{body.url} ({ref or 'default branch'}) is not indexed")
+        store = store_of(request)
+        await _refuse_when_exhausted(store)
+        if any(
+            j.kind == "detect_conflicts"
+            and j.payload.get("url") == body.url
+            and j.payload.get("ref") == ref
+            for j in await store.active_jobs()
+        ):
+            raise HTTPException(409, f"Conflict detection for {body.url} is already queued")
+        payload: dict[str, Any] = {"url": body.url, "api_key": _key_name(request)}
+        if ref:
+            payload["ref"] = ref
+        job = await store.enqueue("detect_conflicts", payload)
+        log.info("[api] queued job %d: detect conflicts in %s", job.id, body.url)
+        return {"repo": body.url, "job": jsonable_encoder(asdict(job))}
 
     @app.get("/annotations")
     async def list_annotations(

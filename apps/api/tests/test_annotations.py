@@ -50,6 +50,14 @@ def test_may_verify():
     assert not may_verify("bob", n, ("carol",))
 
 
+def test_may_verify_an_agent_proposal_needs_another_verifier():
+    n = note(via="mcp", author="laptop-a", owner="laptop-a", status="proposed")
+    assert not may_verify("laptop-a", n, ())  # the proposer, even as owner
+    assert not may_verify("laptop-a", n, ("laptop-a",))  # ... and even as a verifier
+    assert may_verify("web", n, ("web",))
+    assert not may_verify("bob", n, ("web",))
+
+
 def test_deps_hash_is_order_independent():
     assert deps_hash_of(["b", "a", "a"]) == deps_hash_of(["a", "b"])
     assert deps_hash_of(["a"]) != deps_hash_of(["a", "b"])
@@ -477,3 +485,95 @@ async def test_check_conflict_fills_the_trace_it_is_given():
     )
 
     assert [t["purpose"] for t in trace] == ["note_conflict"]
+
+
+async def _proposed(cfg, actor="laptop-a", memory=None, api_key="laptop-a", **kw):
+    from code_fakes import fixture_graph
+
+    from enigram.application.annotations import Proposal, propose_annotation
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+    fields = {"target_kind": "symbol", "target_ref": "AppService.find", "repo_id": 1}
+    note = await propose_annotation(
+        cfg, graph, notes, Proposal(**{**fields, **kw}), actor, api_key=api_key, memory=memory
+    )
+    return graph, notes, note
+
+
+async def test_propose_is_always_proposed_via_mcp(cfg):
+    cfg = dataclasses.replace(cfg, annotation_verifiers=("laptop-a",))
+    _, notes, note = await _proposed(cfg, text=" Find caches for 5 min. ", question=" Q? ")
+
+    assert (note.status, note.via, note.author, note.owner, note.by) == (
+        "proposed",
+        "mcp",
+        "laptop-a",
+        "laptop-a",
+        "agent",
+    )
+    assert (note.target_ref, note.text, note.question, note.memory_id) == (
+        SERVICE,
+        "Find caches for 5 min.",
+        "Q?",
+        None,
+    )
+    assert note.target_hash == "h-AppService.find" and note.deps_hash
+    assert [e.action for e in await notes.events(note.id)] == ["created"]
+
+
+async def test_propose_promotes_the_callers_memory_only(cfg):
+    import pytest
+    from test_server import FakeMemoryStore
+
+    from enigram.domain.errors import NotFound
+
+    memory = FakeMemoryStore()
+    mine, _ = await memory.add("Staging find is slow", "laptop-a")
+    theirs, _ = await memory.add("Secret of laptop-b", "laptop-b")
+
+    _, _, note = await _proposed(cfg, memory=memory, memory_id=mine, question="")
+    assert (note.text, note.memory_id, note.question) == ("Staging find is slow", mine, None)
+    with pytest.raises(NotFound, match=f"No memory {theirs}"):
+        await _proposed(cfg, memory=memory, memory_id=theirs)
+    # Explicit text wins over the memory; the link stays.
+    _, _, note = await _proposed(cfg, memory=memory, memory_id=mine, text="Own words")
+    assert (note.text, note.memory_id) == ("Own words", mine)
+
+
+async def test_propose_rejects_bad_input(cfg):
+    import pytest
+
+    from enigram.domain.errors import EnigramError
+
+    for kw, match in [
+        ({}, "text or memory_id"),
+        ({"text": "  "}, "text or memory_id"),
+        ({"memory_id": 1}, "HTTP server"),
+        ({"text": "t", "question": "q" * 1001}, "at most 1000"),
+        ({"text": "y" * 4001}, "at most 4000"),
+        ({"text": "t", "target_kind": "thing"}, "target_kind"),
+        ({"text": "t", "target_kind": "entity", "target_ref": "E"}, "Only a symbol"),
+    ]:
+        with pytest.raises(EnigramError, match=match):
+            await _proposed(cfg, **kw)
+
+
+async def test_only_another_verifier_may_approve_a_proposal(cfg):
+    import pytest
+    from code_fakes import FakeDecider, noul
+
+    from enigram.application.annotations import change_annotation
+    from enigram.domain.errors import Forbidden
+
+    cfg = dataclasses.replace(cfg, annotation_verifiers=("laptop-a", "web"))
+    graph, notes, note = await _proposed(cfg, text="Find never throws.")
+    decider = FakeDecider(answers={"conflict": noul(0.95)})
+
+    with pytest.raises(Forbidden, match="other than the proposer \\(laptop-a\\)"):
+        await change_annotation(cfg, graph, notes, note.id, {"status": "verified"}, "laptop-a")
+    verified = await change_annotation(
+        cfg, graph, notes, note.id, {"status": "verified"}, "web", decider=decider
+    )
+
+    assert (verified.status, verified.verified_by, verified.conflict) == ("verified", "web", True)
+    assert len(decider.calls) == 1  # the conflict check runs on approval, not on proposal
