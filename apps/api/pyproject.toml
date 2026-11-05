@@ -1,8 +1,9 @@
 [project]
 name = "enigram"
 version = "0.1.0"
-description = "GraphRAG indexing of written documents for agents, with evaluation"
+description = "Code and document knowledge for agents: code graph, human notes with staleness, cited answers"
 readme = "README.md"
+license = "AGPL-3.0-only"
 authors = [
     { name = "ranggaaprilio", email = "ranggaaprillio@gmail.com" }
 ]

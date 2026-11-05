@@ -1,15 +1,14 @@
 # Enigram Individual Contributor License Agreement
 
 <!--
-DRAFT — adapted from the Apache Software Foundation Individual Contributor License
-Agreement v2.2. Replace every [PLACEHOLDER] and have a lawyer review it before the repository
-goes public. This is a license grant, not a copyright assignment: contributors keep their
+Adapted from the Apache Software Foundation ICLA v2.2. Lawyer review: not yet done; required
+before relying on it for relicensing. This is a license grant, not a copyright assignment: contributors keep their
 copyright and give the Project Owner the rights listed below, including the right to
 sublicense under other terms (which is what allows dual licensing).
 -->
 
 Thank you for your interest in contributing to Enigram (the "Project"), owned by
-[PROJECT OWNER LEGAL NAME] (the "Project Owner").
+Rangga Aprilio Utama (the "Project Owner").
 
 To clarify the intellectual property license granted with Contributions from any person or
 entity, the Project Owner must have a Contributor License Agreement ("Agreement") on file that
@@ -122,5 +121,4 @@ This Agreement is accepted electronically through the Project's CLA tool on your
 request. By agreeing there you confirm that you have read this Agreement and that it applies to
 all your present and future Contributions to the Project.
 
-Project Owner: [PROJECT OWNER LEGAL NAME], [CITY, COUNTRY], [CONTACT EMAIL]
-Agreement version: 1.0 (2026-10-31)
+Project Owner: [Rangga Aprilio Utama], [Jakarta, Indonesia], [rangga04aprillio@gmail.comAgreement version: 1.0 (2026-10-31)

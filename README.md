@@ -1,13 +1,76 @@
 # Enigram
 
-Turns written documents into a knowledge graph an agent can read (GraphRAG via
-[LightRAG](https://github.com/HKUDS/LightRAG)), with DeepSeek (chat) and Voyage (embeddings). It indexes digital
-(non-scanned) English journal papers in PDF, plus Markdown files, and answers questions with citations, from the CLI
-or from Claude Code over MCP.
+Enigram indexes a TypeScript repository (a code graph built with ts-morph, plus a summary and a
+step-by-step flow per entry point) and its Markdown and PDF documents, and answers questions with
+citations pinned to the indexed commit (`file:line@sha`). People can attach notes to symbols:
+notes take precedence over code and documents in every answer, are flagged when the code under
+them changes, and every sentence of an answer shows where it came from (`[code]`, `[summary]`,
+`[human]`, `[document]`). It is used from a web UI, REST, the CLI and MCP (Claude Code). Models are
+online: DeepSeek (chat) and Voyage (embeddings); documents go through
+[LightRAG](https://github.com/HKUDS/LightRAG) (GraphRAG).
 
-See `.claude/PRPs/prds/enigram-graphrag.prd.md` for the product plan.
+## Why Enigram
 
-## Setup
+DeepWiki, Sourcegraph, Greptile, Swimm and Copilot already explain code with citations, and several
+offer MCP access. What Enigram combines:
+
+- Human notes take precedence inside answers, and each sentence carries an origin badge.
+- Code citations are pinned to a commit, so they stay checkable after the code moves on.
+- Notes go stale on their own: `needs_verification` when the symbol's body *or* a callee changes,
+  `orphaned` (with relink candidates) when the symbol disappears.
+- Docs-vs-code conflict detection lists document passages that contradict the code.
+- Open source (AGPL-3.0-only) and self-hosted: the index, notes and clones stay in your Postgres.
+
+Accuracy against a coding agent with repository access is being evaluated (`docs/evaluation.md`);
+there is no verdict yet.
+
+## Quickstart (Docker)
+
+Prerequisites: Docker, a [DeepSeek](https://platform.deepseek.com) API key and a
+[Voyage AI](https://www.voyageai.com) API key.
+
+```bash
+git clone https://github.com/ranggaaprilio/enigram && cd enigram
+cp .env.example .env    # fill in DEEPSEEK_API_KEY and VOYAGE_API_KEY
+docker compose up -d --build
+```
+
+Open http://localhost:3000, go to Documents, add
+`https://github.com/brocoders/nestjs-boilerplate` and wait until its job is `done`. Then ask a
+code question, e.g. "Can an unconfirmed user log in?". The same with curl:
+
+```bash
+curl -H 'content-type: application/json' \
+  -d '{"url": "https://github.com/brocoders/nestjs-boilerplate"}' localhost:8080/repos
+curl localhost:8080/jobs/<id>   # job.id from the response above; until "status": "done"
+curl --max-time 180 -H 'content-type: application/json' \
+  -d '{"question": "Can an unconfirmed user log in?", "scope": "code"}' localhost:8080/query
+```
+
+- Indexing a repository spends DeepSeek tokens on summaries, capped per job by
+  `MAX_TOKENS_PER_JOB` (see [Token caps](#token-caps)).
+- The API and Postgres listen on 127.0.0.1 only. With no `ENIGRAM_API_KEYS` every route is open,
+  so set keys (see [API keys](#api-keys)) before `API_BIND=0.0.0.0`.
+- An existing `pgdata` volume keeps the password it was created with; keep that password in
+  `.env`.
+
+## Where your data goes
+
+There is no local-model mode. Do not index code you are not allowed to send to these providers.
+
+| Destination | When | What is sent |
+|---|---|---|
+| DeepSeek | always | Document chunks (entity extraction), code bodies (summaries and flows), questions, retrieved context, note texts, judge prompts |
+| Voyage AI | always | Document chunks, memories, code summaries and symbols (embeddings) |
+| TypeSafe Jev | only with `DECISION_PROVIDER=jev` and `TYPESAFE_API_KEY` | The question, evidence, code bodies, claims and note texts (see [Decision layer](#decision-layer)) |
+| Git hosts in `REPO_HOSTS` | `POST /repos`, re-syncs, polling | `git` clone, fetch and `ls-remote` requests |
+| Hugging Face | the first PDF | Download of Docling's layout models (nothing is uploaded) |
+
+Postgres, `data/` (uploads, parsed chunks, reports) and the repository clones stay on your
+machine. Secret-named files are skipped and secret-looking values are redacted before any
+provider call.
+
+## Development setup (without Docker)
 
 Prerequisites: a [DeepSeek](https://platform.deepseek.com) API key, a
 [Voyage AI](https://www.voyageai.com) API key, Node 22 (for the TypeScript code graph sidecar in
@@ -237,7 +300,7 @@ write the same index.
 | `POST /documents` (multipart `file`) | Save a PDF/Markdown file and queue it (202). 200 if already indexed unchanged; 409 if a different version is indexed or queued |
 | `GET /documents` | Indexed and queued documents with status |
 | `DELETE /documents/{book}` | Queue deleting a document: its index entries, parsed files and uploaded file (202; 404 unknown; 409 while it has a job) |
-| `POST /repos` `{"url", "ref"?}` | Queue indexing (or re-syncing) a Git repository's Markdown (202; 422 bad URL; 409 already queued) |
+| `POST /repos` `{"url", "ref"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL; 409 already queued) |
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50), for the annotation form |
 | `POST /repos/{id}/secret` | Create or rotate the repository's webhook secret; returned once, never again |
@@ -344,7 +407,7 @@ The UI needs Node 22.22 or newer (`.node-version`).
 ### Index a Git repository
 
 The Documents page (or `POST /repos`) indexes the Markdown files (`.md`, `.markdown`) of a public
-Git repository: the worker makes a shallow clone of the default branch or the given branch or tag
+Git repository and, when it has a root `tsconfig.json`, its code graph (below): the worker makes a shallow clone of the default branch or the given branch or tag
 (names only, not commit SHAs), copies each file to `data/books` as `<repo>--<path>.md` (e.g.
 `org-handbook--docs--onboarding`) and indexes them like uploads. Documents from a repository say
 so in the list.
@@ -662,3 +725,18 @@ uv run ruff check . && uv run ruff format --check .
 uv run pytest -m "not live and not docling"   # fast unit tests
 uv run pytest                                  # + Docling, + live APIs when both keys are set
 ```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Every contributor signs the CLA ([`CLA.md`](CLA.md)); the
+CLA bot asks on your first pull request. CI (lint, tests, image builds) must pass before a merge.
+
+## License
+
+Copyright (c) 2026 Rangga Aprilio Utama and contributors.
+
+Enigram is licensed under the GNU Affero General Public License v3.0 only ([`LICENSE`](LICENSE)).
+If you run a modified version as a network service, AGPL section 13 requires offering its source
+to its users. Contributions require the CLA ([`CLA.md`](CLA.md)). "Enigram" and its logo are not
+covered by the license: see [`TRADEMARK.md`](TRADEMARK.md). Third-party licenses:
+[`docs/third-party-licenses.md`](docs/third-party-licenses.md).

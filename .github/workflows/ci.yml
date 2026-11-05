@@ -1,0 +1,92 @@
+# Same checks as `make lint test web-build`, plus the Postgres tests and both image builds.
+# No API keys: `live`, `live_jev` and `docling` tests are not run (see CONTRIBUTING.md).
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: enigram
+          POSTGRES_PASSWORD: enigram
+          POSTGRES_DB: enigram
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U enigram -d enigram"
+          --health-interval 5s --health-retries 10
+    env:
+      ENIGRAM_TEST_PG_DSN: postgresql://enigram:enigram@localhost:5432/enigram
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: apps/web/.node-version
+      - run: uv sync --frozen
+      - run: npm ci
+        working-directory: tools/ts-graph # test_sidecar.py runs the sidecar
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run pytest -m "not live and not docling"
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: apps/web/.node-version
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build # tsc --noEmit + vite build
+
+  ts-graph:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/ts-graph
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: apps/web/.node-version
+      - run: npm ci
+      - run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: false
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - uses: docker/build-push-action@v7
+        with:
+          context: apps/web
+          push: false
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
