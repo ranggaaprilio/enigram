@@ -10,15 +10,16 @@ Contributor License Agreement in [`CLA.md`](CLA.md). You keep the copyright on y
 CLA gives the project owner a perpetual license to it, including the right to distribute it
 under other terms. That is what lets the project offer licenses other than AGPL-3.0 in the
 future without having to track down every contributor. The CLA tool asks you to agree once, on
-your first pull request; it blocks merging until you do.
+your first pull request; it blocks merging until you do. To agree, comment on the pull request
+with exactly `I have read the CLA Document and I hereby sign the CLA`. Comment `recheck` to
+re-run the check.
 
 If you contribute on behalf of your employer, make sure your employer allows it (CLA section 4).
 
 ## Before You Start
 
 - **Open an issue first** for anything beyond a small fix, so the design can be discussed before
-  code is written. The product plans live in `.claude/PRPs/prds/`; a change should fit one of
-  them or say why it does not.
+  code is written. Say which problem the change solves.
 - Check the open issues and pull requests to avoid duplicate work.
 
 ## Repository Layout
@@ -58,7 +59,8 @@ uv run pytest -m "not live and not docling"   # fast unit tests
 npm --prefix apps/web test && npm --prefix apps/web run build
 ```
 
-The same as `make lint test web-build`.
+The same as `make lint test web-build`. CI runs these checks on every pull request, plus the
+Postgres tests (`-m postgres`), the `tools/ts-graph` tests and both Docker image builds.
 
 Run the slower integration tests when your change touches parsing or the LLM path:
 `uv run pytest` (needs the Docling models and, for the `live` tests, both API keys; they spend tokens).
@@ -77,7 +79,7 @@ Run the slower integration tests when your change touches parsing or the LLM pat
 
 ## Reporting Security Issues
 
-Do not open a public issue for a vulnerability. Email [SECURITY CONTACT EMAIL] with the details
+Do not open a public issue for a vulnerability. Email rangga04aprillio@gmail.com with the details
 and give us a reasonable time to respond before any disclosure.
 
 ## Trademarks

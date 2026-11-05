@@ -1,6 +1,7 @@
 {
   "name": "enigram-ts-graph",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "Static TypeScript code graph for enigram: symbols, edges and entry points as JSONL",
   "type": "module",
