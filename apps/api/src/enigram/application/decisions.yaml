@@ -29,20 +29,20 @@ note_conflict:
 route:
   type: choice
   # Asked only when the rules in application/routing.py find no route or several. `question` is
-  # the user's question, `sources` names what is indexed. memory is not offered (no answer path).
+  # the user's question, `sources` names what is indexed. 2-way (owner, 2026-11-05): the 5-way
+  # choice (symbol, graph_flow, semantic, docs, annotation) split its confidence over four code
+  # labels (graph_flow right at 0.29) and drifted up to 0.09 between identical runs; only the
+  # target matters for dispatch.
   instructions: "Which source answers `question`, given `sources`?"
   criteria:
-    symbol: a named class, function, method, type or constant in the code, or its definition
-    graph_flow: what the application does step by step for a request, job or event, including errors and permissions
-    semantic: a behaviour of the code described in plain words without naming a route or a symbol
+    code: the code of the indexed repositories, a named class, function or constant, what the application does step by step for a request, job or event, a behaviour of the code in plain words, or a team note about how the code behaves
     docs: the content of uploaded documents (papers, books, manuals, specs, design notes) or why something was decided
-    annotation: a team note about how the code behaves in production, staging or operations
-  # Dev split, jev-latest, 2026-11-04, 5 probes (the questions no single rule decides). Run 1:
-  # right 0.51, 0.50, 0.29; wrong 0.42 (b63 -> docs, the wrong source), 0.19. Run 2 (same
-  # input): right 0.51, 0.41, 0.34; wrong 0.47 (b63 -> docs), 0.27. The run-to-run spread is
-  # wider than the gap, so no threshold separates them reliably. PROVISIONAL until the owner
-  # picks the plan's fallback (2-way code/docs choice) or another threshold.
-  threshold: 0.45  # confidence below = unsure (answer from code and documents and merge)
+  # Dev split, jev-1.14.0, 2026-11-05, the 5 questions no rule decides, 3 runs: every choice was
+  # the right target (code). b03 0.92/0.94, b24 0.90/0.92, b54 0.90/0.86, a01 0.66/0.64/0.56,
+  # b63 0.40/0.44/0.40 (code at P=0.7). Drift up to 0.10 (a01). 0.5 keeps a01 decided and
+  # sends b63 to both sources, whose cost is tokens, never a wrong source. n=5: re-check on
+  # the all-splits run.
+  threshold: 0.5  # confidence below = unsure (answer from code and documents and merge)
 entity_symbol_same:
   type: noul
   # The entity <-> symbol bridge (application/doc_conflicts.py): dry runs only, not a gate

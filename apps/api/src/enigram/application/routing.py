@@ -1,6 +1,7 @@
 """The router: one route per question (the golden set's expected_route labels) from rules
-first, and from the decision layer's `route` choice when the rules find none or several; then
-the answerers it maps to: the code agent, the document index, or both merged when unsure."""
+first, and from the decision layer's 2-way `route` choice (code or docs) when the rules find
+none or several; then the answerers it maps to: the code agent, the document index, or both
+merged when unsure."""
 
 import asyncio
 import dataclasses
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 
 ROUTES = ("symbol", "graph_flow", "semantic", "docs", "annotation")  # golden routes minus memory
 CODE_ROUTES = ("symbol", "graph_flow", "semantic", "annotation")
+TARGETS = ("code", "docs")  # what the `route` choice picks between
 SCOPES = ("auto", "docs", "code")
 AUTO_MODE = "auto"  # QueryResult.mode of a merged answer
 PURPOSE = "route"
@@ -87,9 +89,11 @@ def sources_line(names: list[str]) -> str:
 async def route_question(
     question: str, *, decider: DecisionProvider | None, sources: str, trace: list[dict[str, Any]]
 ) -> RouteDecision:
-    """Exactly one rule label decides; otherwise the `route` choice (its trace entry goes on
-    `trace`). No decider, a failed choice, a label outside ROUTES or a confidence below the
-    threshold is `unsure`: both sources answer."""
+    """Exactly one rule label decides; otherwise the 2-way `route` choice, code or docs (its
+    trace entry goes on `trace`). A code choice keeps a code label the rules gave (else
+    DEFAULT_ROUTE): only the target is chosen. No decider, a failed choice, a value outside
+    TARGETS or a confidence below the threshold is `unsure`: both sources answer. 2-way, not one
+    of ROUTES: four of five routes are code, so they split the confidence (owner, 2026-11-05)."""
     labels, fired = rule_routes(question)
     if len(labels) == 1:
         route = next(iter(labels))
@@ -103,10 +107,12 @@ async def route_question(
         route = sorted(labels)[0] if labels else DEFAULT_ROUTE
         return RouteDecision(route, ("code", "docs"), "unsure", fired)
     d = decided.answers[PURPOSE]
-    route, confidence = str(d.value), round(d.confidence, 4)
-    if route in ROUTES and d.confidence >= q.threshold:
-        return RouteDecision(route, targets_of(route), "choice", fired, confidence)
-    route = route if route in ROUTES else DEFAULT_ROUTE
+    target, confidence = str(d.value), round(d.confidence, 4)
+    code_labels = sorted(labels & set(CODE_ROUTES))
+    if target in TARGETS and d.confidence >= q.threshold:
+        route = "docs" if target == "docs" else (code_labels[0] if code_labels else DEFAULT_ROUTE)
+        return RouteDecision(route, (target,), "choice", fired, confidence)
+    route = sorted(labels)[0] if labels else DEFAULT_ROUTE
     return RouteDecision(route, ("code", "docs"), "unsure", fired, confidence)
 
 

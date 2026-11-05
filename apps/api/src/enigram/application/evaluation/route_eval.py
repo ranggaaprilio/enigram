@@ -1,6 +1,7 @@
 """Router accuracy against the golden sets' expected_route, without generating any answer:
-coverage (share of labelled questions the router decided), decided accuracy (the fine label,
-over decided rows only) and target accuracy (code vs documents, over every labelled row)."""
+coverage (share of labelled questions the router decided, by a rule or the choice), fine-label
+accuracy (over rule-decided rows only: the 2-way choice picks code or docs, not the label) and
+target accuracy (code vs documents, over every labelled row)."""
 
 import json
 import subprocess
@@ -49,6 +50,8 @@ async def run_route_eval(
         else:
             expected = q.expected_route or ("docs" if golden.repo is None else "")
         decided = d.method in ("rule", "choice")
+        # The 2-way choice picks the target only; its fine label is a rule's or DEFAULT_ROUTE.
+        labelled_by_rule = d.method == "rule" or d.route == "docs"
         rows.append(
             {
                 "id": q.id,
@@ -60,10 +63,11 @@ async def run_route_eval(
                 "method": d.method,
                 "rules": list(d.rules),
                 "confidence": d.confidence,
-                # The fine label counts only when the router decided: an `unsure` row carries
-                # DEFAULT_ROUTE, and most labelled code questions expect graph_flow, so counting
-                # it would reward a router that decides nothing.
-                "correct": d.route == expected if expected and decided else None,
+                # The fine label counts only when a rule (or a docs choice) set it: an `unsure`
+                # or code-choice row carries DEFAULT_ROUTE, and most labelled code questions
+                # expect graph_flow, so counting it would reward a router that decides nothing.
+                "correct": d.route == expected if expected and labelled_by_rule else None,
+                "decided": decided,
                 "target_ok": targets_of(expected)[0] in d.targets if expected else None,
                 "decisions": trace,
             }
@@ -87,16 +91,18 @@ def _accuracy(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]
     for value in sorted({str(r[key]) for r in rows}):
         group = [r for r in rows if str(r[key]) == value]
         labelled = [r for r in group if r["expected"]]
-        decided = [r for r in labelled if r["correct"] is not None]
-        correct = sum(1 for r in decided if r["correct"])
+        decided = [r for r in labelled if r["decided"]]
+        judged = [r for r in labelled if r["correct"] is not None]
+        correct = sum(1 for r in judged if r["correct"])
         target_ok = sum(1 for r in labelled if r["target_ok"])
         out[value or "-"] = {
             "n": len(group),
             "labelled": len(labelled),
             "decided": len(decided),
             "coverage": _ratio(len(decided), len(labelled)),
+            "judged": len(judged),
             "correct": correct,
-            "accuracy": _ratio(correct, len(decided)),
+            "accuracy": _ratio(correct, len(judged)),
             "target_ok": target_ok,
             "target_accuracy": _ratio(target_ok, len(labelled)),
         }
@@ -126,8 +132,9 @@ def route_markdown(run: dict[str, Any]) -> str:
         f"- code: git `{run['git_head']}`",
         f"- choice: {'on (' + run['decider'] + ')' if run['decider'] else 'off (rules only)'}",
         "",
-        "Coverage = decided / labelled; accuracy = correct / decided (the fine label);",
-        "target accuracy = code vs documents right / labelled (an unsure row answers from both).",
+        "Coverage = decided (rule or choice) / labelled; accuracy = the fine label right / rows",
+        "whose label a rule set (the 2-way choice picks code or docs only); target accuracy =",
+        "code vs documents right / labelled (an unsure row answers from both).",
     ]
     for name, _ in GROUPINGS:
         lines += [
@@ -140,7 +147,7 @@ def route_markdown(run: dict[str, Any]) -> str:
         for value, g in run[f"by_{name}"].items():
             lines.append(
                 f"| {value} | {g['n']} | {g['labelled']} | {_pct(g['coverage'])} "
-                f"({g['decided']}) | {_pct(g['accuracy'])} ({g['correct']}/{g['decided']}) | "
+                f"({g['decided']}) | {_pct(g['accuracy'])} ({g['correct']}/{g['judged']}) | "
                 f"{_pct(g['target_accuracy'])} ({g['target_ok']}/{g['labelled']}) |"
             )
     misses = [r for r in run["rows"] if r["correct"] is False or r["target_ok"] is False]
