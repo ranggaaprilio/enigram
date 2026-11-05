@@ -8,7 +8,7 @@ from enigram.application.decisions import QUESTIONS
 from enigram.application.evaluation.route_eval import run_route_eval, write_route_report
 from enigram.application.routing import (
     AUTO_MODE,
-    ROUTES,
+    TARGETS,
     answer_routed,
     merge_results,
     route_question,
@@ -54,8 +54,9 @@ async def test_single_rules(question, route, targets):
 
 async def test_conflicting_rules_ask_the_choice_once():
     question = "Why does POST /auth/login answer 422?"
-    decider = FakeDecider({"route": choice("graph_flow", 0.9)})
+    decider = FakeDecider({"route": choice("code", 0.9)})
     d, trace = await _route(question, decider)
+    # a code choice keeps the code label the rules gave
     assert (d.route, d.targets, d.method, d.confidence) == ("graph_flow", ("code",), "choice", 0.9)
     assert set(d.rules) == {"http_route", "why"}
     assert decider.calls == [({"question": question, "sources": SOURCES}, ["route"])]
@@ -63,8 +64,10 @@ async def test_conflicting_rules_ask_the_choice_once():
 
 
 async def test_no_rule_and_a_confident_choice():
-    d, _ = await _route(UNSURE_Q, FakeDecider({"route": choice("semantic", 0.9)}))
-    assert (d.route, d.targets, d.method) == ("semantic", ("code",), "choice")
+    code, _ = await _route(UNSURE_Q, FakeDecider({"route": choice("code", 0.9)}))
+    assert (code.route, code.targets, code.method) == ("graph_flow", ("code",), "choice")
+    docs, _ = await _route(UNSURE_Q, FakeDecider({"route": choice("docs", 0.9)}))
+    assert (docs.route, docs.targets, docs.method) == ("docs", ("docs",), "choice")
 
 
 async def test_threshold_is_inclusive_and_low_confidence_is_unsure():
@@ -72,11 +75,11 @@ async def test_threshold_is_inclusive_and_low_confidence_is_unsure():
     at, _ = await _route(UNSURE_Q, FakeDecider({"route": choice("docs", threshold)}))
     assert (at.targets, at.method) == (("docs",), "choice")
     low, _ = await _route(UNSURE_Q, FakeDecider({"route": choice("docs", threshold - 0.2)}))
-    assert (low.route, low.targets, low.method) == ("docs", ("code", "docs"), "unsure")
+    assert (low.route, low.targets, low.method) == ("graph_flow", ("code", "docs"), "unsure")
 
 
-async def test_a_choice_outside_the_routes_is_unsure():
-    d, _ = await _route(UNSURE_Q, FakeDecider({"route": choice("memory", 0.99)}))
+async def test_a_choice_outside_the_targets_is_unsure():
+    d, _ = await _route(UNSURE_Q, FakeDecider({"route": choice("semantic", 0.99)}))
     assert (d.route, d.targets, d.method) == ("graph_flow", ("code", "docs"), "unsure")
 
 
@@ -102,8 +105,8 @@ async def test_without_a_decider_no_rule_is_unsure():
     assert (d.method, d.targets, trace) == ("unsure", ("code", "docs"), [])
 
 
-def test_route_question_criteria_are_the_routes():
-    assert set(QUESTIONS["route"].criteria) == set(ROUTES)
+def test_route_question_criteria_are_the_targets():
+    assert set(QUESTIONS["route"].criteria) == set(TARGETS)
     assert QUESTIONS["route"].kind == "choice"
 
 
@@ -370,16 +373,18 @@ def _golden(tmp_path):
 
 
 async def test_route_eval_with_the_choice(cfg, tmp_path):
-    decider = FakeDecider({"route": choice("semantic", 0.9)})
+    decider = FakeDecider({"route": choice("code", 0.9)})
     run = await run_route_eval(_golden(tmp_path), decider=decider, sources=SOURCES, split="dev")
 
     behavior = run["by_category"]["behavior"]
-    assert (behavior["labelled"], behavior["decided"], behavior["correct"]) == (4, 4, 3)
+    # b04 is decided by the choice (code) but its fine label is not judged: 3 judged, 2 right
+    assert (behavior["labelled"], behavior["decided"], behavior["judged"]) == (4, 4, 3)
+    assert behavior["correct"] == 2
     assert behavior["target_accuracy"] == 0.75  # b03 went to docs only
     assert len(decider.calls) == 1  # b04 only: no rule (u01 is in no split)
 
     report = write_route_report(cfg, run).read_text()
-    assert "| b04 | semantic | semantic | 0.9 | choice |" in report
+    assert "| b04 | semantic | graph_flow | 0.9 | choice |" in report
     assert "| b03 | behavior | graph_flow | docs | docs | rule | why |" in report
 
 
