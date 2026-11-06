@@ -173,6 +173,7 @@ export interface NewAnnotation {
   scope?: 'deps' | 'body'
   verify_by?: string
   note_type?: NoteType
+  proposed?: boolean // stay a proposal even for the owner key (a Code-page claim about the code)
 }
 
 export interface AnnotationPatch {
@@ -215,6 +216,7 @@ export interface Feature {
   line_start: number
   line_end: number
   notes: number // active notes on the symbol
+  reviewed: boolean // a current "looks right" marker on its summary
 }
 
 export interface FeatureList {
@@ -254,6 +256,15 @@ export interface SymbolView {
   steps: SymbolStep[]
   external: string[]
   notes: Annotation[]
+  review: Review | null
+}
+
+// A "looks right" marker on a symbol's summary; `current` is false once the summary changed.
+export interface Review {
+  by: string
+  actor: string
+  at: string
+  current: boolean
 }
 
 export interface QuerySummary {
@@ -417,6 +428,14 @@ export const listFeatures = (repoId: number, q = '') =>
 // Symbol ids are "<file>#<qualified_name>": encode them as one path segment (%2F, %23).
 export const getSymbol = (repoId: number, symbolId: string) =>
   request<SymbolView>(`/repos/${repoId}/symbols/${encodeURIComponent(symbolId)}`)
+
+export const reviewSymbol = (repoId: number, symbolId: string, by: string) =>
+  sendJson<Review>(`/repos/${repoId}/symbols/${encodeURIComponent(symbolId)}/review`, { by })
+
+export const unreviewSymbol = (repoId: number, symbolId: string) =>
+  request<null>(`/repos/${repoId}/symbols/${encodeURIComponent(symbolId)}/review`, {
+    method: 'DELETE',
+  })
 
 export const deleteRepo = (id: number) =>
   request<{ repo: number; job: Job }>(`/repos/${id}`, { method: 'DELETE' })

@@ -7,7 +7,13 @@ from typing import Any
 
 import asyncpg
 
-from enigram.domain.annotation import ACTIVE_STATUSES, CITED_STATUSES, Annotation, AnnotationEvent
+from enigram.domain.annotation import (
+    ACTIVE_STATUSES,
+    CITED_STATUSES,
+    Annotation,
+    AnnotationEvent,
+    SymbolReview,
+)
 from enigram.domain.errors import NotFound
 
 # CREATE ... IF NOT EXISTS is the whole migration story (as postgres_code_graph.SCHEMA).
@@ -56,6 +62,19 @@ ALTER TABLE annotations ADD COLUMN IF NOT EXISTS memory_id BIGINT;
 -- Code page phase 3: what a note claims (domain.NOTE_TYPES); old notes are technical.
 ALTER TABLE annotations ADD COLUMN IF NOT EXISTS note_type TEXT NOT NULL DEFAULT 'technical';
 CREATE INDEX IF NOT EXISTS annotation_events_at ON annotation_events (at);
+-- Code page phase 4: "looks right" markers on summaries; not notes, never cited. No FOREIGN KEY,
+-- as annotations.repo_id.
+CREATE TABLE IF NOT EXISTS symbol_reviews (
+    workspace TEXT NOT NULL,
+    repo_id BIGINT NOT NULL,
+    symbol_id TEXT NOT NULL,
+    summary_kind TEXT NOT NULL,
+    summary_hash TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    by_name TEXT NOT NULL DEFAULT '',
+    at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (workspace, repo_id, symbol_id)
+);
 """
 
 # Annotation field -> column; `by` is a SQL keyword.
@@ -129,6 +148,18 @@ def _event(row: asyncpg.Record) -> AnnotationEvent:
         action=row["action"],
         old=_loads(row["old"]),
         new=_loads(row["new"]),
+        at=row["at"],
+    )
+
+
+def _review(row: asyncpg.Record) -> SymbolReview:
+    return SymbolReview(
+        repo_id=row["repo_id"],
+        symbol_id=row["symbol_id"],
+        summary_kind=row["summary_kind"],
+        summary_hash=row["summary_hash"],
+        actor=row["actor"],
+        by=row["by_name"],
         at=row["at"],
     )
 
@@ -376,6 +407,40 @@ class PostgresAnnotations:
             repo_ids,
         )
         return [(_event({**dict(r), "id": r["e_id"]}), _annotation(r)) for r in rows]
+
+    async def set_review(self, review: SymbolReview) -> SymbolReview:
+        row = await self.pool.fetchrow(
+            "INSERT INTO symbol_reviews (workspace, repo_id, symbol_id, summary_kind, "
+            "summary_hash, actor, by_name) VALUES ($1, $2, $3, $4, $5, $6, $7) "
+            "ON CONFLICT (workspace, repo_id, symbol_id) DO UPDATE SET "
+            "summary_kind = EXCLUDED.summary_kind, summary_hash = EXCLUDED.summary_hash, "
+            "actor = EXCLUDED.actor, by_name = EXCLUDED.by_name, at = now() RETURNING *",
+            self.workspace,
+            review.repo_id,
+            review.symbol_id,
+            review.summary_kind,
+            review.summary_hash,
+            review.actor,
+            review.by,
+        )
+        return _review(row)
+
+    async def delete_review(self, repo_id: int, symbol_id: str) -> bool:
+        status = await self.pool.execute(
+            "DELETE FROM symbol_reviews WHERE workspace = $1 AND repo_id = $2 AND symbol_id = $3",
+            self.workspace,
+            repo_id,
+            symbol_id,
+        )
+        return status == "DELETE 1"
+
+    async def reviews(self, repo_id: int) -> dict[str, SymbolReview]:
+        rows = await self.pool.fetch(
+            "SELECT * FROM symbol_reviews WHERE workspace = $1 AND repo_id = $2",
+            self.workspace,
+            repo_id,
+        )
+        return {r["symbol_id"]: _review(r) for r in rows}
 
 
 def _snapshot(note: Annotation, keys: list[str]) -> dict[str, Any]:

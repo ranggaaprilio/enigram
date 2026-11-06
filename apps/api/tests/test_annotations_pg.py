@@ -25,6 +25,7 @@ async def notes(pool):
     await notes.ensure_schema()
     yield notes
     await pool.execute("DELETE FROM annotations WHERE workspace = $1", notes.workspace)
+    await pool.execute("DELETE FROM symbol_reviews WHERE workspace = $1", notes.workspace)
 
 
 def _symbol_note(ref="src/a.ts#A.run", **kw):
@@ -89,6 +90,26 @@ async def test_count_by_symbol_counts_every_status_but_rejected_per_repo(notes):
 
     assert await notes.count_by_symbol(1) == {"src/a.ts#A.run": 3}
     assert await notes.count_by_symbol(3) == {}
+
+
+async def test_reviews_upsert_list_and_delete(notes):
+    from enigram.domain.annotation import SymbolReview
+
+    def review(by, h):
+        return SymbolReview(1, "src/a.ts#A.run", "flow", h, "web", by, NOW)
+
+    first = await notes.set_review(review("Alice", "h1"))
+    second = await notes.set_review(review("Bob", "h2"))  # replaces the first
+    await notes.set_review(SymbolReview(2, "src/b.ts#B", "symbol", "h3", "web", "", NOW))
+
+    assert second.at >= first.at
+    assert {k: (r.by, r.summary_hash) for k, r in (await notes.reviews(1)).items()} == {
+        "src/a.ts#A.run": ("Bob", "h2")
+    }
+    assert await notes.delete_review(1, "src/a.ts#A.run") is True
+    assert await notes.delete_review(1, "src/a.ts#A.run") is False
+    assert await notes.reviews(1) == {}
+    assert list(await notes.reviews(2)) == ["src/b.ts#B"]
 
 
 async def test_for_symbols_skips_proposals_and_update_logs_changed_keys(notes):

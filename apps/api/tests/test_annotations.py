@@ -170,6 +170,12 @@ async def test_create_stores_the_note_type_technical_by_default(cfg):
     assert notes.events_[0].new["note_type"] == "expected_behavior"
 
 
+async def test_create_keeps_a_note_proposed_when_asked_even_for_its_owner(cfg):
+    _, _, note = await _new(cfg, proposed=True)
+
+    assert (note.status, note.verified_by, note.owner) == ("proposed", None, "alice")
+
+
 async def test_create_rejects_bad_input(cfg):
     import pytest
 

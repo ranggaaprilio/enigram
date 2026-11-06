@@ -52,6 +52,9 @@ class NewAnnotation:
     scope: str = "deps"
     verify_by: datetime | str | None = None
     note_type: str = DEFAULT_NOTE_TYPE
+    # Stay a proposal even when the actor could verify it: a claim about how the code behaves,
+    # written on the Code page, for a developer to review.
+    proposed: bool = False
 
 
 @dataclass(frozen=True)
@@ -184,7 +187,8 @@ async def create_annotation(
     decider: DecisionProvider | None = None,
 ) -> Annotation:
     """With `decider`, a symbol note verified on creation is checked against the code and gets
-    `conflict` set by the decider (event `conflict_detected` by actor `decider`)."""
+    `conflict` set by the decider (event `conflict_detected` by actor `decider`). With
+    `new.proposed` the note is a proposal whoever writes it."""
     _check_kind(new.target_kind, new.scope)
     if new.note_type not in NOTE_TYPES:
         raise EnigramError(f"note_type must be one of {NOTE_TYPES}")
@@ -204,7 +208,7 @@ async def create_annotation(
         "note_type": new.note_type,
     }
     p = None
-    if actor == owner or actor in cfg.annotation_verifiers:
+    if not new.proposed and (actor == owner or actor in cfg.annotation_verifiers):
         fields |= _verify_fields(actor, verify_by)
         if new.target_kind == "symbol":
             conflict, p = await _detect_conflict(decider, graph, new.repo_id, symbol, text)

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ChevronRight } from 'lucide-react'
+import { Check, ChevronRight, Plus, X } from 'lucide-react'
 import {
   ApiError,
   getSymbol,
@@ -10,13 +10,15 @@ import {
   listRepos,
   messageOf,
   NOTE_TYPES,
+  reviewSymbol,
+  unreviewSymbol,
   type FeatureList,
   type RepoRow,
   type SymbolView,
 } from '../api'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
-import NewNoteForm from '@/components/NewNoteForm'
+import GuidedNoteForm, { type GuidedMode } from '@/components/GuidedNoteForm'
 import PageHeader from '@/components/PageHeader'
 import StatusBadge from '@/components/StatusBadge'
 import { Badge } from '@/components/ui/badge'
@@ -30,10 +32,21 @@ import { formatTime } from '../format'
 
 const muted = 'text-[13px] text-muted-foreground'
 const heading = 'mt-4 mb-1 text-sm font-semibold'
+const NAME_KEY = 'enigram.by'
+
+// The reviewer's name, kept in this browser only; storage can throw in private windows.
+function readName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
 
 // A repository browsed by its entry points (features): the selected one's summary, steps and
-// code in the middle, its notes and a note form with the target set on the right. Repository,
-// symbol and filter live in the URL, so a view can be linked.
+// code in the middle, with "looks right" / "not right" / "add context" under the summary; its
+// notes and the guided note form on the right. Repository, symbol and filter live in the URL,
+// so a view can be linked.
 export default function Code() {
   const [params, setParams] = useSearchParams()
   const [repos, setRepos] = useState<RepoRow[] | null>(null)
@@ -41,6 +54,8 @@ export default function Code() {
   const [view, setView] = useState<SymbolView | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<GuidedMode | null>(null)
+  const [by, setBy] = useState(readName)
   // An unknown ?repo= (deleted repository, old link) falls back to the first one.
   const asked = Number(params.get('repo'))
   const repoId = repos?.some((r) => r.id === asked) ? asked : (repos?.[0]?.id ?? null)
@@ -89,6 +104,7 @@ export default function Code() {
     setView(null)
     setNotFound(false)
     setError(null)
+    setMode(null)
     if (!repoId || !symbolId) return
     let current = true
     getSymbol(repoId, symbolId)
@@ -113,6 +129,25 @@ export default function Code() {
     setFeatures(f)
   }, [repoId, symbolId, q])
 
+  function saveName(value: string) {
+    setBy(value)
+    try {
+      localStorage.setItem(NAME_KEY, value)
+    } catch {
+      // not kept: private window or blocked storage
+    }
+  }
+
+  async function act(call: () => Promise<unknown>) {
+    try {
+      await call()
+      setError(null)
+      await reload()
+    } catch (e) {
+      setError(messageOf(e))
+    }
+  }
+
   const header = (
     <PageHeader
       title="Code"
@@ -134,7 +169,7 @@ export default function Code() {
   return (
     <section>
       {header}
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <Label htmlFor="code-repo" className="text-muted-foreground">
           Repository
         </Label>
@@ -149,6 +184,16 @@ export default function Code() {
             </NativeSelectOption>
           ))}
         </NativeSelect>
+        <Label htmlFor="code-by" className="text-muted-foreground">
+          Your name
+        </Label>
+        <Input
+          id="code-by"
+          className="w-44"
+          value={by}
+          placeholder="shown on your reviews"
+          onChange={(e) => saveName(e.target.value)}
+        />
       </div>
       {error && <ErrorAlert>{error}</ErrorAlert>}
       <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
@@ -167,8 +212,15 @@ export default function Code() {
           <p className="text-muted-foreground">Loading…</p>
         ) : (
           <>
-            <SymbolPanel view={view} onPick={(id) => setParam('symbol', id)} />
-            <div className="rounded-xl bg-card px-5 py-4">
+            <SymbolPanel
+              view={view}
+              onPick={(id) => setParam('symbol', id)}
+              onMode={setMode}
+              onReview={() => repoId && act(() => reviewSymbol(repoId, view.symbol.id, by))}
+              onUndo={() => repoId && act(() => unreviewSymbol(repoId, view.symbol.id))}
+            />
+            {/* Sticky on wide screens: the form opened from under a long summary stays in view. */}
+            <div className="rounded-xl bg-card px-5 py-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
               <h3 className="mb-2 text-sm font-semibold">Notes ({view.notes.length})</h3>
               {view.notes.length === 0 ? (
                 <p className={muted}>No notes on this symbol yet.</p>
@@ -189,20 +241,26 @@ export default function Code() {
                   ))}
                 </ul>
               )}
-              {/* key: the form reads its target once, so a new symbol needs a new form. */}
-              <NewNoteForm
-                key={view.symbol.id}
-                repos={repos ?? []}
-                initialKind="symbol"
-                initialRef={view.symbol.id}
-                initialRepo={repoId}
-                fixed={view.symbol.qualified_name}
-                onCreated={async () => {
-                  setError(null)
-                  await reload()
-                }}
-                onError={setError}
-              />
+              {mode && repoId ? (
+                <GuidedNoteForm
+                  key={view.symbol.id}
+                  repoId={repoId}
+                  symbolId={view.symbol.id}
+                  mode={mode}
+                  by={by}
+                  onSaved={async () => {
+                    setMode(null)
+                    setError(null)
+                    await reload()
+                  }}
+                  onCancel={() => setMode(null)}
+                  onError={setError}
+                />
+              ) : (
+                <p className={cn('mt-3', muted)}>
+                  To add a note, use Not right or Add context under the summary.
+                </p>
+              )}
             </div>
           </>
         )}
@@ -235,6 +293,8 @@ function Features(props: {
             {list.features.length < list.total
               ? `${list.features.length} of ${list.total} features — narrow with the filter`
               : `${list.total} ${list.total === 1 ? 'feature' : 'features'}`}
+            {` · ${list.features.filter((f) => f.reviewed).length} reviewed`}
+            {list.features.length < list.total && ' in this list'}
           </p>
           {list.features.length === 0 ? (
             <p className={cn('px-2 py-4', muted)}>
@@ -252,6 +312,11 @@ function Features(props: {
                     )}
                     onClick={() => props.onPick(f.symbol_id)}
                   >
+                    {f.reviewed ? (
+                      <Check className="size-3.5 shrink-0 text-success" aria-label="reviewed" />
+                    ) : (
+                      <span className="size-3.5 shrink-0" />
+                    )}
                     <span
                       className="min-w-0 flex-1 truncate font-mono text-[13px]"
                       title={`${f.qualified_name} · ${f.file}`}
@@ -272,8 +337,21 @@ function Features(props: {
   )
 }
 
-function SymbolPanel({ view, onPick }: { view: SymbolView; onPick: (symbolId: string) => void }) {
+function SymbolPanel({
+  view,
+  onPick,
+  onMode,
+  onReview,
+  onUndo,
+}: {
+  view: SymbolView
+  onPick: (symbolId: string) => void
+  onMode: (mode: GuidedMode) => void
+  onReview: () => void
+  onUndo: () => void
+}) {
   const summary = view.summary.flow ?? view.summary.symbol
+  const review = view.review
   const body = view.symbol.body
   return (
     <div className="min-w-0">
@@ -294,6 +372,41 @@ function SymbolPanel({ view, onPick }: { view: SymbolView; onPick: (symbolId: st
           </div>
         ) : (
           <p className={muted}>No summary yet.</p>
+        )}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {summary && !review?.current && (
+            <Button type="button" size="sm" variant="secondary" onClick={onReview}>
+              <Check /> Looks right
+            </Button>
+          )}
+          {summary && (
+            <Button
+              type="button"
+              size="sm"
+              variant="soft-destructive"
+              onClick={() => onMode('mismatch')}
+            >
+              <X /> Not right
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="secondary" onClick={() => onMode('context')}>
+            <Plus /> Add context
+          </Button>
+        </div>
+        {review && (
+          <p className={cn('mt-2', muted)}>
+            Reviewed by {review.by || review.actor} · {formatTime(review.at)}
+            {!review.current && ' — the summary changed since'}
+            {' · '}
+            <Button
+              type="button"
+              variant="link"
+              className="h-auto p-0 text-[13px] text-link"
+              onClick={onUndo}
+            >
+              {review.current ? 'Undo' : 'Remove'}
+            </Button>
+          </p>
         )}
         <h3 className={heading}>Steps ({view.steps.length})</h3>
         {view.steps.length === 0 ? (

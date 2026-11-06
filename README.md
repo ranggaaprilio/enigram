@@ -303,14 +303,16 @@ write the same index.
 | `POST /repos` `{"url", "ref"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL; 409 already queued) |
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50), for the annotation form |
-| `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each, the first 500 whose route or symbol name contains `q`, plus `total` |
+| `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each and whether their summary has a current ✓ (`reviewed`), the first 500 whose route or symbol name contains `q`, plus `total` |
 | `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |
-| `GET /repos/{id}/symbols/{symbol_id}` | One symbol (`<file>#<qualified_name>`, URL-encoded) with its location, entry points, flow and symbol summaries, steps (direct callees with their summaries and note counts) and notes |
+| `GET /repos/{id}/symbols/{symbol_id}` | One symbol (`<file>#<qualified_name>`, URL-encoded) with its location, entry points, flow and symbol summaries, steps (direct callees with their summaries and note counts), notes and ✓ (`review`, with `current: false` once the summary changed) |
+| `POST /repos/{id}/symbols/{symbol_id}/review` `{"by"?}` | Mark the summary the Code page shows for the symbol as right (✓): not a note, never cited or shown to agents; a later mark replaces it; 422 without a summary |
+| `DELETE /repos/{id}/symbols/{symbol_id}/review` | Remove the ✓ (204; 404 when there is none; 403 unless the key that set it or a key in `ANNOTATION_VERIFIERS`) |
 | `POST /repos/{id}/secret` | Create or rotate the repository's webhook secret; returned once, never again |
 | `POST /repos/{id}/webhook` | GitHub/GitLab push webhook: no Bearer key, signed with the repository's secret; queues a re-index (202), ignores other branches and commits already indexed |
 | `DELETE /repos/{id}` | Queue deleting a repository's code graph and clone; its annotations become `orphaned` (202; 404 unknown; 409 while it has a job) |
 | `GET /annotations?status=&target_kind=&repo=&target_ref=&limit=` | Annotations, newest first (`rejected` only when asked for) |
-| `POST /annotations` `{"target_kind", "target_ref", "text", "repo"?, "by"?, "owner"?, "scope"?, "verify_by"?, "note_type"?}` | Create a note (201); see [Annotations](#annotations) |
+| `POST /annotations` `{"target_kind", "target_ref", "text", "repo"?, "by"?, "owner"?, "scope"?, "verify_by"?, "note_type"?, "proposed"?}` | Create a note (201); see [Annotations](#annotations) |
 | `GET /annotations/{id}` | One note with its change history |
 | `PATCH /annotations/{id}` `{"status"?, "text"?, "owner"?, "verify_by"?, "conflict"?, "target_ref"?, "by"?}` | Verify, reject, edit, relink or flag a note (403 when the key may not verify) |
 | `GET /jobs/{id}` | One indexing job: status, result (chunks, timings, report), error |
@@ -383,7 +385,11 @@ API. It has five pages in its menu:
   the indexed repositories, answered with sources and per-sentence origin tags.
 - **Code**: an indexed repository by its entry points (routes, jobs), each with its AI summary,
   the steps it calls, its code (collapsed) and the notes on it, plus a note form with the target
-  already set, for people who know the feature but not the symbol. Views are linkable
+  already set, for people who know the feature but not the symbol. Under each summary: **Looks
+  right** (a ✓ that counts as reviewed until the summary changes), **Not right** and **Add
+  context** (a note with a question per type). Not right, expected behaviour and known issues are
+  saved as proposals to review on Annotations (the UI has one key, so anyone using it may
+  verify them). Views are linkable
   (`/code?repo=1&symbol=…`).
 - **Trace**: recent queries, and for each one the router's decision, the chunks, entities,
   relations and sources behind the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
@@ -503,6 +509,8 @@ becomes a source with origin `human`.
 Each note has a `note_type` saying what it claims: `business_rule`, `expected_behavior`,
 `known_issue` or `technical` (the default, and the type of every older note and agent proposal).
 It is set when the note is created and returned by the API and by MCP `get_annotations`.
+`"proposed": true` keeps a new note a proposal even when its author could verify it; the Code
+page sends it for notes that claim how the code behaves, so they wait in the `proposed` queue.
 
 Every sentence of an answer ends with its origin, taken from its citations: `[code]`,
 `[summary]`, `[human]`, `[document]` or `[unsupported]` (no citation). When a cited note is not

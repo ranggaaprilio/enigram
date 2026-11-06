@@ -30,7 +30,14 @@ from enigram.application.annotations import (
 )
 from enigram.application.budget import daily_exhausted, query_allowance
 from enigram.application.code_agent import answer_with_agent, repo_name
-from enigram.application.code_browse import features_view, symbol_view, tree_view
+from enigram.application.code_browse import (
+    features_view,
+    review_json,
+    review_symbol,
+    symbol_view,
+    tree_view,
+    unreview_symbol,
+)
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
@@ -127,6 +134,11 @@ class AnnotationCreate(BaseModel):
     note_type: Literal["business_rule", "expected_behavior", "known_issue", "technical"] = (
         "technical"
     )
+    proposed: bool = False  # stay a proposal even for the owner (Code page claims about the code)
+
+
+class ReviewCreate(BaseModel):
+    by: str = ""  # free-text name of who marked the summary as right
 
 
 class AnnotationPatch(BaseModel):
@@ -455,6 +467,40 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         await _repo_or_404(request, repo_id)
         return await tree_view(request.app.state.code_graph, request.app.state.notes, repo_id)
 
+    # The Code page's "looks right" marker; POST/DELETE only, so the GET below never takes them.
+    @app.post("/repos/{repo_id}/symbols/{symbol_id:path}/review")
+    async def review_repo_symbol(
+        request: Request, repo_id: int, symbol_id: str, body: ReviewCreate | None = None
+    ) -> dict[str, Any]:
+        """Mark the symbol's current summary as right; a later mark replaces it."""
+        repo = await _repo_or_404(request, repo_id)
+        try:
+            review = await review_symbol(
+                request.app.state.code_graph,
+                request.app.state.notes,
+                repo,
+                symbol_id,
+                _actor(request),
+                body.by if body else "",
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return jsonable_encoder({**review_json(review, True), "symbol_id": review.symbol_id})
+
+    @app.delete("/repos/{repo_id}/symbols/{symbol_id:path}/review", status_code=204)
+    async def unreview_repo_symbol(request: Request, repo_id: int, symbol_id: str) -> None:
+        await _repo_or_404(request, repo_id)
+        try:
+            await unreview_symbol(
+                request.app.state.notes,
+                repo_id,
+                symbol_id,
+                _actor(request),
+                cfg.annotation_verifiers,
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+
     # :path because symbol ids are "<file>#<qualified_name>" (sent as %2F and %23).
     @app.get("/repos/{repo_id}/symbols/{symbol_id:path}")
     async def repo_symbol(request: Request, repo_id: int, symbol_id: str) -> dict[str, Any]:
@@ -601,6 +647,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             scope=body.scope,
             verify_by=body.verify_by,
             note_type=body.note_type,
+            proposed=body.proposed,
         )
         try:
             note = await create_annotation(
