@@ -18,6 +18,24 @@ import {
   type DocumentRow,
   type Job,
 } from '../api'
+import { FileUp, GitBranch, Loader2 } from 'lucide-react'
+import Empty from '@/components/Empty'
+import ErrorAlert from '@/components/ErrorAlert'
+import PageHeader from '@/components/PageHeader'
+import StatusBadge from '@/components/StatusBadge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { cn } from '@/lib/utils'
 import { formatTime } from '../format'
 
 const POLL_MS = 3000
@@ -91,7 +109,10 @@ export default function Documents() {
 
   // Repository jobs index many documents with no row of their own until they are parsed, so
   // they are followed through their job; each poll replaces the list and schedules the next.
-  const pendingRepos = repoJobs.filter(repoActive).map((r) => r.jobId).join(',')
+  const pendingRepos = repoJobs
+    .filter(repoActive)
+    .map((r) => r.jobId)
+    .join(',')
   useEffect(() => {
     if (!pendingRepos) return
     const timer = setTimeout(async () => {
@@ -214,140 +235,212 @@ export default function Documents() {
 
   return (
     <section>
-      <h1>Documents</h1>
-      <label
-        className={dragging ? 'dropzone dragging' : 'dropzone'}
-        onDragOver={(e) => {
-          e.preventDefault()
-          setDragging(true)
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-      >
-        <input
-          type="file"
-          multiple
-          accept=".pdf,.md,.markdown"
-          className="visually-hidden"
-          onChange={onPick}
-        />
-        Drop PDF or Markdown files here, or <span className="link">browse</span>
-      </label>
+      <PageHeader
+        title="Documents"
+        description="Upload files or index a Git repository. Everything here becomes searchable on the Ask page once it is indexed."
+        action={
+          busy && (
+            <span role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Indexing…
+            </span>
+          )
+        }
+      />
 
-      <form className="ask-controls" onSubmit={submitRepo}>
-        <label htmlFor="repo-url">Index a Git repository</label>
-        <input
-          id="repo-url"
-          value={repoUrl}
-          onChange={(e) => setRepoUrl(e.target.value)}
-          placeholder="https://github.com/org/handbook"
-        />
-        <label htmlFor="repo-ref">Branch or tag</label>
-        <input
-          id="repo-ref"
-          value={repoRef}
-          onChange={(e) => setRepoRef(e.target.value)}
-          placeholder="default"
-        />
-        <button type="submit" disabled={!repoUrl.trim()}>
-          Index
-        </button>
-      </form>
-      {repoError && <p className="error-box">{repoError}</p>}
+      <div className="mb-8 grid gap-4 md:grid-cols-2">
+        <label
+          className={cn(
+            'flex min-h-44 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input bg-card px-5 py-8 text-center text-muted-foreground transition-colors hover:border-ring has-[input:focus-visible]:ring-[3px] has-[input:focus-visible]:ring-ring/25',
+            dragging && 'border-ring bg-info-bg',
+          )}
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragging(true)
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+        >
+          <input
+            type="file"
+            multiple
+            accept=".pdf,.md,.markdown"
+            className="sr-only"
+            onChange={onPick}
+          />
+          <FileUp className="mb-1 size-6" />
+          <strong className="text-base font-medium text-foreground">
+            Drop PDF or Markdown files here
+          </strong>
+          <span>
+            or <span className="text-link">browse</span> your computer
+          </span>
+        </label>
+
+        <Card>
+          <CardHeader>
+            <Label htmlFor="repo-url" className="text-[15px] font-semibold">
+              <GitBranch className="size-4" /> Index a Git repository
+            </Label>
+            <CardDescription>
+              Markdown files on the branch are indexed and kept in sync.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="flex flex-col gap-3" onSubmit={submitRepo}>
+              <Input
+                id="repo-url"
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                placeholder="https://github.com/org/handbook"
+              />
+              <div className="flex items-center gap-3">
+                <Label htmlFor="repo-ref" className="shrink-0 text-muted-foreground">
+                  Branch or tag
+                </Label>
+                <Input
+                  id="repo-ref"
+                  value={repoRef}
+                  onChange={(e) => setRepoRef(e.target.value)}
+                  placeholder="default branch"
+                />
+                <Button type="submit" disabled={!repoUrl.trim()}>
+                  Index
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+
+      {repoError && <ErrorAlert>{repoError}</ErrorAlert>}
       {repoJobs.length > 0 && (
-        <ul className="uploads" aria-label="Repositories">
+        <ul className="my-4 flex flex-col gap-2" aria-label="Repositories">
           {repoJobs.map((r) => (
-            <li key={r.jobId} className={r.status === 'failed' ? 'error-text' : undefined}>
-              <strong>{repoLabel(r.url)}</strong> job {r.jobId} {r.status}
-              {r.status === 'done' && `: ${repoSummary(r.result)}`}
-              {r.error && ` ${r.error}`}
+            <li key={r.jobId} className={jobRow}>
+              <strong className="font-medium">{repoLabel(r.url)}</strong> job {r.jobId}{' '}
+              <StatusBadge status={r.status} />
+              {r.status === 'done' && (
+                <span className="text-muted-foreground">: {repoSummary(r.result)}</span>
+              )}
+              {r.error && <span className="text-destructive">{r.error}</span>}
             </li>
           ))}
         </ul>
       )}
 
       {uploads.length > 0 && (
-        <ul className="uploads">
+        <ul className="my-4 flex flex-col gap-2" aria-label="Uploads">
           {uploads.map((u) => (
-            <li key={u.name} className={u.state === 'error' ? 'error-text' : undefined}>
-              <strong>{u.name}</strong> {u.message}
+            <li key={u.name} className={jobRow}>
+              {u.state === 'pending' ? (
+                <Loader2 className="size-4 animate-spin text-info" />
+              ) : (
+                <StatusBadge status={u.state === 'done' ? 'done' : 'failed'}>{u.state}</StatusBadge>
+              )}
+              <strong className="font-medium">{u.name}</strong>
+              <span
+                className={
+                  u.state === 'error' ? 'error-text text-destructive' : 'text-muted-foreground'
+                }
+              >
+                {u.message}
+              </span>
             </li>
           ))}
         </ul>
       )}
 
-      {loadError && <p className="error-box">{loadError}</p>}
-      {deleteError && <p className="error-box">{deleteError}</p>}
+      {loadError && <ErrorAlert>{loadError}</ErrorAlert>}
+      {deleteError && <ErrorAlert>{deleteError}</ErrorAlert>}
+      {docs === null && !loadError && <p className="text-muted-foreground">Loading…</p>}
       {docs && docs.length === 0 && (
-        <p className="muted">No documents yet. Drop a PDF or Markdown file above.</p>
+        <Empty>No documents yet. Drop a PDF or Markdown file above.</Empty>
       )}
       {docs && docs.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Document</th>
-                <th>Title</th>
-                <th>Status</th>
-                <th>Pages</th>
-                <th>Chunks</th>
-                <th>Updated</th>
-                <th>
-                  <span className="visually-hidden">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {docs.map((d) => (
-                <tr key={d.book}>
-                  <td>
-                    {d.book}
-                    {d.file && <div className="muted small">{d.file}</div>}
-                    {d.repo && <div className="muted small">from {repoLabel(d.repo)}</div>}
-                  </td>
-                  <td>{d.title ?? '-'}</td>
-                  <td>
-                    <span className={`status status-${d.status ?? 'none'}`}>
-                      {d.status ?? '-'}
-                    </span>
-                    {d.status === 'failed' && d.error && (
-                      <div className="error-text small">{d.error}</div>
-                    )}
-                  </td>
-                  <td>{d.pages ?? '-'}</td>
-                  <td>{d.chunks ?? '-'}</td>
-                  <td>{formatTime(d.updated_at)}</td>
-                  <td>
-                    {confirming === d.book ? (
-                      <div className="small">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Document</TableHead>
+              <TableHead>Title</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Pages</TableHead>
+              <TableHead>Chunks</TableHead>
+              <TableHead>Updated</TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {docs.map((d) => (
+              <TableRow key={d.book}>
+                <TableCell className="max-w-80">
+                  {d.book}
+                  {d.file && <div className="text-[13px] text-muted-foreground">{d.file}</div>}
+                  {d.repo && (
+                    <div className="text-[13px] text-muted-foreground">
+                      from {repoLabel(d.repo)}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell>{d.title ?? '-'}</TableCell>
+                <TableCell>
+                  <StatusBadge status={d.status ?? 'none'}>{d.status ?? '-'}</StatusBadge>
+                  {d.status === 'failed' && d.error && (
+                    <div className="mt-1 text-[13px] text-destructive">{d.error}</div>
+                  )}
+                </TableCell>
+                <TableCell>{d.pages ?? '-'}</TableCell>
+                <TableCell>{d.chunks ?? '-'}</TableCell>
+                <TableCell className="whitespace-nowrap">{formatTime(d.updated_at)}</TableCell>
+                <TableCell className="text-right">
+                  {confirming === d.book ? (
+                    <div className="ml-auto max-w-sm min-w-64 rounded-md bg-warning-bg p-3 text-left text-[13px] text-warning">
+                      <p>
                         Delete {d.book}? Its chunks, entities and relations go; entities it shares
                         with other documents are rebuilt from them, which drops manual graph edits
-                        on them.{' '}
-                        <button type="button" onClick={() => void remove(d.book)}>
-                          Yes
-                        </button>{' '}
-                        <button type="button" onClick={() => setConfirming(null)}>
-                          No
-                        </button>
-                      </div>
-                    ) : (
-                      !ACTIVE.includes(d.status) && (
-                        <button
+                        on them.
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <Button
                           type="button"
-                          aria-label={`Delete ${d.book}`}
-                          onClick={() => setConfirming(d.book)}
+                          size="sm"
+                          variant="soft-destructive"
+                          onClick={() => void remove(d.book)}
                         >
-                          Delete
-                        </button>
-                      )
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                          Yes
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setConfirming(null)}
+                        >
+                          No
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    !ACTIVE.includes(d.status) && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="soft-destructive"
+                        aria-label={`Delete ${d.book}`}
+                        onClick={() => setConfirming(d.book)}
+                      >
+                        Delete
+                      </Button>
+                    )
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       )}
     </section>
   )
 }
+
+const jobRow = 'flex flex-wrap items-center gap-2 rounded-md bg-card px-3.5 py-2.5 text-sm'

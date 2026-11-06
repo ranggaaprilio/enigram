@@ -1,6 +1,8 @@
 import { Children, cloneElement, isValidElement, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Info } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import type { QueryResult } from '../api'
 import { sourceLabel } from '../format'
 
@@ -37,9 +39,12 @@ function badgify(children: ReactNode): ReactNode {
 // Answers are LLM output: react-markdown renders no raw HTML, so keep rehype-raw out.
 export default function Answer({ result }: { result: QueryResult }) {
   return (
-    <div className="answer">
+    <div className="mt-8">
       {!result.found && (
-        <p className="notice">The indexed documents do not answer this question.</p>
+        <Alert variant="warning" className="mb-4">
+          <Info />
+          <AlertDescription>The indexed documents do not answer this question.</AlertDescription>
+        </Alert>
       )}
       <div className="markdown">
         <ReactMarkdown
@@ -54,10 +59,10 @@ export default function Answer({ result }: { result: QueryResult }) {
       </div>
       {result.sources.length > 0 && (
         <>
-          <h3>Sources</h3>
-          <ul className="sources">
+          <h3 className="mt-6 mb-2 font-semibold tracking-[-0.3px]">Sources</h3>
+          <ul className="max-w-[72ch] divide-y border-t text-sm">
             {result.sources.map((source) => (
-              <li key={source.ref} title={source.citation}>
+              <li key={source.ref} title={source.citation} className="py-2">
                 [{source.ref}] {sourceLabel(source)}
               </li>
             ))}

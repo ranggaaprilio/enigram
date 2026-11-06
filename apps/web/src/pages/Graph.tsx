@@ -15,6 +15,24 @@ import {
   type Job,
   type JobAccepted,
 } from '../api'
+import { Merge, Search } from 'lucide-react'
+import Empty from '@/components/Empty'
+import ErrorAlert from '@/components/ErrorAlert'
+import PageHeader from '@/components/PageHeader'
+import StatusBadge from '@/components/StatusBadge'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
 
 const POLL_MS = 3000
 
@@ -108,9 +126,7 @@ export default function Graph() {
   }
 
   function toggle(name: string) {
-    const next = selected.includes(name)
-      ? selected.filter((n) => n !== name)
-      : [...selected, name]
+    const next = selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]
     setSelected(next)
     if (!next.includes(mergeTarget)) setMergeTarget(next[0] ?? '')
   }
@@ -129,192 +145,198 @@ export default function Graph() {
 
   return (
     <section>
-      <h1>Graph</h1>
-      <form className="ask-form" onSubmit={submitSearch}>
-        <label htmlFor="graph-q">Find entities and relations containing</label>
-        <div className="ask-controls">
-          <input
+      <PageHeader
+        title="Graph"
+        description="Fix every entity and relation that still states the old fact: answers follow the graph only when it no longer contradicts itself."
+      />
+      <form className="mb-6 flex flex-col gap-2" onSubmit={submitSearch}>
+        <Label htmlFor="graph-q" className="text-muted-foreground">
+          Find entities and relations containing
+        </Label>
+        <div className="flex max-w-xl gap-2">
+          <Input
             id="graph-q"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="60%"
           />
-          <button type="submit" disabled={!draft.trim()}>
-            Search
-          </button>
+          <Button type="submit" disabled={!draft.trim()}>
+            <Search /> Search
+          </Button>
         </div>
-        <p className="muted small">
-          Fix every entity and relation that still states the old fact: answers follow the graph
-          only when it no longer contradicts itself.
-        </p>
       </form>
 
-      {error && <p className="error-box">{error}</p>}
+      {error && <ErrorAlert>{error}</ErrorAlert>}
 
       {changes.length > 0 && (
-        <ul className="uploads" aria-label="Changes">
+        <ul className="my-4 flex flex-col gap-2" aria-label="Changes">
           {changes.map((c) => (
-            <li key={c.jobId}>
-              <span className={`status status-${c.status}`}>{c.status}</span> {c.label}
-              {c.error && <span className="error-text"> {c.error}</span>}
+            <li
+              key={c.jobId}
+              className="flex flex-wrap items-center gap-2 rounded-md bg-card px-3.5 py-2.5 text-sm"
+            >
+              <StatusBadge status={c.status} />
+              <span>{c.label}</span>
+              {c.error && <span className="text-destructive">{c.error}</span>}
             </li>
           ))}
         </ul>
+      )}
+
+      {!found && (
+        <Empty>Search for a phrase to list the entities and relations that state it.</Empty>
       )}
 
       {found && (
         <>
           <h2>Entities ({found.entities.length})</h2>
           {found.entities.length === 0 ? (
-            <p className="muted">No entity mentions “{q}”.</p>
+            <Empty>No entity mentions “{q}”.</Empty>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>
-                      <span className="visually-hidden">Merge</span>
-                    </th>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Description</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {found.entities.map((e) => {
-                    const key = entityKey(e)
-                    return (
-                      <tr key={key}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            aria-label={`Select ${e.name}`}
-                            checked={selected.includes(e.name)}
-                            onChange={() => toggle(e.name)}
-                          />
-                        </td>
-                        <td>{e.name}</td>
-                        <td>{e.type}</td>
-                        <td>
-                          {editing === key ? (
-                            <EditForm
-                              description={e.description ?? ''}
-                              extraLabel="Type"
-                              extra={e.type ?? ''}
-                              onCancel={() => setEditing(null)}
-                              onSave={(description, entity_type) =>
-                                queue([key], `Edit ${e.name}`, () =>
-                                  editEntity({ name: e.name, description, entity_type }),
-                                )
-                              }
-                            />
-                          ) : (
-                            e.description
-                          )}
-                        </td>
-                        <td className="nowrap">
-                          <RowActions
-                            label={e.name}
-                            disabled={busy(key)}
-                            hidden={editing === key}
-                            confirming={confirming === key}
-                            onEdit={() => setEditing(key)}
-                            onDelete={() => setConfirming(key)}
-                            onCancelDelete={() => setConfirming(null)}
-                            onConfirmDelete={() =>
-                              queue([key], `Delete ${e.name}`, () => deleteEntity(e.name))
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-8">
+                    <span className="sr-only">Merge</span>
+                  </TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {found.entities.map((e) => {
+                  const key = entityKey(e)
+                  const isSelected = selected.includes(e.name)
+                  return (
+                    <TableRow key={key} data-state={isSelected ? 'selected' : undefined}>
+                      <TableCell>
+                        <Checkbox
+                          aria-label={`Select ${e.name}`}
+                          checked={isSelected}
+                          onCheckedChange={() => toggle(e.name)}
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium">{e.name}</TableCell>
+                      <TableCell className="text-muted-foreground">{e.type}</TableCell>
+                      <TableCell className="min-w-80">
+                        {editing === key ? (
+                          <EditForm
+                            description={e.description ?? ''}
+                            extraLabel="Type"
+                            extra={e.type ?? ''}
+                            onCancel={() => setEditing(null)}
+                            onSave={(description, entity_type) =>
+                              queue([key], `Edit ${e.name}`, () =>
+                                editEntity({ name: e.name, description, entity_type }),
+                              )
                             }
                           />
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        ) : (
+                          e.description
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <RowActions
+                          label={e.name}
+                          disabled={busy(key)}
+                          hidden={editing === key}
+                          confirming={confirming === key}
+                          onEdit={() => setEditing(key)}
+                          onDelete={() => setConfirming(key)}
+                          onCancelDelete={() => setConfirming(null)}
+                          onConfirmDelete={() =>
+                            queue([key], `Delete ${e.name}`, () => deleteEntity(e.name))
+                          }
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
           )}
 
           {selected.length > 0 && (
-            <div className="ask-controls">
-              <label htmlFor="merge-target">Merge selected into</label>
-              <input
+            <div className="my-4 flex flex-wrap items-center gap-3 rounded-xl bg-card px-5 py-4">
+              <Label htmlFor="merge-target">Merge selected into</Label>
+              <Input
                 id="merge-target"
+                className="w-64"
                 value={mergeTarget}
                 onChange={(e) => setMergeTarget(e.target.value)}
               />
-              <button type="button" disabled={!canMerge} onClick={() => void merge()}>
-                Merge
-              </button>
+              <Button type="button" disabled={!canMerge} onClick={() => void merge()}>
+                <Merge /> Merge
+              </Button>
             </div>
           )}
 
           <h2>Relations ({found.relations.length})</h2>
           {found.relations.length === 0 ? (
-            <p className="muted">No relation mentions “{q}”.</p>
+            <Empty>No relation mentions “{q}”.</Empty>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Source → Target</th>
-                    <th>Keywords</th>
-                    <th>Description</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {found.relations.map((r) => {
-                    const key = relationKey(r)
-                    const label = `${r.source} → ${r.target}`
-                    return (
-                      <tr key={key}>
-                        <td>{label}</td>
-                        <td>{r.keywords}</td>
-                        <td>
-                          {editing === key ? (
-                            <EditForm
-                              description={r.description ?? ''}
-                              extraLabel="Keywords"
-                              extra={r.keywords ?? ''}
-                              onCancel={() => setEditing(null)}
-                              onSave={(description, keywords) =>
-                                queue([key], `Edit ${label}`, () =>
-                                  editRelation({
-                                    source: r.source,
-                                    target: r.target,
-                                    description,
-                                    keywords,
-                                  }),
-                                )
-                              }
-                            />
-                          ) : (
-                            r.description
-                          )}
-                        </td>
-                        <td className="nowrap">
-                          <RowActions
-                            label={label}
-                            disabled={busy(key)}
-                            hidden={editing === key}
-                            confirming={confirming === key}
-                            onEdit={() => setEditing(key)}
-                            onDelete={() => setConfirming(key)}
-                            onCancelDelete={() => setConfirming(null)}
-                            onConfirmDelete={() =>
-                              queue([key], `Delete ${label}`, () =>
-                                deleteRelation(r.source, r.target),
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Source → Target</TableHead>
+                  <TableHead>Keywords</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {found.relations.map((r) => {
+                  const key = relationKey(r)
+                  const label = `${r.source} → ${r.target}`
+                  return (
+                    <TableRow key={key}>
+                      <TableCell className="font-medium">{label}</TableCell>
+                      <TableCell className="text-muted-foreground">{r.keywords}</TableCell>
+                      <TableCell className="min-w-80">
+                        {editing === key ? (
+                          <EditForm
+                            description={r.description ?? ''}
+                            extraLabel="Keywords"
+                            extra={r.keywords ?? ''}
+                            onCancel={() => setEditing(null)}
+                            onSave={(description, keywords) =>
+                              queue([key], `Edit ${label}`, () =>
+                                editRelation({
+                                  source: r.source,
+                                  target: r.target,
+                                  description,
+                                  keywords,
+                                }),
                               )
                             }
                           />
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        ) : (
+                          r.description
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <RowActions
+                          label={label}
+                          disabled={busy(key)}
+                          hidden={editing === key}
+                          confirming={confirming === key}
+                          onEdit={() => setEditing(key)}
+                          onDelete={() => setConfirming(key)}
+                          onCancelDelete={() => setConfirming(null)}
+                          onConfirmDelete={() =>
+                            queue([key], `Delete ${label}`, () =>
+                              deleteRelation(r.source, r.target),
+                            )
+                          }
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
           )}
         </>
       )}
@@ -335,36 +357,40 @@ function RowActions(props: {
   if (props.hidden) return null
   if (props.confirming) {
     return (
-      <>
-        Delete {props.label}?{' '}
-        <button type="button" onClick={props.onConfirmDelete}>
+      <div className="flex flex-wrap items-center gap-1.5 text-[13px]">
+        <span>Delete {props.label}?</span>
+        <Button type="button" size="sm" variant="soft-destructive" onClick={props.onConfirmDelete}>
           Yes
-        </button>{' '}
-        <button type="button" onClick={props.onCancelDelete}>
+        </Button>
+        <Button type="button" size="sm" variant="secondary" onClick={props.onCancelDelete}>
           No
-        </button>
-      </>
+        </Button>
+      </div>
     )
   }
   return (
-    <>
-      <button
+    <div className="flex gap-1.5">
+      <Button
         type="button"
+        size="sm"
+        variant="secondary"
         disabled={props.disabled}
         aria-label={`Edit ${props.label}`}
         onClick={props.onEdit}
       >
         Edit
-      </button>{' '}
-      <button
+      </Button>
+      <Button
         type="button"
+        size="sm"
+        variant="soft-destructive"
         disabled={props.disabled}
         aria-label={`Delete ${props.label}`}
         onClick={props.onDelete}
       >
         Delete
-      </button>
-    </>
+      </Button>
+    </div>
   )
 }
 
@@ -380,27 +406,36 @@ function EditForm(props: {
   const [extra, setExtra] = useState(props.extra)
   return (
     <form
-      className="ask-form"
+      className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault()
         props.onSave(description, extra)
       }}
     >
-      <label>
+      <Label className="flex-col items-stretch gap-1.5 text-[13px] text-muted-foreground">
         Description
-        <textarea rows={5} value={description} onChange={(e) => setDescription(e.target.value)} />
-      </label>
-      <label>
+        <Textarea
+          rows={5}
+          className="text-foreground"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </Label>
+      <Label className="flex-col items-stretch gap-1.5 text-[13px] text-muted-foreground">
         {props.extraLabel}
-        <input value={extra} onChange={(e) => setExtra(e.target.value)} />
-      </label>
-      <div className="ask-controls">
-        <button type="submit" disabled={!description.trim()}>
+        <Input
+          className="text-foreground"
+          value={extra}
+          onChange={(e) => setExtra(e.target.value)}
+        />
+      </Label>
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" disabled={!description.trim()}>
           Save
-        </button>
-        <button type="button" onClick={props.onCancel}>
+        </Button>
+        <Button type="button" size="sm" variant="secondary" onClick={props.onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   )

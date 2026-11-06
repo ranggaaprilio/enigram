@@ -82,6 +82,26 @@ describe('Trace', () => {
     expect(screen.getByText('Chunks (1)')).toBeInTheDocument()
   })
 
+  it('keeps a long, collapsed section in the page until it is opened', async () => {
+    const chunks = Array.from({ length: 11 }, (_, i) => ({
+      ref: i + 1,
+      chunk_id: `chunk-${i}`,
+      text: `Chunk text ${i}.`,
+    }))
+    mockFetch({
+      'GET /api/queries/23': { body: { ...record, result: { ...record.result, chunks } } },
+    })
+
+    renderAt('/trace/23')
+
+    // jsdom loads no Tailwind, so check the state the `data-[state=closed]:hidden` class keys on.
+    const chunk = await screen.findByText('Chunk text 0.')
+    const region = chunk.closest('[data-slot="collapsible-content"]')
+    expect(region).toHaveAttribute('data-state', 'closed')
+    await userEvent.click(screen.getByRole('button', { name: 'Chunks (11)' }))
+    expect(region).toHaveAttribute('data-state', 'open')
+  })
+
   it('shows the router decision when the answer carries one', async () => {
     const route = {
       route: 'graph_flow',

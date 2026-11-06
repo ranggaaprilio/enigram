@@ -22,3 +22,19 @@ export function sourceLabel(source: Source): string {
   if (source.pages) parts.push(`p. ${source.pages}`)
   return parts.join(' · ')
 }
+
+// How an answer was produced (QueryResult.mode), in words rather than engine names.
+export function modeLabel(mode: string): string {
+  switch (mode) {
+    case 'auto':
+      return 'auto · documents + code'
+    case 'mix':
+      return 'documents · graph + vectors'
+    case 'naive':
+      return 'documents · vectors only'
+    case 'enigram-agent':
+      return 'code agent'
+    default:
+      return mode
+  }
+}
