@@ -323,7 +323,8 @@ async def test_propose_then_get_annotations(cfg):
         "repo": REPO,
     }
     [info] = notes.structured_content["result"]
-    assert {k: info[k] for k in ("id", "target", "repo", "status", "text", "via", "owner")} == {
+    keys = ("id", "target", "repo", "status", "text", "via", "owner", "note_type")
+    assert {k: info[k] for k in keys} == {
         "id": 1,
         "target": SERVICE,
         "repo": REPO,
@@ -331,6 +332,7 @@ async def test_propose_then_get_annotations(cfg):
         "text": "find is cached for 5 minutes in prod",
         "via": "mcp",
         "owner": "mcp-anonymous",
+        "note_type": "technical",  # agent proposals carry no type
     }
     assert info["line"] == 'note#1 [proposed] "find is cached for 5 minutes in prod"'
     note = state["notes"].notes[1]

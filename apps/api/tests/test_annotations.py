@@ -162,6 +162,14 @@ async def test_create_for_another_owner_is_proposed(cfg):
     assert (note.status, note.verified_by) == ("proposed", None)
 
 
+async def test_create_stores_the_note_type_technical_by_default(cfg):
+    _, notes, typed = await _new(cfg, note_type="expected_behavior")
+    _, _, plain = await _new(cfg)
+
+    assert (typed.note_type, plain.note_type) == ("expected_behavior", "technical")
+    assert notes.events_[0].new["note_type"] == "expected_behavior"
+
+
 async def test_create_rejects_bad_input(cfg):
     import pytest
 
@@ -176,6 +184,7 @@ async def test_create_rejects_bad_input(cfg):
         (NewAnnotation("entity", "E", "t", verify_by="2027-01-01T00:00:00"), "time zone"),
         (NewAnnotation("symbol", "x", "t"), "repository id"),
         (NewAnnotation("thing", "x", "t"), "target_kind"),
+        (NewAnnotation("entity", "E", "t", note_type="opinion"), "note_type"),
     ]
     for new, match in bad:
         with pytest.raises(EnigramError, match=match):

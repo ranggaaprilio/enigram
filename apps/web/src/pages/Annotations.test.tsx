@@ -31,6 +31,7 @@ function note(id: number, overrides: Partial<Annotation> = {}): Annotation {
     via: 'api',
     question: null,
     memory_id: null,
+    note_type: 'technical',
     ...overrides,
   }
 }
@@ -77,6 +78,7 @@ describe('Annotations', () => {
     const table = within(screen.getByRole('table'))
     expect(table.getByText('needs verification')).toHaveClass('status-needs_verification')
     expect(table.getByText('(deps)')).toBeInTheDocument()
+    expect(table.getByText('Technical')).toBeInTheDocument()
 
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'orphaned')
 
@@ -137,6 +139,7 @@ describe('Annotations', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Find' }))
     await userEvent.click(await screen.findByRole('button', { name: 'AuthService.logout' }))
     await userEvent.type(screen.getByLabelText('Note'), 'Revokes tokens.')
+    await userEvent.selectOptions(screen.getByLabelText('Type'), 'Expected behavior')
     await userEvent.type(screen.getByLabelText('By'), 'Alice')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -145,6 +148,7 @@ describe('Annotations', () => {
       target_kind: 'symbol',
       target_ref: 'src/a.ts#AuthService.logout',
       text: 'Revokes tokens.',
+      note_type: 'expected_behavior',
       repo: 1,
       scope: 'deps',
       by: 'Alice',

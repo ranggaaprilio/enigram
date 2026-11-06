@@ -16,6 +16,10 @@ STATUSES = ("verified", "needs_verification", "orphaned", "proposed", "rejected"
 REASONS = ("hash", "deps", "orphan", "verify_by")
 SCOPES = ("deps", "body")
 VIAS = ("api", "mcp")  # how a note was written: the HTTP/CLI routes, or an agent's MCP proposal
+# What a note claims (code-page PRD): business rules need no code review; expected behaviour and
+# known issues claim how the code acts; technical is the developers' default.
+NOTE_TYPES = ("business_rule", "expected_behavior", "known_issue", "technical")
+DEFAULT_NOTE_TYPE = "technical"
 # Shown in answers (rejected is not).
 ACTIVE_STATUSES = ("verified", "needs_verification", "orphaned", "proposed")
 # Attached to graph-tool rows; a proposal is not.
@@ -55,6 +59,7 @@ class Annotation:
     via: str = "api"  # one of VIAS
     question: str | None = None  # the question an MCP proposal answers
     memory_id: int | None = None  # the agent memory an MCP proposal was promoted from
+    note_type: str = DEFAULT_NOTE_TYPE  # one of NOTE_TYPES
 
 
 @dataclass(frozen=True)

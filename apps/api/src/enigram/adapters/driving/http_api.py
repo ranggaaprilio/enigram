@@ -124,6 +124,9 @@ class AnnotationCreate(BaseModel):
     owner: Name | None = None
     scope: Literal["deps", "body"] = "deps"
     verify_by: datetime | None = None
+    note_type: Literal["business_rule", "expected_behavior", "known_issue", "technical"] = (
+        "technical"
+    )
 
 
 class AnnotationPatch(BaseModel):
@@ -597,6 +600,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             owner=body.owner,
             scope=body.scope,
             verify_by=body.verify_by,
+            note_type=body.note_type,
         )
         try:
             note = await create_annotation(
