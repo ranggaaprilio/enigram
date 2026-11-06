@@ -70,6 +70,17 @@ async def test_create_get_list_and_events(notes):
     assert (event.action, event.old, event.new["by"]) == ("created", None, "Alice")
 
 
+async def test_count_by_symbol_counts_every_status_but_rejected_per_repo(notes):
+    await notes.create(_symbol_note(), "web")
+    await notes.create(_symbol_note(status="proposed"), "web")
+    await notes.create(_symbol_note(status="needs_verification"), "web")
+    await notes.create(_symbol_note("src/b.ts#B", status="rejected"), "web")
+    await notes.create(_symbol_note("src/c.ts#C", repo_id=2), "web")
+
+    assert await notes.count_by_symbol(1) == {"src/a.ts#A.run": 3}
+    assert await notes.count_by_symbol(3) == {}
+
+
 async def test_for_symbols_skips_proposals_and_update_logs_changed_keys(notes):
     a = await notes.create(_symbol_note(), "web")
     await notes.create(_symbol_note(status="proposed"), "web")

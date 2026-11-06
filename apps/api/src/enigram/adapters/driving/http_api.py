@@ -30,6 +30,7 @@ from enigram.application.annotations import (
 )
 from enigram.application.budget import daily_exhausted, query_allowance
 from enigram.application.code_agent import answer_with_agent, repo_name
+from enigram.application.code_browse import features_view, symbol_view, tree_view
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
@@ -55,6 +56,7 @@ OPEN_PATHS = frozenset({"/health"})
 OPEN_PATH_PATTERNS = (re.compile(r"^/repos/\d+/webhook$"),)
 SYMBOL_LOOKUP_MAX = 50
 ANNOTATION_LIST_MAX = 500
+FEATURE_LIST_MAX = 500  # rows of GET /repos/{id}/features; `q` narrows, `total` says how many
 
 
 class QueryRequest(BaseModel):
@@ -433,6 +435,34 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         found = await request.app.state.code_graph.find_symbols(repo_id, [q.strip()])
         keys = ("id", "qualified_name", "kind", "file", "line_start", "line_end")
         return [{k: getattr(s, k) for k in keys} for s in found[:SYMBOL_LOOKUP_MAX]]
+
+    @app.get("/repos/{repo_id}/features")
+    async def repo_features(request: Request, repo_id: int, q: str | None = None) -> dict[str, Any]:
+        """Entry points with the number of notes on each, the first FEATURE_LIST_MAX whose
+        route or symbol name contains `q`; `total` counts every match."""
+        await _repo_or_404(request, repo_id)
+        rows = await features_view(
+            request.app.state.code_graph, request.app.state.notes, repo_id, q
+        )
+        return {"features": rows[:FEATURE_LIST_MAX], "total": len(rows)}
+
+    @app.get("/repos/{repo_id}/tree")
+    async def repo_tree(request: Request, repo_id: int) -> dict[str, Any]:
+        """Every indexed file with its symbols (no bodies) and their note counts."""
+        await _repo_or_404(request, repo_id)
+        return await tree_view(request.app.state.code_graph, request.app.state.notes, repo_id)
+
+    # :path because symbol ids are "<file>#<qualified_name>" (sent as %2F and %23).
+    @app.get("/repos/{repo_id}/symbols/{symbol_id:path}")
+    async def repo_symbol(request: Request, repo_id: int, symbol_id: str) -> dict[str, Any]:
+        """One symbol with its summaries, steps (direct callees) and notes."""
+        repo = await _repo_or_404(request, repo_id)
+        view = await symbol_view(
+            request.app.state.code_graph, request.app.state.notes, repo, symbol_id
+        )
+        if view is None:
+            raise HTTPException(404, f"No symbol {symbol_id!r} in repository {repo_id}")
+        return jsonable_encoder({**view, "notes": [_note_json(n) for n in view["notes"]]})
 
     @app.post("/repos/{repo_id}/secret")
     async def rotate_webhook_secret(request: Request, repo_id: int) -> dict[str, str]:
