@@ -6,6 +6,7 @@ import StatusBadge from './components/StatusBadge'
 import { cn } from './lib/utils'
 import Annotations from './pages/Annotations'
 import Ask from './pages/Ask'
+import Code from './pages/Code'
 import Documents from './pages/Documents'
 import Graph from './pages/Graph'
 import { TraceDetail, TraceList } from './pages/Trace'
@@ -13,6 +14,7 @@ import { TraceDetail, TraceList } from './pages/Trace'
 const PAGES = [
   ['/documents', 'Documents'],
   ['/ask', 'Ask'],
+  ['/code', 'Code'],
   ['/trace', 'Trace'],
   ['/annotations', 'Annotations'],
 ] as const
@@ -60,6 +62,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/documents" replace />} />
           <Route path="/documents" element={<Documents />} />
           <Route path="/ask" element={<Ask />} />
+          <Route path="/code" element={<Code />} />
           <Route path="/trace" element={<TraceList />} />
           <Route path="/trace/:id" element={<TraceDetail />} />
           <Route path="/annotations" element={<Annotations />} />

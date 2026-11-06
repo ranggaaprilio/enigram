@@ -204,6 +204,58 @@ export interface SymbolRow {
   line_end: number
 }
 
+// One entry point of a repository (code_browse.features_view); a symbol with two routes is two rows.
+export interface Feature {
+  symbol_id: string
+  qualified_name: string
+  kind: string // http_route, cron, ...
+  route: string
+  framework: string
+  file: string
+  line_start: number
+  line_end: number
+  notes: number // active notes on the symbol
+}
+
+export interface FeatureList {
+  features: Feature[] // at most the first 500 (FEATURE_LIST_MAX)
+  total: number
+}
+
+export interface SymbolStep {
+  id: string
+  qualified_name: string
+  kind: string
+  file: string
+  line_start: number
+  line_end: number
+  summary: string | null
+  notes: number
+}
+
+// GET /repos/{id}/symbols/{sid} (code_browse.symbol_view)
+export interface SymbolView {
+  symbol: {
+    id: string
+    qualified_name: string
+    kind: string
+    file: string
+    line_start: number
+    line_end: number
+    parent: string | null
+    signature: string | null
+    exported: boolean
+    decorators: string[]
+    body: string
+  }
+  location: string // "src/a.ts:8-11@<sha12>"
+  entrypoints: { kind: string; route: string; framework: string }[]
+  summary: { flow: string | null; symbol: string | null }
+  steps: SymbolStep[]
+  external: string[]
+  notes: Annotation[]
+}
+
 export interface QuerySummary {
   id: number
   source: string
@@ -358,6 +410,13 @@ export const listRepos = () => request<RepoRow[]>('/repos')
 
 export const searchSymbols = (repoId: number, q: string) =>
   request<SymbolRow[]>(`/repos/${repoId}/symbols?q=${encodeURIComponent(q)}`)
+
+export const listFeatures = (repoId: number, q = '') =>
+  request<FeatureList>(`/repos/${repoId}/features${q ? `?q=${encodeURIComponent(q)}` : ''}`)
+
+// Symbol ids are "<file>#<qualified_name>": encode them as one path segment (%2F, %23).
+export const getSymbol = (repoId: number, symbolId: string) =>
+  request<SymbolView>(`/repos/${repoId}/symbols/${encodeURIComponent(symbolId)}`)
 
 export const deleteRepo = (id: number) =>
   request<{ repo: number; job: Job }>(`/repos/${id}`, { method: 'DELETE' })

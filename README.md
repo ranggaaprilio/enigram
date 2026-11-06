@@ -374,13 +374,17 @@ Tailscale).
 ### Web UI
 
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
-API. It has four pages in its menu:
+API. It has five pages in its menu:
 
 - **Documents**: drop PDF or Markdown files to upload them; the table follows each job until it
   is indexed or failed.
 - **Ask**: a question in `Auto (router)` mode (default: the router picks the documents, the code
   or both), `mix` (GraphRAG) or `naive` (vector only) on the documents, or `Code (agent)` for
   the indexed repositories, answered with sources and per-sentence origin tags.
+- **Code**: an indexed repository by its entry points (routes, jobs), each with its AI summary,
+  the steps it calls, its code (collapsed) and the notes on it, plus a note form with the target
+  already set, for people who know the feature but not the symbol. Views are linkable
+  (`/code?repo=1&symbol=…`).
 - **Trace**: recent queries, and for each one the router's decision, the chunks, entities,
   relations and sources behind the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
   code sources have an `Annotate` link, note sources open the note.
@@ -525,7 +529,8 @@ candidates (same code or same short name) to relink by hand. Formatting and comm
 hash.
 
 The Annotations page lists notes by status (the re-verification queue is
-`needs_verification`), creates them (with a symbol picker), verifies, rejects, relinks and shows
+`needs_verification`), creates them (with a symbol picker; the Code page creates them from a
+feature without one), verifies, rejects, relinks and shows
 each note's history. Trace links entity names and code sources to it. Seed notes from a file with
 `uv run enigram annotations seed <file.yaml> --repo <url> [--ref <ref>]` (`annotations:` list of
 `{target, text, scope?}`; same target and text are skipped).
