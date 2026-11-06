@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { Annotation, Feature, SymbolView } from '../api'
 import { mockFetch } from '../test/mockFetch'
 import Code from './Code'
@@ -61,6 +61,7 @@ const feature = (changes: Partial<Feature> = {}): Feature => ({
   line_start: 8,
   line_end: 11,
   notes: 1,
+  reviewed: false,
   ...changes,
 })
 
@@ -95,6 +96,7 @@ const view: SymbolView = {
   ],
   external: [],
   notes: [note(3)],
+  review: null,
 }
 
 const FEATURES = {
@@ -114,6 +116,7 @@ const FEATURES = {
 const SYMBOL_URL = `/api/repos/1/symbols/${encodeURIComponent(CONTROLLER)}`
 const SERVICE_URL = `/api/repos/1/symbols/${encodeURIComponent(SERVICE)}`
 const AT_SYMBOL = `/code?repo=1&symbol=${encodeURIComponent(CONTROLLER)}`
+const REVIEW_URL = `${SYMBOL_URL}/review`
 const BASE = {
   'GET /api/repos': { body: REPOS },
   'GET /api/repos/1/features': { body: FEATURES },
@@ -135,6 +138,8 @@ function bodyOf(fetch: ReturnType<typeof mockFetch>, key: string) {
 }
 
 describe('Code', () => {
+  beforeEach(() => localStorage.clear())
+
   it('lists the features of the first repository with their note counts, and filters on the server', async () => {
     mockFetch({
       ...BASE,
@@ -145,13 +150,13 @@ describe('Code', () => {
 
     expect(await screen.findByText('GET /users/:id')).toBeInTheDocument()
     expect(screen.getByText('bootstrap')).toBeInTheDocument()
-    expect(screen.getByText('2 features')).toBeInTheDocument()
+    expect(screen.getByText('2 features · 0 reviewed')).toBeInTheDocument()
     expect(screen.getByText('Pick a feature to see what it does.')).toBeInTheDocument()
 
     // One character: every keystroke is a request, and every URL must be mocked.
     await userEvent.type(screen.getByLabelText('Filter features'), 'u')
 
-    expect(await screen.findByText('1 feature')).toBeInTheDocument()
+    expect(await screen.findByText('1 feature · 0 reviewed')).toBeInTheDocument()
     expect(screen.queryByText('bootstrap')).toBeNull()
   })
 
@@ -171,13 +176,15 @@ describe('Code', () => {
     expect(screen.getByText('Finds a user by id.')).toBeInTheDocument()
     expect(screen.getByText('Notes (1)')).toBeInTheDocument()
     expect(screen.getByText('Logout also revokes the refresh token.')).toBeInTheDocument()
-    // The target is fixed: no symbol lookup, no target field.
-    expect(screen.getByText('New note on AppController.find')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Symbol')).toBeNull()
-    expect(screen.queryByLabelText('Target')).toBeNull()
 
-    await userEvent.type(screen.getByLabelText('Note'), 'Only admins.')
-    await userEvent.selectOptions(screen.getByLabelText('Type'), 'Business rule')
+    // A business rule needs no developer review: saved without `proposed`.
+    await userEvent.click(screen.getByRole('button', { name: 'Add context' }))
+    expect(screen.getByLabelText('Type')).toHaveValue('business_rule')
+    await userEvent.type(
+      screen.getByLabelText('Which rule must this feature follow?'),
+      'Only admins.',
+    )
+    expect(screen.getByText('Saved as verified.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
@@ -189,8 +196,136 @@ describe('Code', () => {
       text: 'Only admins.',
       note_type: 'business_rule',
       repo: 1,
-      scope: 'deps',
     })
+    expect(screen.queryByLabelText('Type')).toBeNull() // the form closes after a save
+  })
+
+  it('sends a mismatch as a proposed expected behaviour, signed with the name', async () => {
+    const fetch = mockFetch({
+      ...BASE,
+      [`GET ${SYMBOL_URL}`]: { body: view },
+      'POST /api/annotations': { status: 201, body: note(4, { status: 'proposed' }) },
+    })
+
+    renderAt(AT_SYMBOL)
+    await userEvent.type(await screen.findByLabelText('Your name'), 'Alice')
+    await userEvent.click(await screen.findByRole('button', { name: 'Not right' }))
+    await userEvent.type(
+      screen.getByLabelText('What should happen instead?'),
+      'Admins only see their own users.',
+    )
+    expect(
+      screen.getByText(/Saved as a proposal; review it on Annotations\./),
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(bodyOf(fetch, 'POST /api/annotations')).toBeDefined())
+    expect(bodyOf(fetch, 'POST /api/annotations')).toEqual({
+      target_kind: 'symbol',
+      target_ref: CONTROLLER,
+      repo: 1,
+      text: 'Admins only see their own users.',
+      note_type: 'expected_behavior',
+      by: 'Alice',
+      proposed: true,
+    })
+    expect(localStorage.getItem('enigram.by')).toBe('Alice')
+  })
+
+  it('proposes a known issue written as context, and cancels without saving', async () => {
+    const fetch = mockFetch({
+      ...BASE,
+      [`GET ${SYMBOL_URL}`]: { body: view },
+      'POST /api/annotations': { status: 201, body: note(4) },
+    })
+
+    renderAt(AT_SYMBOL)
+    await userEvent.click(await screen.findByRole('button', { name: 'Add context' }))
+    await userEvent.selectOptions(screen.getByLabelText('Type'), 'Known issue')
+    await userEvent.type(screen.getByLabelText('What goes wrong, and when?'), 'Times out.')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(bodyOf(fetch, 'POST /api/annotations')).toBeDefined())
+    expect(bodyOf(fetch, 'POST /api/annotations')).toMatchObject({
+      note_type: 'known_issue',
+      proposed: true,
+    })
+
+    // Switching mode keeps the text and moves to that mode's type.
+    await userEvent.click(screen.getByRole('button', { name: 'Add context' }))
+    await userEvent.type(screen.getByLabelText('Which rule must this feature follow?'), 'Draft')
+    await userEvent.click(screen.getByRole('button', { name: 'Not right' }))
+    expect(screen.getByLabelText('What should happen instead?')).toHaveValue('Draft')
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByLabelText('Type')).toBeNull()
+  })
+
+  it('marks the summary as right with the name kept in the browser', async () => {
+    localStorage.setItem('enigram.by', 'Alice')
+    const fetch = mockFetch({
+      ...BASE,
+      [`GET ${SYMBOL_URL}`]: { body: view },
+      [`POST ${REVIEW_URL}`]: {
+        body: { by: 'Alice', actor: 'web', at: '2026-11-07T08:00:00Z', current: true },
+      },
+    })
+
+    renderAt(AT_SYMBOL)
+    expect(await screen.findByLabelText('Your name')).toHaveValue('Alice')
+    await userEvent.click(await screen.findByRole('button', { name: 'Looks right' }))
+
+    await waitFor(() => expect(bodyOf(fetch, `POST ${REVIEW_URL}`)).toEqual({ by: 'Alice' }))
+    // Reloaded afterwards: the marker and the left list come back from the API.
+    await waitFor(() =>
+      expect(fetch.mock.calls.filter(([url]) => url === SYMBOL_URL)).toHaveLength(2),
+    )
+  })
+
+  it('shows who reviewed the summary, lets them undo it, and says when it went stale', async () => {
+    const at = '2026-11-07T08:00:00Z'
+    const reviewed = { ...view, review: { by: 'Alice', actor: 'web', at, current: true } }
+    const fetch = mockFetch({
+      ...BASE,
+      [`GET ${SYMBOL_URL}`]: { body: reviewed },
+      [`DELETE ${REVIEW_URL}`]: { body: null },
+    })
+
+    renderAt(AT_SYMBOL)
+
+    expect(await screen.findByText(/Reviewed by Alice/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Looks right' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() =>
+      expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true),
+    )
+  })
+
+  it('offers a new review when the summary changed since the last one', async () => {
+    const stale = {
+      ...view,
+      review: { by: '', actor: 'web', at: '2026-11-01T08:00:00Z', current: false },
+    }
+    mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: stale } })
+
+    renderAt(AT_SYMBOL)
+
+    expect(await screen.findByText(/Reviewed by web .* the summary changed since/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Looks right' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
+  })
+
+  it('shows which features are reviewed and how many', async () => {
+    mockFetch({
+      ...BASE,
+      'GET /api/repos/1/features': {
+        body: { ...FEATURES, features: [feature({ reviewed: true }), FEATURES.features[1]] },
+      },
+    })
+
+    renderAt('/code')
+
+    expect(await screen.findByText('2 features · 1 reviewed')).toBeInTheDocument()
+    expect(screen.getAllByLabelText('reviewed')).toHaveLength(1)
   })
 
   it('opens a step as its own symbol', async () => {
@@ -216,7 +351,6 @@ describe('Code', () => {
     expect(screen.getByText('Finds a user by id.')).toBeInTheDocument()
     expect(screen.getByText('No notes on this symbol yet.')).toBeInTheDocument()
     expect(screen.getByText(/No steps/)).toBeInTheDocument()
-    expect(screen.getByText('New note on AppService.find')).toBeInTheDocument()
   })
 
   it('keeps the code collapsed until it is opened', async () => {

@@ -24,8 +24,6 @@ export default function NewNoteForm(props: {
   initialKind: TargetKind
   initialRef: string
   initialRepo: number | null
-  // A fixed target (its label): the kind, repository, symbol and target fields are hidden.
-  fixed?: string
   onCreated: () => Promise<void>
   onError: (message: string) => void
 }) {
@@ -75,95 +73,91 @@ export default function NewNoteForm(props: {
     <Collapsible defaultOpen={Boolean(props.initialRef)} className="group mb-4 rounded-xl bg-card">
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-5 py-4 text-left font-semibold tracking-[-0.3px]">
         <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
-        {props.fixed ? `New note on ${props.fixed}` : 'New annotation'}
+        New annotation
       </CollapsibleTrigger>
       <CollapsibleContent>
         <form className="flex flex-col gap-4 px-5 pb-5" onSubmit={submit}>
-          {!props.fixed && (
-            <>
-              <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className={field}>
+              <Label htmlFor="note-kind" className={label}>
+                Kind
+              </Label>
+              <NativeSelect
+                id="note-kind"
+                value={kind}
+                onChange={(e) => setKind(e.target.value as TargetKind)}
+              >
+                {KINDS.map((k) => (
+                  <NativeSelectOption key={k}>{k}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+            {kind === 'symbol' && (
+              <>
                 <div className={field}>
-                  <Label htmlFor="note-kind" className={label}>
-                    Kind
+                  <Label htmlFor="note-repo" className={label}>
+                    Repository
                   </Label>
                   <NativeSelect
-                    id="note-kind"
-                    value={kind}
-                    onChange={(e) => setKind(e.target.value as TargetKind)}
+                    id="note-repo"
+                    value={repoId ?? ''}
+                    onChange={(e) => setRepo(Number(e.target.value) || null)}
                   >
-                    {KINDS.map((k) => (
-                      <NativeSelectOption key={k}>{k}</NativeSelectOption>
+                    {props.repos.map((r) => (
+                      <NativeSelectOption key={r.id} value={r.id}>
+                        {r.name}
+                      </NativeSelectOption>
                     ))}
                   </NativeSelect>
                 </div>
-                {kind === 'symbol' && (
-                  <>
-                    <div className={field}>
-                      <Label htmlFor="note-repo" className={label}>
-                        Repository
-                      </Label>
-                      <NativeSelect
-                        id="note-repo"
-                        value={repoId ?? ''}
-                        onChange={(e) => setRepo(Number(e.target.value) || null)}
-                      >
-                        {props.repos.map((r) => (
-                          <NativeSelectOption key={r.id} value={r.id}>
-                            {r.name}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    </div>
-                    <div className={field}>
-                      <Label htmlFor="note-symbol" className={label}>
-                        Symbol
-                      </Label>
-                      <Input
-                        id="note-symbol"
-                        className="w-64"
-                        value={lookup}
-                        placeholder="logout or AuthService.logout"
-                        onChange={(e) => setLookup(e.target.value)}
-                      />
-                    </div>
-                    <Button type="button" variant="secondary" onClick={() => void find()}>
-                      <Search /> Find
-                    </Button>
-                  </>
-                )}
-              </div>
-              {found.length > 0 && (
-                <ul className="flex flex-col gap-1 text-[13px]">
-                  {found.map((s) => (
-                    <li key={s.id}>
-                      <Button
-                        type="button"
-                        variant="link"
-                        className="h-auto p-0 text-link"
-                        onClick={() => setTargetRef(s.id)}
-                      >
-                        {s.qualified_name}
-                      </Button>{' '}
-                      <span className="text-muted-foreground">
-                        {s.kind} · {s.file}:{s.line_start}-{s.line_end}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className={field}>
-                <Label htmlFor="note-target" className={label}>
-                  Target
-                </Label>
-                <Input
-                  id="note-target"
-                  value={targetRef}
-                  placeholder="symbol id, qualified name, entity or document name"
-                  onChange={(e) => setTargetRef(e.target.value)}
-                />
-              </div>
-            </>
+                <div className={field}>
+                  <Label htmlFor="note-symbol" className={label}>
+                    Symbol
+                  </Label>
+                  <Input
+                    id="note-symbol"
+                    className="w-64"
+                    value={lookup}
+                    placeholder="logout or AuthService.logout"
+                    onChange={(e) => setLookup(e.target.value)}
+                  />
+                </div>
+                <Button type="button" variant="secondary" onClick={() => void find()}>
+                  <Search /> Find
+                </Button>
+              </>
+            )}
+          </div>
+          {found.length > 0 && (
+            <ul className="flex flex-col gap-1 text-[13px]">
+              {found.map((s) => (
+                <li key={s.id}>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-link"
+                    onClick={() => setTargetRef(s.id)}
+                  >
+                    {s.qualified_name}
+                  </Button>{' '}
+                  <span className="text-muted-foreground">
+                    {s.kind} · {s.file}:{s.line_start}-{s.line_end}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
+          <div className={field}>
+            <Label htmlFor="note-target" className={label}>
+              Target
+            </Label>
+            <Input
+              id="note-target"
+              value={targetRef}
+              placeholder="symbol id, qualified name, entity or document name"
+              onChange={(e) => setTargetRef(e.target.value)}
+            />
+          </div>
           <div className={field}>
             <Label htmlFor="note-text" className={label}>
               Note

@@ -8,7 +8,13 @@ from hashlib import sha256
 from typing import Any
 
 from enigram.application.ports import ChatReply, ParsedGraph, ToolCall
-from enigram.domain.annotation import ACTIVE_STATUSES, CITED_STATUSES, Annotation, AnnotationEvent
+from enigram.domain.annotation import (
+    ACTIVE_STATUSES,
+    CITED_STATUSES,
+    Annotation,
+    AnnotationEvent,
+    SymbolReview,
+)
 from enigram.domain.code import (
     IDENTIFIER,
     IMPLEMENTATION_CALL,
@@ -409,6 +415,7 @@ class FakeAnnotations:
     def __init__(self):
         self.notes: dict[int, Annotation] = {}
         self.events_: list[AnnotationEvent] = []
+        self.reviews_: dict[tuple[int, str], SymbolReview] = {}
         self._clock = datetime(2026, 11, 1, tzinfo=UTC)
 
     def _now(self) -> datetime:
@@ -497,6 +504,17 @@ class FakeAnnotations:
             ):
                 out.setdefault(n.target_ref, []).append(n)
         return out
+
+    async def set_review(self, review):
+        stored = dataclasses.replace(review, at=self._now())
+        self.reviews_[(review.repo_id, review.symbol_id)] = stored
+        return stored
+
+    async def delete_review(self, repo_id, symbol_id):
+        return self.reviews_.pop((repo_id, symbol_id), None) is not None
+
+    async def reviews(self, repo_id):
+        return {s: r for (rid, s), r in self.reviews_.items() if rid == repo_id}
 
     async def count_by_symbol(self, repo_id):
         out: dict[str, int] = {}

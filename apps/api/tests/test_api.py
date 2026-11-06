@@ -1008,6 +1008,91 @@ def test_symbol_detail_has_summaries_steps_and_notes(notes_env):
     assert missing_repo.status_code == 404
 
 
+def _save_flow(client, graph, text):
+    from code_fakes import SHA
+
+    from enigram.domain.code import FlowSummary
+
+    client.portal.call(
+        graph.save_summaries, 1, SHA, [FlowSummary(CONTROLLER, "flow", text, ("h",))], "m"
+    )
+
+
+def test_review_marks_a_summary_and_goes_stale_when_it_changes(notes_env):
+    client, _, graph, _, _ = notes_env
+    web = _bearer(WEB_KEY)
+    url = f"/repos/1/symbols/{quote(CONTROLLER, safe='')}"
+    _save_flow(client, graph, "1. Loads the user.")
+
+    marked = client.post(f"{url}/review", json={"by": " Alice "}, headers=web)
+
+    assert marked.status_code == 200
+    body = marked.json()
+    assert (body["symbol_id"], body["by"], body["actor"], body["current"]) == (
+        CONTROLLER,
+        "Alice",
+        "web",
+        True,
+    )
+    features = {
+        f["route"]: f for f in client.get("/repos/1/features", headers=web).json()["features"]
+    }
+    assert (features["GET /users/:id"]["reviewed"], features["bootstrap"]["reviewed"]) == (
+        True,
+        False,
+    )
+    detail = client.get(url, headers=web).json()  # the GET on the same id still answers
+    assert (detail["review"]["by"], detail["review"]["current"]) == ("Alice", True)
+
+    _save_flow(client, graph, "1. Loads the user and writes an audit row.")
+
+    features = client.get("/repos/1/features", headers=web).json()["features"]
+    assert [f["reviewed"] for f in features] == [False, False]
+    assert client.get(url, headers=web).json()["review"]["current"] is False
+
+    other = client.delete(f"{url}/review", headers=_bearer(LAPTOP_KEY))
+    assert other.status_code == 403  # only the key that marked it, or a verifier
+    assert client.delete(f"{url}/review", headers=web).status_code == 204
+    assert client.delete(f"{url}/review", headers=web).status_code == 404
+    assert client.get(url, headers=web).json()["review"] is None
+
+
+def test_review_needs_a_summary_and_a_known_symbol(notes_env):
+    client = notes_env[0]
+    web = _bearer(WEB_KEY)
+    url = f"/repos/1/symbols/{quote(CONTROLLER, safe='')}/review"
+
+    no_summary = client.post(url, headers=web)  # the body is optional
+    assert (no_summary.status_code, no_summary.json()["detail"]) == (422, "No summary to review")
+    assert (
+        client.post(
+            "/repos/1/symbols/src%2Fnope.ts%23Nope/review", headers=web, json={}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(url.replace("/repos/1/", "/repos/9/"), json={}, headers=web).status_code == 404
+    )
+    _save_flow(client, notes_env[2], "1. Loads the user.")
+    too_long = client.post(url, json={"by": "x" * 201}, headers=web)
+    assert (too_long.status_code, too_long.json()["detail"]) == (
+        422,
+        "A name is at most 200 characters",
+    )
+
+
+def test_a_note_asked_to_stay_proposed_is_proposed_for_its_owner(notes_env):
+    client = notes_env[0]
+    web = _bearer(WEB_KEY)
+    body = {"target_kind": "symbol", "target_ref": "AppController.find", "repo": 1, "text": "x"}
+
+    proposed = client.post("/annotations", json={**body, "proposed": True}, headers=web).json()
+    plain = client.post("/annotations", json=body, headers=web).json()
+
+    assert (proposed["status"], proposed["verified_by"]) == ("proposed", None)
+    assert plain["status"] == "verified"
+
+
 def _push(after="b" * 40, ref="refs/heads/main"):
     import json as _json
 

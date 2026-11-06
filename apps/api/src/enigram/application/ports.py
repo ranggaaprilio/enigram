@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     import networkx as nx
 
-    from enigram.domain.annotation import Annotation, AnnotationEvent
+    from enigram.domain.annotation import Annotation, AnnotationEvent, SymbolReview
     from enigram.domain.answer import QueryResult
     from enigram.domain.chunk import ParsedBook
     from enigram.domain.code import CodeEdge, CodeEntrypoint, CodeFile, CodeSymbol, FlowSummary
@@ -215,6 +215,18 @@ class AnnotationRepository(Protocol):
     ) -> "list[tuple[AnnotationEvent, Annotation]]":
         """Events of these actions after `since`, oldest first, each with its note as it is
         now. With `repo_ids`, symbol notes only of those repositories (other notes always)."""
+        ...
+
+    async def set_review(self, review: "SymbolReview") -> "SymbolReview":
+        """Insert or replace the marker of (repo_id, symbol_id); the store sets `at`."""
+        ...
+
+    async def delete_review(self, repo_id: int, symbol_id: str) -> bool:
+        """True when a marker was removed."""
+        ...
+
+    async def reviews(self, repo_id: int) -> dict[str, "SymbolReview"]:
+        """Symbol id -> its marker, for one repository."""
         ...
 
 

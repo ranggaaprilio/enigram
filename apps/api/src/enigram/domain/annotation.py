@@ -73,6 +73,24 @@ class AnnotationEvent:
     at: datetime
 
 
+@dataclass(frozen=True)
+class SymbolReview:
+    """A "looks right" marker on a symbol's summary (code page); not a note, never cited."""
+
+    repo_id: int
+    symbol_id: str
+    summary_kind: str  # "flow" or "symbol": the summary that was shown
+    summary_hash: str  # summary_hash() of that summary when it was marked
+    actor: str  # the API key
+    by: str  # free-text name, may be ""
+    at: datetime
+
+
+def summary_hash(kind: str, text: str) -> str:
+    """Changes when the reviewed summary's text (or kind) changes: the marker is then stale."""
+    return sha256(f"{kind}\0{text}".encode()).hexdigest()[:16]
+
+
 def may_verify(actor: str, note: Annotation, verifiers: tuple[str, ...]) -> bool:
     """Who may verify, reject or change the owner of a note: its owner or a verifier; an agent
     proposal (via "mcp") only a verifier other than the proposing key, even when it owns it."""
