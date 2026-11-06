@@ -498,6 +498,13 @@ class FakeAnnotations:
                 out.setdefault(n.target_ref, []).append(n)
         return out
 
+    async def count_by_symbol(self, repo_id):
+        out: dict[str, int] = {}
+        for n in self.notes.values():
+            if n.target_kind == "symbol" and n.repo_id == repo_id and n.status in ACTIVE_STATUSES:
+                out[n.target_ref] = out.get(n.target_ref, 0) + 1
+        return out
+
     async def search_text(self, question, kinds, limit=5):
         words = {w.lower() for w in re.findall(r"\w+", question) if len(w) >= 4}
         hits = []

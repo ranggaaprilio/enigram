@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+from urllib.parse import quote
 
 import pytest
 from code_fakes import (
@@ -871,6 +872,134 @@ def test_repos_symbols_secret_and_delete(notes_env):
         "api_key": "web",
     }
     assert client.delete("/repos/1", headers=web).status_code == 409  # its job is queued
+
+
+CONTROLLER = "src/app.controller.ts#AppController.find"
+SERVICE = "src/app.service.ts#AppService.find"
+
+
+def _note_on(client, qualified_name, text="x"):
+    body = {"target_kind": "symbol", "target_ref": qualified_name, "repo": 1, "text": text}
+    created = client.post("/annotations", json=body, headers=_bearer(WEB_KEY))
+    assert created.status_code == 201
+    return created.json()
+
+
+def test_features_lists_entrypoints_with_note_counts_and_filters(notes_env):
+    client = notes_env[0]
+    web = _bearer(WEB_KEY)
+    _note_on(client, "AppController.find")
+    _note_on(client, "AppService.find")  # a step's note: not counted on the feature
+
+    body = client.get("/repos/1/features", headers=web).json()
+
+    assert body["total"] == 2
+    users, boot = body["features"]
+    assert (users["route"], users["kind"], users["framework"]) == (
+        "GET /users/:id",
+        "http_route",
+        "nest",
+    )
+    assert (users["symbol_id"], users["file"], users["line_start"]) == (
+        CONTROLLER,
+        "src/app.controller.ts",
+        8,
+    )
+    assert (users["notes"], boot["notes"], boot["route"]) == (1, 0, "bootstrap")
+    assert "body" not in users
+    filtered = client.get("/repos/1/features", params={"q": "USERS"}, headers=web).json()
+    assert [f["route"] for f in filtered["features"]] == ["GET /users/:id"]
+    assert filtered["total"] == 1
+    assert client.get("/repos/1/features", params={"q": "zzz"}, headers=web).json() == {
+        "features": [],
+        "total": 0,
+    }
+    assert client.get("/repos/9/features", headers=web).status_code == 404
+
+
+def test_features_list_is_capped_but_total_is_not(notes_env, monkeypatch):
+    client = notes_env[0]
+    monkeypatch.setattr(api, "FEATURE_LIST_MAX", 1)
+
+    body = client.get("/repos/1/features", headers=_bearer(WEB_KEY)).json()
+
+    assert (len(body["features"]), body["total"]) == (1, 2)
+
+
+def test_tree_groups_symbols_by_file_without_bodies(notes_env):
+    client = notes_env[0]
+    _note_on(client, "AppService.helper")
+
+    files = client.get("/repos/1/tree", headers=_bearer(WEB_KEY)).json()["files"]
+
+    assert [f["path"] for f in files] == [
+        "src/app.controller.ts",
+        "src/app.module.ts",
+        "src/app.service.ts",
+        "src/auth.config.ts",
+        "src/main.ts",
+        "src/repo.ts",
+        "src/roles.guard.ts",
+    ]
+    service = next(f for f in files if f["path"] == "src/app.service.ts")
+    assert [(s["qualified_name"], s["notes"]) for s in service["symbols"]] == [
+        ("AppService", 0),
+        ("AppService.find", 0),
+        ("AppService.helper", 1),
+    ]
+    assert service["symbols"][1]["parent"] == "AppService"
+    assert "body" not in service["symbols"][1]
+    assert client.get("/repos/9/tree", headers=_bearer(WEB_KEY)).status_code == 404
+
+
+def test_symbol_detail_has_summaries_steps_and_notes(notes_env):
+    from code_fakes import SHA
+
+    from enigram.domain.code import FlowSummary
+
+    client, _, graph, _, _ = notes_env
+    web = _bearer(WEB_KEY)
+    client.portal.call(
+        graph.save_summaries,
+        1,
+        SHA,
+        [
+            FlowSummary(CONTROLLER, "flow", "1. `AppService.find` loads the user.", ("h",)),
+            FlowSummary(SERVICE, "symbol", "Finds a user by id.", ("h",)),
+        ],
+        "m",
+    )
+    note = _note_on(client, "AppService.find", "Find also writes an audit row.")
+
+    detail = client.get(f"/repos/1/symbols/{quote(CONTROLLER, safe='')}", headers=web).json()
+
+    assert detail["symbol"]["qualified_name"] == "AppController.find"
+    assert detail["symbol"]["body"].startswith("@Get(':id')")
+    assert detail["symbol"]["decorators"] == ["Get"]
+    assert detail["location"] == f"src/app.controller.ts:8-11@{SHA[:12]}"
+    assert detail["entrypoints"] == [
+        {"kind": "http_route", "route": "GET /users/:id", "framework": "nest"}
+    ]
+    assert detail["summary"] == {"flow": "1. `AppService.find` loads the user.", "symbol": None}
+    [step] = detail["steps"]
+    assert (step["id"], step["summary"], step["notes"]) == (SERVICE, "Finds a user by id.", 1)
+    assert "body" not in step and detail["external"] == [] and detail["notes"] == []
+
+    service = client.get(f"/repos/1/symbols/{quote(SERVICE, safe='')}", headers=web).json()
+
+    assert [s["qualified_name"] for s in service["steps"]] == [
+        "AppService.helper",
+        "UserRepo.load",
+        "SqlUserRepo.load",
+    ]
+    assert service["external"] == ["Number", "bcrypt.compare"]
+    assert service["summary"] == {"flow": None, "symbol": "Finds a user by id."}
+    assert [(n["id"], n["status"], n["text"]) for n in service["notes"]] == [
+        (note["id"], "verified", "Find also writes an audit row.")
+    ]
+    assert client.get("/repos/1/symbols/src%2Fnope.ts%23Nope", headers=web).status_code == 404
+    missing_repo = client.get(f"/repos/9/symbols/{quote(SERVICE, safe='')}", headers=web)
+    assert missing_repo.status_code == 404
 
 
 def _push(after="b" * 40, ref="refs/heads/main"):

@@ -205,6 +205,17 @@ class PostgresAnnotations:
             out.setdefault(r["target_ref"], []).append(_annotation(r))
         return out
 
+    async def count_by_symbol(self, repo_id: int) -> dict[str, int]:
+        rows = await self.pool.fetch(
+            "SELECT target_ref, count(*) AS n FROM annotations WHERE workspace = $1 "
+            "AND target_kind = 'symbol' AND repo_id = $2 AND status = ANY($3::text[]) "
+            "GROUP BY target_ref",
+            self.workspace,
+            repo_id,
+            list(ACTIVE_STATUSES),
+        )
+        return {r["target_ref"]: r["n"] for r in rows}
+
     async def search_text(
         self, question: str, kinds: tuple[str, ...], limit: int = 5
     ) -> list[Annotation]:

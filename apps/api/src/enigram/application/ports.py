@@ -156,6 +156,11 @@ class AnnotationRepository(Protocol):
         """Notes in CITED_STATUSES keyed by symbol id."""
         ...
 
+    async def count_by_symbol(self, repo_id: int) -> dict[str, int]:
+        """Symbol id -> number of its notes in ACTIVE_STATUSES (every status but rejected), for
+        one repository; symbols without notes are absent."""
+        ...
+
     async def search_text(
         self, question: str, kinds: tuple[str, ...], limit: int = 5
     ) -> list["Annotation"]:

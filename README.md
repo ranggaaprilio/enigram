@@ -303,6 +303,9 @@ write the same index.
 | `POST /repos` `{"url", "ref"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL; 409 already queued) |
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50), for the annotation form |
+| `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each, the first 500 whose route or symbol name contains `q`, plus `total` |
+| `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |
+| `GET /repos/{id}/symbols/{symbol_id}` | One symbol (`<file>#<qualified_name>`, URL-encoded) with its location, entry points, flow and symbol summaries, steps (direct callees with their summaries and note counts) and notes |
 | `POST /repos/{id}/secret` | Create or rotate the repository's webhook secret; returned once, never again |
 | `POST /repos/{id}/webhook` | GitHub/GitLab push webhook: no Bearer key, signed with the repository's secret; queues a re-index (202), ignores other branches and commits already indexed |
 | `DELETE /repos/{id}` | Queue deleting a repository's code graph and clone; its annotations become `orphaned` (202; 404 unknown; 409 while it has a job) |
