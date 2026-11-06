@@ -137,6 +137,17 @@ export interface Annotation {
   via: 'api' | 'mcp' // mcp: an agent's proposal; only another verifier key may approve it
   question: string | null // the question an MCP proposal answers
   memory_id: number | null // the agent memory it was promoted from
+  note_type: NoteType
+}
+
+// What a note claims; old notes and agent proposals are technical.
+export type NoteType = 'business_rule' | 'expected_behavior' | 'known_issue' | 'technical'
+
+export const NOTE_TYPES: Record<NoteType, string> = {
+  business_rule: 'Business rule',
+  expected_behavior: 'Expected behavior',
+  known_issue: 'Known issue',
+  technical: 'Technical',
 }
 
 export interface AnnotationEvent {
@@ -161,6 +172,7 @@ export interface NewAnnotation {
   by?: string
   scope?: 'deps' | 'body'
   verify_by?: string
+  note_type?: NoteType
 }
 
 export interface AnnotationPatch {

@@ -53,6 +53,8 @@ CREATE INDEX IF NOT EXISTS annotation_events_note ON annotation_events (annotati
 ALTER TABLE annotations ADD COLUMN IF NOT EXISTS via TEXT NOT NULL DEFAULT 'api';
 ALTER TABLE annotations ADD COLUMN IF NOT EXISTS question TEXT;
 ALTER TABLE annotations ADD COLUMN IF NOT EXISTS memory_id BIGINT;
+-- Code page phase 3: what a note claims (domain.NOTE_TYPES); old notes are technical.
+ALTER TABLE annotations ADD COLUMN IF NOT EXISTS note_type TEXT NOT NULL DEFAULT 'technical';
 CREATE INDEX IF NOT EXISTS annotation_events_at ON annotation_events (at);
 """
 
@@ -78,6 +80,7 @@ _COLUMNS = {
     "via": "via",
     "question": "question",
     "memory_id": "memory_id",
+    "note_type": "note_type",
 }
 
 
@@ -114,6 +117,7 @@ def _annotation(row: asyncpg.Record) -> Annotation:
         via=row["via"],
         question=row["question"],
         memory_id=row["memory_id"],
+        note_type=row["note_type"],
     )
 
 

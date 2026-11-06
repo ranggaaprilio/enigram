@@ -18,7 +18,9 @@ from enigram.application.staleness import hashes_for
 from enigram.config import Config
 from enigram.domain.annotation import (
     ANNOTATION_MAX_CHARS,
+    DEFAULT_NOTE_TYPE,
     DEFAULT_VERIFY_DAYS,
+    NOTE_TYPES,
     QUESTION_MAX_CHARS,
     SCOPES,
     TARGET_KINDS,
@@ -49,6 +51,7 @@ class NewAnnotation:
     owner: str | None = None
     scope: str = "deps"
     verify_by: datetime | str | None = None
+    note_type: str = DEFAULT_NOTE_TYPE
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,8 @@ async def create_annotation(
     """With `decider`, a symbol note verified on creation is checked against the code and gets
     `conflict` set by the decider (event `conflict_detected` by actor `decider`)."""
     _check_kind(new.target_kind, new.scope)
+    if new.note_type not in NOTE_TYPES:
+        raise EnigramError(f"note_type must be one of {NOTE_TYPES}")
     text = _text(new.text)
     verify_by = _when(new.verify_by)
     owner = new.owner or actor
@@ -196,6 +201,7 @@ async def create_annotation(
         "by": new.by.strip(),
         "owner": owner,
         "verify_by": verify_by,
+        "note_type": new.note_type,
     }
     p = None
     if actor == owner or actor in cfg.annotation_verifiers:

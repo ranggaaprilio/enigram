@@ -70,6 +70,16 @@ async def test_create_get_list_and_events(notes):
     assert (event.action, event.old, event.new["by"]) == ("created", None, "Alice")
 
 
+async def test_note_type_round_trips_and_defaults_to_technical(notes):
+    typed = await notes.create(_symbol_note(note_type="known_issue"), "web")
+    plain = await notes.create(_symbol_note("src/b.ts#B"), "web")  # an old note: no type given
+
+    assert (await notes.get(typed.id)).note_type == "known_issue"
+    assert (await notes.get(plain.id)).note_type == "technical"
+    (event,) = await notes.events(typed.id)
+    assert event.new["note_type"] == "known_issue"
+
+
 async def test_count_by_symbol_counts_every_status_but_rejected_per_repo(notes):
     await notes.create(_symbol_note(), "web")
     await notes.create(_symbol_note(status="proposed"), "web")

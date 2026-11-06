@@ -310,7 +310,7 @@ write the same index.
 | `POST /repos/{id}/webhook` | GitHub/GitLab push webhook: no Bearer key, signed with the repository's secret; queues a re-index (202), ignores other branches and commits already indexed |
 | `DELETE /repos/{id}` | Queue deleting a repository's code graph and clone; its annotations become `orphaned` (202; 404 unknown; 409 while it has a job) |
 | `GET /annotations?status=&target_kind=&repo=&target_ref=&limit=` | Annotations, newest first (`rejected` only when asked for) |
-| `POST /annotations` `{"target_kind", "target_ref", "text", "repo"?, "by"?, "owner"?, "scope"?, "verify_by"?}` | Create a note (201); see [Annotations](#annotations) |
+| `POST /annotations` `{"target_kind", "target_ref", "text", "repo"?, "by"?, "owner"?, "scope"?, "verify_by"?, "note_type"?}` | Create a note (201); see [Annotations](#annotations) |
 | `GET /annotations/{id}` | One note with its change history |
 | `PATCH /annotations/{id}` `{"status"?, "text"?, "owner"?, "verify_by"?, "conflict"?, "target_ref"?, "by"?}` | Verify, reject, edit, relink or flag a note (403 when the key may not verify) |
 | `GET /jobs/{id}` | One indexing job: status, result (chunks, timings, report), error |
@@ -495,6 +495,10 @@ they rank above code summaries and documents in every answer (web, REST, MCP, CL
 agent sees the notes of every symbol its graph tools return, the docs path gets the entity and
 document notes the question names or shares words with. An answer cites a note as `note#7`, which
 becomes a source with origin `human`.
+
+Each note has a `note_type` saying what it claims: `business_rule`, `expected_behavior`,
+`known_issue` or `technical` (the default, and the type of every older note and agent proposal).
+It is set when the note is created and returned by the API and by MCP `get_annotations`.
 
 Every sentence of an answer ends with its origin, taken from its citations: `[code]`,
 `[summary]`, `[human]`, `[document]` or `[unsupported]` (no citation). When a cited note is not

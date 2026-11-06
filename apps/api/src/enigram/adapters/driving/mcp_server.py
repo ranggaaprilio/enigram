@@ -148,6 +148,7 @@ class NoteInfo:
     verified_at: str | None
     verify_by: str | None
     via: str  # api | mcp (an agent proposal)
+    note_type: str  # business_rule | expected_behavior | known_issue | technical
     line: str  # how answers cite it
 
 
@@ -215,6 +216,7 @@ def _note_info(n: Annotation, urls: dict[int, str]) -> NoteInfo:
         verified_at=_iso(n.verified_at),
         verify_by=_iso(n.verify_by),
         via=n.via,
+        note_type=n.note_type,
         line=note_line(n, full=True),
     )
 

@@ -6,11 +6,13 @@ import {
   listAnnotations,
   listRepos,
   messageOf,
+  NOTE_TYPES,
   patchAnnotation,
   searchSymbols,
   type Annotation,
   type AnnotationEvent,
   type AnnotationPatch,
+  type NoteType,
   type RepoRow,
   type SymbolRow,
   type TargetKind,
@@ -206,6 +208,9 @@ function NoteRow(props: {
           {props.target}
         </TableCell>
         <TableCell className="min-w-72">
+          <Badge variant="secondary" className="mr-1.5 rounded-[4px]">
+            {NOTE_TYPES[n.note_type]}
+          </Badge>
           {n.text}
           {n.by && <div className={meta}>by {n.by}</div>}
           {n.via === 'mcp' && <div className={meta}>via MCP by {n.author}</div>}
@@ -352,6 +357,7 @@ function NewNoteForm(props: {
   const [text, setText] = useState('')
   const [by, setBy] = useState('')
   const [scope, setScope] = useState<'deps' | 'body'>('deps')
+  const [noteType, setNoteType] = useState<NoteType>('technical')
   const [verifyBy, setVerifyBy] = useState('')
   const repoId = repo ?? props.repos[0]?.id ?? null
 
@@ -371,6 +377,7 @@ function NewNoteForm(props: {
         target_kind: kind,
         target_ref: targetRef.trim(),
         text: text.trim(),
+        note_type: noteType,
         ...(kind === 'symbol' && repoId ? { repo: repoId, scope } : {}),
         ...(by.trim() ? { by: by.trim() } : {}),
         ...(verifyBy ? { verify_by: `${verifyBy}T00:00:00Z` } : {}),
@@ -485,6 +492,22 @@ function NewNoteForm(props: {
             />
           </div>
           <div className="flex flex-wrap items-end gap-3">
+            <div className={field}>
+              <Label htmlFor="note-type" className={label}>
+                Type
+              </Label>
+              <NativeSelect
+                id="note-type"
+                value={noteType}
+                onChange={(e) => setNoteType(e.target.value as NoteType)}
+              >
+                {Object.entries(NOTE_TYPES).map(([value, name]) => (
+                  <NativeSelectOption key={value} value={value}>
+                    {name}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
             <div className={field}>
               <Label htmlFor="note-by" className={label}>
                 By

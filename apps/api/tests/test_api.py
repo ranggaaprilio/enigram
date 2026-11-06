@@ -794,6 +794,11 @@ def test_annotation_create_list_patch_and_history(notes_env):
         "Alice",
     )
     assert note["target_ref"] == "src/app.service.ts#AppService.find"
+    assert note["note_type"] == "technical"
+    # another owner, so it is a proposal and stays out of the verified list below
+    rule = {"target_kind": "entity", "target_ref": "Pricing", "text": "x", "owner": "laptop-a"}
+    typed = client.post("/annotations", json={**rule, "note_type": "business_rule"}, headers=web)
+    assert typed.json()["note_type"] == "business_rule"
     entity = {"target_kind": "entity", "target_ref": "Login", "text": "x", "owner": "laptop-a"}
     assert client.post("/annotations", json=entity, headers=web).json()["status"] == "proposed"
 
@@ -816,6 +821,7 @@ def test_annotation_create_list_patch_and_history(notes_env):
         ({**SYMBOL_NOTE, "verify_by": "2027-01-01T00:00:00"}, 422),
         ({**SYMBOL_NOTE, "target_ref": "find"}, 422),  # two symbols match
         ({**SYMBOL_NOTE, "repo": 9}, 404),
+        ({**SYMBOL_NOTE, "note_type": "opinion"}, 422),
     ],
 )
 def test_annotation_create_rejects(notes_env, body, status):
