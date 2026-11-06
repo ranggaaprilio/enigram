@@ -15,6 +15,26 @@ import {
   type SymbolRow,
   type TargetKind,
 } from '../api'
+import { ChevronRight, Network, Search } from 'lucide-react'
+import Empty from '@/components/Empty'
+import ErrorAlert from '@/components/ErrorAlert'
+import PageHeader from '@/components/PageHeader'
+import StatusBadge from '@/components/StatusBadge'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
 import { formatTime } from '../format'
 
 const STATUSES = ['all', 'needs_verification', 'orphaned', 'verified', 'proposed', 'rejected']
@@ -84,10 +104,22 @@ export default function Annotations() {
 
   return (
     <section>
-      <h1>Annotations</h1>
-      <div className="ask-controls">
-        <label htmlFor="status">Status</label>
-        <select
+      <PageHeader
+        title="Annotations"
+        description="Human notes on code symbols, graph entities and documents. Answers cite them, and they ask for review when the code they describe changes."
+        action={
+          <Button asChild variant="secondary">
+            <Link to="/graph" className="hover:no-underline">
+              <Network /> Graph editor
+            </Link>
+          </Button>
+        }
+      />
+      <div className="mb-4 flex items-center gap-3">
+        <Label htmlFor="status" className="text-muted-foreground">
+          Status
+        </Label>
+        <NativeSelect
           id="status"
           aria-label="Status"
           value={status}
@@ -98,11 +130,11 @@ export default function Annotations() {
           }}
         >
           {STATUSES.map((s) => (
-            <option key={s} value={s}>
+            <NativeSelectOption key={s} value={s}>
               {s.replace('_', ' ')}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </div>
       <NewNoteForm
         repos={repos}
@@ -115,45 +147,40 @@ export default function Annotations() {
         }}
         onError={setError}
       />
-      {error && <p className="error-box">{error}</p>}
+      {error && <ErrorAlert>{error}</ErrorAlert>}
       {notes === null ? (
-        <p className="muted">Loading…</p>
+        <p className="text-muted-foreground">Loading…</p>
       ) : notes.length === 0 ? (
-        <p className="muted">No annotations.</p>
+        <Empty>No annotations.</Empty>
       ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Target</th>
-                <th>Note</th>
-                <th>Status</th>
-                <th>Owner</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {notes.map((n) => (
-                <NoteRow
-                  key={n.id}
-                  note={n}
-                  target={
-                    n.target_kind === 'symbol'
-                      ? `${repoName(n.repo_id)} · ${n.target_ref.split('#').pop()}`
-                      : n.target_ref
-                  }
-                  events={history[n.id]}
-                  onChange={(body) => change(n.id, body)}
-                  onHistory={() => toggleHistory(n.id)}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Target</TableHead>
+              <TableHead>Note</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Owner</TableHead>
+              <TableHead>Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {notes.map((n) => (
+              <NoteRow
+                key={n.id}
+                note={n}
+                target={
+                  n.target_kind === 'symbol'
+                    ? `${repoName(n.repo_id)} · ${n.target_ref.split('#').pop()}`
+                    : n.target_ref
+                }
+                events={history[n.id]}
+                onChange={(body) => change(n.id, body)}
+                onHistory={() => toggleHistory(n.id)}
+              />
+            ))}
+          </TableBody>
+        </Table>
       )}
-      <p className="small">
-        <Link to="/graph">Graph editor (structural LightRAG fixes)</Link>
-      </p>
     </section>
   )
 }
@@ -168,85 +195,133 @@ function NoteRow(props: {
   const { note: n } = props
   const [confirming, setConfirming] = useState(false)
   const [relinkTo, setRelinkTo] = useState(n.candidates[0]?.id ?? '')
+  const meta = 'text-[13px] text-muted-foreground'
   return (
     <>
-      <tr>
-        <td title={n.target_ref}>
-          <span className="chip">{n.target_kind}</span> {props.target}
-        </td>
-        <td>
+      <TableRow className={props.events ? 'border-b-0' : undefined}>
+        <TableCell title={n.target_ref} className="max-w-72">
+          <Badge variant="outline" className="mr-1 rounded-[4px] text-muted-foreground">
+            {n.target_kind}
+          </Badge>{' '}
+          {props.target}
+        </TableCell>
+        <TableCell className="min-w-72">
           {n.text}
-          {n.by && <div className="muted small">by {n.by}</div>}
-          {n.via === 'mcp' && <div className="muted small">via MCP by {n.author}</div>}
-          {n.question && <div className="muted small">Question: {n.question}</div>}
-          {n.memory_id !== null && <div className="muted small">from memory #{n.memory_id}</div>}
-        </td>
-        <td className="nowrap">
-          <span className={`status status-${n.status}`}>{n.status.replace('_', ' ')}</span>
-          {n.reason && <span className="muted small"> ({n.reason})</span>}
-          {n.conflict && <span className="chip chip-error">conflict</span>}
-        </td>
-        <td className="small">
+          {n.by && <div className={meta}>by {n.by}</div>}
+          {n.via === 'mcp' && <div className={meta}>via MCP by {n.author}</div>}
+          {n.question && <div className={meta}>Question: {n.question}</div>}
+          {n.memory_id !== null && <div className={meta}>from memory #{n.memory_id}</div>}
+        </TableCell>
+        <TableCell>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge status={n.status} />
+            {n.reason && <span className={meta}> ({n.reason})</span>}
+            {n.conflict && (
+              <Badge variant="outline" className="border-destructive text-destructive">
+                conflict
+              </Badge>
+            )}
+          </div>
+        </TableCell>
+        <TableCell className="text-[13px]">
           {n.owner}
           {n.verified_by && (
-            <div className="muted">
-              verified by {n.verified_by} {formatTime(n.verified_at)}
+            <div className="text-muted-foreground">
+              verified by {n.verified_by}{' '}
+              <span className="whitespace-nowrap">{formatTime(n.verified_at)}</span>
             </div>
           )}
-          {n.verify_by && <div className="muted">verify by {formatTime(n.verify_by)}</div>}
-        </td>
-        <td className="nowrap">
-          {n.status !== 'verified' && (
-            <button type="button" onClick={() => props.onChange({ status: 'verified' })}>
-              Verify
-            </button>
-          )}{' '}
-          {n.status !== 'rejected' &&
-            (confirming ? (
-              <>
-                Reject?{' '}
-                <button type="button" onClick={() => props.onChange({ status: 'rejected' })}>
-                  Yes
-                </button>{' '}
-                <button type="button" onClick={() => setConfirming(false)}>
-                  No
-                </button>
-              </>
-            ) : (
-              <button type="button" onClick={() => setConfirming(true)}>
-                Reject
-              </button>
-            ))}{' '}
-          <button type="button" onClick={() => props.onChange({ conflict: !n.conflict })}>
-            {n.conflict ? 'Unmark conflict' : 'Conflict'}
-          </button>{' '}
-          <button type="button" onClick={props.onHistory}>
-            History
-          </button>
+          {n.verify_by && (
+            <div className="text-muted-foreground">
+              verify by <span className="whitespace-nowrap">{formatTime(n.verify_by)}</span>
+            </div>
+          )}
+        </TableCell>
+        <TableCell>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {n.status !== 'verified' && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => props.onChange({ status: 'verified' })}
+              >
+                Verify
+              </Button>
+            )}
+            {n.status !== 'rejected' &&
+              (confirming ? (
+                <>
+                  <span className="text-[13px]">Reject?</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="soft-destructive"
+                    onClick={() => props.onChange({ status: 'rejected' })}
+                  >
+                    Yes
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setConfirming(false)}
+                  >
+                    No
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="soft-destructive"
+                  onClick={() => setConfirming(true)}
+                >
+                  Reject
+                </Button>
+              ))}
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => props.onChange({ conflict: !n.conflict })}
+            >
+              {n.conflict ? 'Unmark conflict' : 'Conflict'}
+            </Button>
+            <Button type="button" size="sm" variant="secondary" onClick={props.onHistory}>
+              History
+            </Button>
+          </div>
           {n.status === 'orphaned' && n.candidates.length > 0 && (
-            <div>
-              <select
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <NativeSelect
+                size="sm"
+                className="max-w-56"
                 aria-label={`Relink ${n.target_ref}`}
                 value={relinkTo}
                 onChange={(e) => setRelinkTo(e.target.value)}
               >
                 {n.candidates.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <NativeSelectOption key={c.id} value={c.id}>
                     {c.qualified_name} ({c.file})
-                  </option>
+                  </NativeSelectOption>
                 ))}
-              </select>{' '}
-              <button type="button" onClick={() => props.onChange({ target_ref: relinkTo })}>
+              </NativeSelect>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => props.onChange({ target_ref: relinkTo })}
+              >
                 Relink
-              </button>
+              </Button>
             </div>
           )}
-        </td>
-      </tr>
+        </TableCell>
+      </TableRow>
       {props.events && (
-        <tr>
-          <td colSpan={5}>
-            <ul className="small">
+        <TableRow>
+          <TableCell colSpan={5} className="pt-0">
+            <ul className="ml-4 list-disc text-[13px] text-muted-foreground">
               {props.events.map((e) => (
                 <li key={e.id}>
                   {formatTime(e.at)} · {e.actor} · {e.action}
@@ -254,8 +329,8 @@ function NoteRow(props: {
                 </li>
               ))}
             </ul>
-          </td>
-        </tr>
+          </TableCell>
+        </TableRow>
       )}
     </>
   )
@@ -307,96 +382,153 @@ function NewNoteForm(props: {
     }
   }
 
+  const field = 'flex flex-col gap-1.5'
+  const label = 'text-[13px] text-muted-foreground'
   return (
-    <details open={Boolean(props.initialRef)}>
-      <summary>New annotation</summary>
-      <form className="ask-form" onSubmit={submit}>
-        <div className="ask-controls">
-          <label>
-            Kind{' '}
-            <select value={kind} onChange={(e) => setKind(e.target.value as TargetKind)}>
-              {KINDS.map((k) => (
-                <option key={k}>{k}</option>
+    <Collapsible defaultOpen={Boolean(props.initialRef)} className="group mb-4 rounded-xl bg-card">
+      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-5 py-4 text-left font-semibold tracking-[-0.3px]">
+        <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
+        New annotation
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <form className="flex flex-col gap-4 px-5 pb-5" onSubmit={submit}>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className={field}>
+              <Label htmlFor="note-kind" className={label}>
+                Kind
+              </Label>
+              <NativeSelect
+                id="note-kind"
+                value={kind}
+                onChange={(e) => setKind(e.target.value as TargetKind)}
+              >
+                {KINDS.map((k) => (
+                  <NativeSelectOption key={k}>{k}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+            {kind === 'symbol' && (
+              <>
+                <div className={field}>
+                  <Label htmlFor="note-repo" className={label}>
+                    Repository
+                  </Label>
+                  <NativeSelect
+                    id="note-repo"
+                    value={repoId ?? ''}
+                    onChange={(e) => setRepo(Number(e.target.value) || null)}
+                  >
+                    {props.repos.map((r) => (
+                      <NativeSelectOption key={r.id} value={r.id}>
+                        {r.name}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </div>
+                <div className={field}>
+                  <Label htmlFor="note-symbol" className={label}>
+                    Symbol
+                  </Label>
+                  <Input
+                    id="note-symbol"
+                    className="w-64"
+                    value={lookup}
+                    placeholder="logout or AuthService.logout"
+                    onChange={(e) => setLookup(e.target.value)}
+                  />
+                </div>
+                <Button type="button" variant="secondary" onClick={() => void find()}>
+                  <Search /> Find
+                </Button>
+              </>
+            )}
+          </div>
+          {found.length > 0 && (
+            <ul className="flex flex-col gap-1 text-[13px]">
+              {found.map((s) => (
+                <li key={s.id}>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-link"
+                    onClick={() => setTargetRef(s.id)}
+                  >
+                    {s.qualified_name}
+                  </Button>{' '}
+                  <span className="text-muted-foreground">
+                    {s.kind} · {s.file}:{s.line_start}-{s.line_end}
+                  </span>
+                </li>
               ))}
-            </select>
-          </label>
-          {kind === 'symbol' && (
-            <>
-              <label>
-                Repository{' '}
-                <select
-                  value={repoId ?? ''}
-                  onChange={(e) => setRepo(Number(e.target.value) || null)}
+            </ul>
+          )}
+          <div className={field}>
+            <Label htmlFor="note-target" className={label}>
+              Target
+            </Label>
+            <Input
+              id="note-target"
+              value={targetRef}
+              placeholder="symbol id, qualified name, entity or document name"
+              onChange={(e) => setTargetRef(e.target.value)}
+            />
+          </div>
+          <div className={field}>
+            <Label htmlFor="note-text" className={label}>
+              Note
+            </Label>
+            <Textarea
+              id="note-text"
+              rows={3}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className={field}>
+              <Label htmlFor="note-by" className={label}>
+                By
+              </Label>
+              <Input
+                id="note-by"
+                className="w-48"
+                value={by}
+                onChange={(e) => setBy(e.target.value)}
+              />
+            </div>
+            {kind === 'symbol' && (
+              <div className={field}>
+                <Label htmlFor="note-scope" className={label}>
+                  Scope
+                </Label>
+                <NativeSelect
+                  id="note-scope"
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value as 'deps' | 'body')}
                 >
-                  {props.repos.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Symbol{' '}
-                <input
-                  value={lookup}
-                  placeholder="logout or AuthService.logout"
-                  onChange={(e) => setLookup(e.target.value)}
-                />
-              </label>
-              <button type="button" onClick={() => void find()}>
-                Find
-              </button>
-            </>
-          )}
-        </div>
-        {found.length > 0 && (
-          <ul className="small">
-            {found.map((s) => (
-              <li key={s.id}>
-                <button type="button" className="link" onClick={() => setTargetRef(s.id)}>
-                  {s.qualified_name}
-                </button>{' '}
-                <span className="muted">
-                  {s.kind} · {s.file}:{s.line_start}-{s.line_end}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        <label>
-          Target
-          <input
-            value={targetRef}
-            placeholder="symbol id, qualified name, entity or document name"
-            onChange={(e) => setTargetRef(e.target.value)}
-          />
-        </label>
-        <label>
-          Note
-          <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} />
-        </label>
-        <div className="ask-controls">
-          <label>
-            By <input value={by} onChange={(e) => setBy(e.target.value)} />
-          </label>
-          {kind === 'symbol' && (
-            <label>
-              Scope{' '}
-              <select value={scope} onChange={(e) => setScope(e.target.value as 'deps' | 'body')}>
-                <option value="deps">body and callees</option>
-                <option value="body">body only</option>
-              </select>
-            </label>
-          )}
-          <label>
-            Verify by{' '}
-            <input type="date" value={verifyBy} onChange={(e) => setVerifyBy(e.target.value)} />
-          </label>
-          <button type="submit" disabled={!targetRef.trim() || !text.trim()}>
-            Save
-          </button>
-        </div>
-      </form>
-    </details>
+                  <NativeSelectOption value="deps">body and callees</NativeSelectOption>
+                  <NativeSelectOption value="body">body only</NativeSelectOption>
+                </NativeSelect>
+              </div>
+            )}
+            <div className={field}>
+              <Label htmlFor="note-verify" className={label}>
+                Verify by
+              </Label>
+              <Input
+                id="note-verify"
+                type="date"
+                className="w-44"
+                value={verifyBy}
+                onChange={(e) => setVerifyBy(e.target.value)}
+              />
+            </div>
+            <Button type="submit" disabled={!targetRef.trim() || !text.trim()}>
+              Save
+            </Button>
+          </div>
+        </form>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }

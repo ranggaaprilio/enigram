@@ -1,394 +1,177 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* shadcn/ui theme, mapped onto the DESIGN.md tokens (canvas, surface-1/2, ink, ink-muted,
+   accent-blue). Light is the default; dark follows the system and uses the spec as written. */
 :root {
-  --bg: #ffffff;
-  --surface: #f6f7f9;
-  --border: #d9dde3;
-  --text: #1c2027;
-  --muted: #5f6b7a;
-  --accent: #2459d1;
-  --error: #b42318;
-  --error-bg: #fef3f2;
-  --ok: #067647;
-  --ok-bg: #ecfdf3;
-  --warn: #93370d;
-  --warn-bg: #fffaeb;
+  --background: #ffffff; /* canvas */
+  --foreground: #0b0b0a; /* ink */
+  --card: #f4f4f2; /* surface-1 */
+  --card-foreground: #0b0b0a;
+  --popover: #ffffff;
+  --popover-foreground: #0b0b0a;
+  --primary: #0b0b0a;
+  --primary-foreground: #ffffff;
+  --secondary: #e8e8e5; /* surface-2 */
+  --secondary-foreground: #0b0b0a;
+  --muted: #f4f4f2;
+  --muted-foreground: #5f5f5f; /* ink-muted */
+  --accent: #e8e8e5;
+  --accent-foreground: #0b0b0a;
+  --destructive: #b42318;
+  --border: rgba(0, 0, 0, 0.08); /* hairline-soft */
+  --input: rgba(0, 0, 0, 0.12); /* hairline */
+  --ring: #0099ff; /* accent-blue */
+  --link: #0066cc;
+  --radius: 10px;
+
+  --success: #067647;
+  --success-bg: #ecfdf3;
   --info: #175cd3;
   --info-bg: #eff8ff;
+  --warning: #93370d;
+  --warning-bg: #fffaeb;
+  --danger-bg: #fef3f2;
+  --spotlight: linear-gradient(135deg, #4f46e5 0%, #8b3fe0 55%, #b8307e 100%);
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14171c;
-    --surface: #1d2129;
-    --border: #2f3542;
-    --text: #e6e9ef;
-    --muted: #9aa4b2;
-    --accent: #7aa2ff;
-    --error: #fda29b;
-    --error-bg: #3a1714;
-    --ok: #75e0a7;
-    --ok-bg: #0f2e1f;
-    --warn: #fec84b;
-    --warn-bg: #33270a;
+    --background: #0a0908;
+    --foreground: #ffffff;
+    --card: #171615;
+    --card-foreground: #ffffff;
+    --popover: #171615;
+    --popover-foreground: #ffffff;
+    --primary: #ffffff;
+    --primary-foreground: #0a0908;
+    --secondary: #242221;
+    --secondary-foreground: #ffffff;
+    --muted: #171615;
+    --muted-foreground: #999999;
+    --accent: #242221;
+    --accent-foreground: #ffffff;
+    --destructive: #f97066;
+    --border: rgba(255, 255, 255, 0.07);
+    --input: rgba(255, 255, 255, 0.12);
+    --ring: #0099ff;
+    --link: #0099ff;
+
+    --success: #75e0a7;
+    --success-bg: #0f2e1f;
     --info: #84caff;
     --info-bg: #102a46;
+    --warning: #fec84b;
+    --warning-bg: #33270a;
+    --danger-bg: #3a1714;
     color-scheme: dark;
   }
 }
 
-* {
-  box-sizing: border-box;
+@theme inline {
+  --font-sans: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-link: var(--link);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger-bg: var(--danger-bg);
+  --radius-sm: 6px;
+  --radius-md: var(--radius);
+  --radius-lg: 15px;
+  --radius-xl: 20px;
+  --radius-2xl: 30px;
 }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 15px;
+    line-height: 1.3;
+    letter-spacing: -0.15px;
+    /* DESIGN.md: these Inter character variants are the brand's body voice. */
+    font-feature-settings: 'cv01', 'cv05', 'cv09', 'cv11', 'ss03', 'ss07', 'dlig';
+  }
+  h1 {
+    @apply mb-5 text-[32px] leading-[1.13] font-medium tracking-[-1px];
+  }
+  h2 {
+    @apply mt-8 mb-3 text-[22px] leading-tight font-bold tracking-[-0.8px];
+  }
+  a {
+    @apply text-link hover:underline;
+  }
+  table {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-a,
-.link {
-  color: var(--accent);
-}
+/* Answers are rendered markdown: no typography plugin, just the few elements LLMs emit. */
+@layer components {
+  .markdown {
+    @apply max-w-[72ch] text-base leading-relaxed tracking-[-0.16px] [overflow-wrap:anywhere];
+  }
+  .markdown p,
+  .markdown ul,
+  .markdown ol,
+  .markdown pre {
+    @apply mb-3;
+  }
+  .markdown ul {
+    @apply list-disc pl-6;
+  }
+  .markdown ol {
+    @apply list-decimal pl-6;
+  }
+  .markdown code {
+    @apply rounded-sm bg-secondary px-1.5 py-px text-[13px];
+  }
+  .markdown pre {
+    @apply rounded-md bg-card px-4 py-3 text-[13px] whitespace-pre-wrap;
+  }
+  .markdown pre code {
+    @apply bg-transparent p-0;
+  }
 
-h1 {
-  font-size: 1.4rem;
-  margin: 0 0 1rem;
-}
-
-h3 {
-  font-size: 1rem;
-  margin: 1.25rem 0 0.5rem;
-}
-
-main {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 1.5rem 16px 3rem;
-}
-
-.topbar {
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.topbar-inner {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 0.6rem 16px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1.5rem;
-}
-
-.brand {
-  font-weight: 700;
-}
-
-nav {
-  display: flex;
-  gap: 1rem;
-}
-
-nav a {
-  color: var(--muted);
-  text-decoration: none;
-}
-
-nav a.active {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.workspace {
-  margin-left: auto;
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.small {
-  font-size: 0.85rem;
-}
-
-.nowrap {
-  white-space: nowrap;
-}
-
-.error-text {
-  color: var(--error);
-}
-
-.error-box,
-.notice {
-  padding: 0.6rem 0.8rem;
-  border-radius: 6px;
-}
-
-.error-box {
-  color: var(--error);
-  background: var(--error-bg);
-}
-
-.notice {
-  color: var(--warn);
-  background: var(--warn-bg);
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-.dropzone {
-  display: block;
-  padding: 2rem 1rem;
-  border: 2px dashed var(--border);
-  border-radius: 8px;
-  text-align: center;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.dropzone:focus-within {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.dropzone.dragging {
-  border-color: var(--accent);
-  background: var(--info-bg);
-}
-
-.uploads {
-  padding-left: 1.2rem;
-}
-
-.table-wrap {
-  overflow-x: auto;
-  margin: 1rem 0;
-}
-
-table {
-  border-collapse: collapse;
-  width: 100%;
-}
-
-th,
-td {
-  text-align: left;
-  vertical-align: top;
-  padding: 0.45rem 0.6rem;
-  border-bottom: 1px solid var(--border);
-}
-
-th {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--muted);
-}
-
-td.truncate {
-  max-width: 28rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.status {
-  display: inline-block;
-  padding: 0 0.5rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  background: var(--surface);
-  color: var(--muted);
-}
-
-.status-queued,
-.status-running,
-.status-parsed,
-.status-deleting {
-  background: var(--info-bg);
-  color: var(--info);
-}
-
-.status-indexed,
-.status-done {
-  background: var(--ok-bg);
-  color: var(--ok);
-}
-
-.status-failed {
-  background: var(--error-bg);
-  color: var(--error);
-}
-
-.status-budget_exceeded {
-  background: var(--warn-bg);
-  color: var(--warn);
-}
-
-/* Annotation statuses */
-.status-verified {
-  background: var(--ok-bg);
-  color: var(--ok);
-}
-
-.status-needs_verification,
-.status-proposed {
-  background: var(--info-bg);
-  color: var(--info);
-}
-
-.status-orphaned,
-.status-rejected {
-  background: var(--error-bg);
-  color: var(--error);
-}
-
-.chip {
-  display: inline-block;
-  margin: 0 0.25rem;
-  padding: 0 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-.chip-error {
-  border-color: var(--error);
-  color: var(--error);
-}
-
-/* Per-sentence origin badges in answers (domain/origin.py) */
-.badge {
-  display: inline-block;
-  margin-left: 0.25em;
-  padding: 0 0.35rem;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  font-variant: small-caps;
-  line-height: 1.4;
-  vertical-align: baseline;
-  background: var(--surface);
-  color: var(--muted);
-}
-
-.badge-code {
-  background: var(--ok-bg);
-  color: var(--ok);
-}
-
-.badge-summary,
-.badge-document {
-  background: var(--info-bg);
-  color: var(--info);
-}
-
-.badge-human {
-  background: var(--warn-bg);
-  color: var(--warn);
-}
-
-.badge-unsupported {
-  background: var(--error-bg);
-  color: var(--error);
-}
-
-.ask-form textarea {
-  display: block;
-  width: 100%;
-  margin: 0.3rem 0 0.6rem;
-  padding: 0.6rem;
-  font: inherit;
-  color: inherit;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.ask-controls,
-.heading-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.heading-row {
-  justify-content: space-between;
-  margin-bottom: 1rem;
-}
-
-.heading-row h1 {
-  margin: 0;
-}
-
-select,
-button {
-  font: inherit;
-  padding: 0.35rem 0.8rem;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-}
-
-button[type='submit'] {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-button:disabled {
-  opacity: 0.5;
-}
-
-.answer {
-  margin-top: 1.25rem;
-}
-
-.markdown {
-  overflow-wrap: anywhere;
-}
-
-.markdown pre,
-.chunk pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  background: var(--surface);
-  padding: 0.6rem;
-  border-radius: 6px;
-}
-
-.sources {
-  padding-left: 0;
-  list-style: none;
-  margin: 0;
-}
-
-details {
-  margin: 1rem 0;
-  border-top: 1px solid var(--border);
-  padding-top: 0.6rem;
-}
-
-summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.chunk {
-  margin: 0.8rem 0;
+  /* Per-sentence origin badges in answers (domain/origin.py) */
+  .badge {
+    @apply ml-1 inline-block rounded-[4px] bg-secondary px-1.5 align-baseline text-[0.7rem] leading-snug text-muted-foreground [font-variant:small-caps];
+  }
+  .badge-code {
+    @apply bg-success-bg text-success;
+  }
+  .badge-summary,
+  .badge-document {
+    @apply bg-info-bg text-info;
+  }
+  .badge-human {
+    @apply bg-warning-bg text-warning;
+  }
+  .badge-unsupported {
+    @apply bg-danger-bg text-destructive;
+  }
 }

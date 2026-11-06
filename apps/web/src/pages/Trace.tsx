@@ -1,5 +1,21 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
+import { ArrowLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import Empty from '@/components/Empty'
+import ErrorAlert from '@/components/ErrorAlert'
+import PageHeader from '@/components/PageHeader'
+import StatusBadge from '@/components/StatusBadge'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import {
   ApiError,
   getQuery,
@@ -11,12 +27,12 @@ import {
   type Source,
 } from '../api'
 import Answer from '../components/Answer'
-import { formatSecs, formatTime } from '../format'
+import { formatSecs, formatTime, modeLabel } from '../format'
 
 function outcome(q: QuerySummary): ReactNode {
-  if (q.error) return <span className="status status-failed">error</span>
-  if (q.found === false) return <span className="status status-queued">no context</span>
-  return <span className="status status-indexed">found</span>
+  if (q.error) return <StatusBadge status="failed">error</StatusBadge>
+  if (q.found === false) return <StatusBadge status="queued">no context</StatusBadge>
+  return <StatusBadge status="indexed">found</StatusBadge>
 }
 
 export function TraceList() {
@@ -38,47 +54,48 @@ export function TraceList() {
 
   return (
     <section>
-      <div className="heading-row">
-        <h1>Trace</h1>
-        <button type="button" onClick={() => void load()}>
-          Refresh
-        </button>
-      </div>
-      {error && <p className="error-box">{error}</p>}
-      {rows && rows.length === 0 && (
-        <p className="muted">No queries yet. Ask something on the Ask page.</p>
-      )}
+      <PageHeader
+        title="Trace"
+        description="Every question asked, with what was retrieved to answer it."
+        action={
+          <Button type="button" variant="secondary" onClick={() => void load()}>
+            <RefreshCw /> Refresh
+          </Button>
+        }
+      />
+      {error && <ErrorAlert>{error}</ErrorAlert>}
+      {rows && rows.length === 0 && <Empty>No queries yet. Ask something on the Ask page.</Empty>}
       {rows && rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Time</th>
-                <th>Mode</th>
-                <th>Result</th>
-                <th>Duration</th>
-                <th>Question</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((q) => (
-                <tr key={q.id}>
-                  <td>
-                    <Link to={`/trace/${q.id}`}>#{q.id}</Link>
-                  </td>
-                  <td className="nowrap">{formatTime(q.created_at)}</td>
-                  <td>{q.mode}</td>
-                  <td>{outcome(q)}</td>
-                  <td className="nowrap">{formatSecs(q.query_secs)}</td>
-                  <td className="truncate" title={q.question}>
-                    {q.question}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>#</TableHead>
+              <TableHead>Time</TableHead>
+              <TableHead>Mode</TableHead>
+              <TableHead>Result</TableHead>
+              <TableHead>Duration</TableHead>
+              <TableHead>Question</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((q) => (
+              <TableRow key={q.id}>
+                <TableCell>
+                  <Link to={`/trace/${q.id}`}>#{q.id}</Link>
+                </TableCell>
+                <TableCell className="whitespace-nowrap">{formatTime(q.created_at)}</TableCell>
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  {modeLabel(q.mode)}
+                </TableCell>
+                <TableCell>{outcome(q)}</TableCell>
+                <TableCell className="whitespace-nowrap">{formatSecs(q.query_secs)}</TableCell>
+                <TableCell className="max-w-md truncate" title={q.question}>
+                  {q.question}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       )}
     </section>
   )
@@ -103,14 +120,27 @@ function sourceLink(s: Source) {
   return null
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) {
+function Section({
+  title,
+  count,
+  children,
+}: {
+  title: string
+  count: number
+  children: ReactNode
+}) {
   return (
-    <details open={count <= 10}>
-      <summary>
+    <Collapsible defaultOpen={count > 0 && count <= 10} className="group my-3 rounded-xl bg-card">
+      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-5 py-4 text-left font-semibold tracking-[-0.3px]">
+        <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
         {title} ({count})
-      </summary>
-      {children}
-    </details>
+      </CollapsibleTrigger>
+      {/* forceMount: closed sections stay in the DOM, as the old <details> did; Radix then
+          leaves hiding to CSS on data-state. */}
+      <CollapsibleContent forceMount className="px-2 pb-3 data-[state=closed]:hidden">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -118,10 +148,10 @@ function Section({ title, count, children }: { title: string; count: number; chi
 function RouteLine({ route }: { route: RouteDecision }) {
   const rules = route.rules.length ? `: ${route.rules.join(', ')}` : ''
   return (
-    <p className="muted small">
+    <Badge variant="outline" className="text-muted-foreground">
       route {route.route} → {route.targets.join(' + ')} ({route.method}
       {rules})
-    </p>
+    </Badge>
   )
 }
 
@@ -151,119 +181,126 @@ export function TraceDetail() {
     }
   }, [id, valid])
 
+  const back = (
+    <Link to="/trace" className="mb-4 inline-flex items-center gap-1 text-sm">
+      <ArrowLeft className="size-4" /> All queries
+    </Link>
+  )
+
   if (!valid || notFound) {
     return (
       <section>
-        <p>Query #{id} not found.</p>
-        <Link to="/trace">Back to all queries</Link>
+        {back}
+        <Empty>Query #{id} not found.</Empty>
       </section>
     )
   }
-  if (error) return <p className="error-box">{error}</p>
-  if (!record) return <p className="muted">Loading…</p>
+  if (error) return <ErrorAlert>{error}</ErrorAlert>
+  if (!record) return <p className="text-muted-foreground">Loading…</p>
 
   const result = record.result
   return (
     <section>
-      <p>
-        <Link to="/trace">← All queries</Link>
-      </p>
-      <h1>{record.question}</h1>
-      <p className="muted small">
-        #{record.id} · {formatTime(record.created_at)} · {record.mode} ·{' '}
-        {formatSecs(record.query_secs)} · {record.source}
-      </p>
-      {result?.extra?.route && <RouteLine route={result.extra.route} />}
-      {record.error && <p className="error-box">{record.error}</p>}
+      {back}
+      <h1 className="mb-3">{record.question}</h1>
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+        <span>
+          #{record.id} · {formatTime(record.created_at)} · {modeLabel(record.mode)} ·{' '}
+          {formatSecs(record.query_secs)} · {record.source}
+        </span>
+        {result?.extra?.route && <RouteLine route={result.extra.route} />}
+      </div>
+      {record.error && <ErrorAlert>{record.error}</ErrorAlert>}
       {result && (
         <>
           <Answer result={result} />
-          <Section title="Chunks" count={result.chunks.length}>
-            {result.chunks.map((c) => (
-              <div key={c.chunk_id} className="chunk">
-                <div className="small">
-                  [{c.ref}] <code>{c.chunk_id}</code>
+          <div className="mt-8">
+            <Section title="Chunks" count={result.chunks.length}>
+              {result.chunks.map((c) => (
+                <div key={c.chunk_id} className="mx-3 my-3">
+                  <div className="mb-1 text-[13px] text-muted-foreground">
+                    [{c.ref}]{' '}
+                    <code className="rounded-sm bg-secondary px-1.5 text-[12px]">{c.chunk_id}</code>
+                  </div>
+                  <pre className="rounded-md bg-background px-4 py-3 text-[13px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                    {c.text}
+                  </pre>
                 </div>
-                <pre>{c.text}</pre>
-              </div>
-            ))}
-          </Section>
-          <Section title="Entities" count={result.entities.length}>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Description</th>
-                  </tr>
-                </thead>
-                <tbody>
+              ))}
+            </Section>
+            <Section title="Entities" count={result.entities.length}>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Description</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {result.entities.map((e) => (
-                    <tr key={e.name}>
-                      <td>{noteLink('entity', e.name)}</td>
-                      <td>{e.type}</td>
-                      <td>{e.description}</td>
-                    </tr>
+                    <TableRow key={e.name}>
+                      <TableCell>{noteLink('entity', e.name)}</TableCell>
+                      <TableCell>{e.type}</TableCell>
+                      <TableCell>{e.description}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </Section>
-          <Section title="Relations" count={result.relations.length}>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Source → Target</th>
-                    <th>Keywords</th>
-                    <th>Description</th>
-                  </tr>
-                </thead>
-                <tbody>
+                </TableBody>
+              </Table>
+            </Section>
+            <Section title="Relations" count={result.relations.length}>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Source → Target</TableHead>
+                    <TableHead>Keywords</TableHead>
+                    <TableHead>Description</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {result.relations.map((r) => (
-                    <tr key={`${r.source}\u0000${r.target}`}>
-                      <td>
+                    <TableRow key={`${r.source}\u0000${r.target}`}>
+                      <TableCell>
                         {noteLink('entity', r.source)} → {noteLink('entity', r.target)}
-                      </td>
-                      <td>{r.keywords}</td>
-                      <td>{r.description}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>{r.keywords}</TableCell>
+                      <TableCell>{r.description}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </Section>
-          <Section title="Sources" count={result.sources.length}>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Ref</th>
-                    <th>Title</th>
-                    <th>Section</th>
-                    <th>Pages</th>
-                    <th>Citation</th>
-                    <th>Origin</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
+                </TableBody>
+              </Table>
+            </Section>
+            <Section title="Sources" count={result.sources.length}>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Ref</TableHead>
+                    <TableHead>Title</TableHead>
+                    <TableHead>Section</TableHead>
+                    <TableHead>Pages</TableHead>
+                    <TableHead>Citation</TableHead>
+                    <TableHead>Origin</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {result.sources.map((s) => (
-                    <tr key={s.ref}>
-                      <td>[{s.ref}]</td>
-                      <td>{s.title}</td>
-                      <td>{s.section}</td>
-                      <td>{s.pages}</td>
-                      <td className="small">{s.citation}</td>
-                      <td>{s.origin}</td>
-                      <td>{sourceLink(s)}</td>
-                    </tr>
+                    <TableRow key={s.ref}>
+                      <TableCell>[{s.ref}]</TableCell>
+                      <TableCell>{s.title}</TableCell>
+                      <TableCell>{s.section}</TableCell>
+                      <TableCell>{s.pages}</TableCell>
+                      <TableCell className="text-[13px] [overflow-wrap:anywhere]">
+                        {s.citation}
+                      </TableCell>
+                      <TableCell>{s.origin}</TableCell>
+                      <TableCell>{sourceLink(s)}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </Section>
+                </TableBody>
+              </Table>
+            </Section>
+          </div>
         </>
       )}
     </section>
