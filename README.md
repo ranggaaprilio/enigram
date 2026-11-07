@@ -337,6 +337,12 @@ one live in `data/workspaces/<name>/`. `/health` and `/mcp` stay on the process 
 webhook finds its repository in any workspace. One worker runs the jobs of every registered
 workspace, oldest first, each with that workspace's files and index.
 
+Two things are shared. The Git clone cache (`REPO_STORE`, default `data/repos`) holds one clone
+per repository URL and ref for every workspace; what is indexed from it stays in the workspace
+that asked. And a workspace's LightRAG engine opens in the API on its first document question and stays open:
+with Postgres storage one small workspace measured about 25 MiB (473 MiB API with one engine,
+498 MiB with two), and a workspace with a large graph costs more.
+
 ```bash
 export AUTH="Authorization: Bearer <key>"   # skip -H "$AUTH" when no keys are set
 curl -H "$AUTH" -F file=@paper.pdf localhost:8080/documents
@@ -363,6 +369,8 @@ counted, and three caps bound the spend; `0` turns one off.
 | `PER_KEY_DAILY_TOKENS` | 2,000,000 | Per API key name and UTC day on the query path (`/query`, MCP): 429 once used up, so a leaked key cannot burn the budget |
 
 A query that crosses what is left mid-answer also gets 429 (the tokens it spent still count).
+`DAILY_TOKEN_BUDGET` counts per workspace, so N workspaces can spend up to N times it in a day;
+there is no global cap.
 Usage is recorded in `enigram_token_usage` per day, source (`job:<kind>`, `query`) and key; the
 CLI (`enigram repo`, `enigram query`, `enigram golden`) is not metered. A `budget_exceeded` job is
 re-queued by hand (upload or `POST /repos` again) once the budget allows.
