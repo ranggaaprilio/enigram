@@ -79,7 +79,16 @@ def test_parse_edge_and_entrypoint_rows():
         {"symbol": "a", "kind": "http_route", "route": "GET /x", "framework": "nest"}
     )
     assert entry.version == ""
-    with pytest.raises(EnigramError, match="kind='rpc'"):
+    # Kinds the Next.js adapter and the generic fallback emit (tools/ts-graph/lib/entrypoints).
+    for kind, framework in (
+        ("page", "next"),
+        ("middleware", "next"),
+        ("action", "next"),
+        ("root", "generic"),
+    ):
+        row = {"symbol": "a", "kind": kind, "route": "/", "framework": framework}
+        assert parse_entrypoint_row(row).kind == kind
+    with pytest.raises(EnigramError, match="entry point a: kind='rpc'"):
         parse_entrypoint_row({"symbol": "a", "kind": "rpc", "route": "", "framework": "nest"})
 
 
@@ -91,6 +100,29 @@ def test_code_citation_and_parse():
     assert parse_code_citations(text) == [
         CodeCitation("src/a.ts", 10, 20, "70ae60dbb609"),
         CodeCitation("src/b.ts", 7, 7, "abc1234"),
+    ]
+
+
+def test_next_app_router_paths_parse_whole():
+    # Dynamic segments, catch-alls, route groups, parallel slots and intercepting routes.
+    paths = [
+        "app/board/[boardId]/page.tsx",
+        "app/docs/[...slug]/page.tsx",
+        "app/shop/[[...slug]]/page.tsx",
+        "app/(marketing)/page.tsx",
+        "app/@modal/(.)photo/page.tsx",
+        "app/(..)(..)feed/page.tsx",
+    ]
+    for path in paths:
+        text = f"The page renders it (`{path}:11-19@d0eebac9f3e4`) [code]."
+        assert parse_code_citations(text) == [CodeCitation(path, 11, 19, "d0eebac9f3e4")]
+        assert normalize_answer(f"The page renders it {path}:11-19@d0eebac9f3e4.") == (
+            "The page renders it."
+        )
+    # A parenthesis or bracket around a citation is not part of its path.
+    assert parse_code_citations("see (a.ts:1@abc1234) and [b.ts:2@abc1234]") == [
+        CodeCitation("a.ts", 1, 1, "abc1234"),
+        CodeCitation("b.ts", 2, 2, "abc1234"),
     ]
 
 

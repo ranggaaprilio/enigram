@@ -9,7 +9,11 @@ _LIST_MARKER = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
 _CITATION = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")  # [1], [1, 2]
 # src/auth/auth.service.ts:42@a1b2c3d, optionally line ranges (53-55,65-67); any path (the sha
 # makes it unambiguous), so a citation to a file without a code suffix is stripped as well.
-_CODE = r"[\w./-]+:\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*@[0-9a-f]{7,40}"
+# A path may hold Next.js App Router segments: [id], [...slug], [[...slug]], (group), @slot,
+# (.)photo. Brackets and parentheses must enclose a segment, so the ones around a citation
+# ("(a.ts:1@sha)") stay out of the path.
+CODE_PATH = r"(?:[\w./@-]|\[\[[\w.-]+\]\]|\[[\w.-]+\]|\([\w.-]+\))+"
+_CODE = CODE_PATH + r":\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*@[0-9a-f]{7,40}"
 _CODE_CITATION = re.compile(r"\s*" + _CODE)
 # A code citation as the sentence's subject ("README.md:92@sha states the same", "`src/a.ts:42@sha`
 # contains …") becomes "the source"; one followed by punctuation, a tag, a bracket or a
