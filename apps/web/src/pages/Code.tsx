@@ -41,7 +41,7 @@ const muted = 'text-[13px] text-muted-foreground'
 // column sticks below the header like the notes panel (toggle + gap = the extra 3.5rem).
 // The filter and count keep their height; only the list (listScroll, flex-1) gives way.
 const listCard =
-  'flex max-h-[60vh] flex-col rounded-xl bg-card p-3 lg:max-h-[calc(100vh-9.5rem)] [&>input]:shrink-0 [&>p]:shrink-0'
+  'flex max-h-[60vh] flex-col rounded-xl bg-card p-3 lg:max-h-[calc(100vh-9.8rem)] [&>input]:shrink-0 [&>p]:shrink-0'
 const listScroll = '-mx-1 min-h-0 flex-1 overflow-y-auto px-1'
 const heading = 'mt-4 mb-1 text-sm font-semibold'
 const NAME_KEY = 'enigram.by'
