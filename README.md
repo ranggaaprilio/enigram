@@ -389,8 +389,10 @@ API. It has five pages in its menu:
   right** (a ✓ that counts as reviewed until the summary changes), **Not right** and **Add
   context** (a note with a question per type). Not right, expected behaviour and known issues are
   saved as proposals to review on Annotations (the UI has one key, so anyone using it may
-  verify them). Views are linkable
-  (`/code?repo=1&symbol=…`).
+  verify them). A note flagged for re-check shows the summary it was written against (kept on
+  the note, refreshed when it is verified) next to the summary now, with **Still right**, **Code
+  is wrong now** (verified, marked as conflicting) and **Note is outdated** (rejected). Views
+  are linkable (`/code?repo=1&symbol=…`).
 - **Trace**: recent queries, and for each one the router's decision, the chunks, entities,
   relations and sources behind the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
   code sources have an `Annotate` link, note sources open the note.

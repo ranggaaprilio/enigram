@@ -258,6 +258,96 @@ async def test_verify_recomputes_hashes_from_the_graph(cfg):
     assert (verified.status, verified.reason, verified.target_hash) == ("verified", None, "new")
 
 
+async def _with_summaries(cfg, *kinds_texts, **kw):
+    """A note created after the given (kind, text) summaries of SERVICE were saved."""
+    from code_fakes import fixture_graph
+
+    from enigram.application.annotations import NewAnnotation, create_annotation
+    from enigram.domain.code import FlowSummary
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+    summaries = [FlowSummary(SERVICE, kind, text, ("h",)) for kind, text in kinds_texts]
+    await graph.save_summaries(1, "sha", summaries, "m")
+    new = NewAnnotation("symbol", "AppService.find", "Note.", repo_id=1, **kw)
+    return graph, notes, await create_annotation(cfg, graph, notes, new, "alice")
+
+
+async def test_create_keeps_the_summary_the_code_page_shows(cfg):
+    _, _, flow = await _with_summaries(cfg, ("symbol", "Finds one."), ("flow", "Find flow."))
+    _, _, own = await _with_summaries(cfg, ("symbol", "Finds one."))
+    _, _, none = await _with_summaries(cfg)
+    _, _, proposed = await _with_summaries(cfg, ("symbol", "Finds one."), proposed=True)
+
+    assert (flow.summary_kind, flow.summary_text) == ("flow", "Find flow.")
+    assert (own.summary_kind, own.summary_text) == ("symbol", "Finds one.")
+    assert (none.summary_kind, none.summary_text) == (None, None)
+    assert proposed.summary_text == "Finds one."
+
+
+async def test_propose_keeps_the_summary(cfg):
+    from code_fakes import fixture_graph
+
+    from enigram.application.annotations import Proposal, propose_annotation
+    from enigram.domain.code import FlowSummary
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+    await graph.save_summaries(1, "sha", [FlowSummary(SERVICE, "flow", "Flow.", ("h",))], "m")
+    note = await propose_annotation(
+        cfg, graph, notes, Proposal("symbol", "AppService.find", "Agent note.", 1), "agent"
+    )
+
+    assert (note.summary_kind, note.summary_text) == ("flow", "Flow.")
+
+
+async def test_flag_and_relink_keep_the_snapshot_and_verify_refreshes_it(cfg):
+    from enigram.application.annotations import change_annotation
+    from enigram.application.staleness import check_repo
+    from enigram.domain.code import FlowSummary
+
+    graph, notes, note = await _with_summaries(cfg, ("symbol", "Old summary."))
+    graph.graphs[1] = dataclasses.replace(
+        graph.graphs[1],
+        symbols=[
+            dataclasses.replace(s, body_hash="new") if s.id == SERVICE else s
+            for s in graph.graphs[1].symbols
+        ],
+    )
+    await check_repo(graph, notes, 1, "sha")
+    await graph.save_summaries(1, "sha2", [FlowSummary(SERVICE, "symbol", "New.", ("n",))], "m")
+    flagged = await notes.get(note.id)
+    assert (flagged.status, flagged.summary_text) == ("needs_verification", "Old summary.")
+
+    relinked = await change_annotation(
+        cfg, graph, notes, note.id, {"target_ref": "AppService.find"}, "alice"
+    )
+    assert relinked.summary_text == "Old summary."
+
+    verified = await change_annotation(cfg, graph, notes, note.id, {"status": "verified"}, "alice")
+    assert (verified.status, verified.summary_kind, verified.summary_text) == (
+        "verified",
+        "symbol",
+        "New.",
+    )
+    # The history records which summary was kept, not its text.
+    assert all("summary_text" not in (e.new or {}) for e in await notes.events(note.id))
+    assert notes.events_[0].new["summary_kind"] == "symbol"
+
+
+async def test_verify_during_a_reindex_keeps_the_last_summary(cfg):
+    from enigram.application.annotations import change_annotation
+
+    graph, notes, note = await _with_summaries(cfg, ("flow", "Old flow."))
+    await graph.delete_summaries_except(1, [])  # old summaries gone, new ones not written yet
+
+    verified = await change_annotation(cfg, graph, notes, note.id, {"status": "verified"}, "alice")
+
+    assert (verified.status, verified.summary_kind, verified.summary_text) == (
+        "verified",
+        "flow",
+        "Old flow.",
+    )
+
+
 async def test_text_edit_by_a_stranger_becomes_a_proposal(cfg):
     from enigram.application.annotations import change_annotation
 

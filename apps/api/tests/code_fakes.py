@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 
+from enigram.adapters.driven.postgres_annotations import UNLOGGED
 from enigram.application.ports import ChatReply, ParsedGraph, ToolCall
 from enigram.domain.annotation import (
     ACTIVE_STATUSES,
@@ -450,7 +451,9 @@ class FakeAnnotations:
         values["candidates"] = tuple(values["candidates"])
         note = Annotation(id=len(self.notes) + 1, created_at=now, updated_at=now, **values)
         self.notes[note.id] = note
-        self._log(note.id, actor, "created", None, {k: fields[k] for k in fields})
+        self._log(
+            note.id, actor, "created", None, {k: v for k, v in fields.items() if k not in UNLOGGED}
+        )
         return note
 
     async def get(self, annotation_id):
@@ -545,7 +548,7 @@ class FakeAnnotations:
             values["candidates"] = tuple(values["candidates"])
         after = dataclasses.replace(before, **values, updated_at=self._now())
         self.notes[annotation_id] = after
-        keys = list(values)
+        keys = [k for k in values if k not in UNLOGGED]
         # Keys that are no field (the decider's `p`) are recorded in the event only.
         extra = {k: v for k, v in changes.items() if k not in fields}
         self._log(

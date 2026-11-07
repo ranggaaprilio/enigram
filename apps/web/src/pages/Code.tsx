@@ -10,6 +10,7 @@ import {
   listRepos,
   messageOf,
   NOTE_TYPES,
+  patchAnnotation,
   reviewSymbol,
   unreviewSymbol,
   type FeatureList,
@@ -20,6 +21,7 @@ import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
 import GuidedNoteForm, { type GuidedMode } from '@/components/GuidedNoteForm'
 import PageHeader from '@/components/PageHeader'
+import RecheckNote from '@/components/RecheckNote'
 import StatusBadge from '@/components/StatusBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -234,9 +236,21 @@ export default function Code() {
                       {n.text}
                       <div className={cn('mt-1 flex flex-wrap items-center gap-1.5', muted)}>
                         <StatusBadge status={n.status} />
+                        {n.conflict && (
+                          <Badge variant="outline" className="border-destructive text-destructive">
+                            Conflicts with code
+                          </Badge>
+                        )}
                         {n.by && <span>by {n.by}</span>}
                         <span>{formatTime(n.created_at)}</span>
                       </div>
+                      {n.status === 'needs_verification' && (
+                        <RecheckNote
+                          note={n}
+                          summary={view.summary}
+                          onAct={(body) => act(() => patchAnnotation(n.id, body))}
+                        />
+                      )}
                     </li>
                   ))}
                 </ul>

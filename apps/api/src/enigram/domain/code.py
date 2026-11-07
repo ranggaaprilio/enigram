@@ -213,3 +213,12 @@ def parse_entrypoint_row(row: dict[str, Any]) -> CodeEntrypoint:
         framework=_field(row, "framework", str, what),
         version=row.get("version") or "",
     )
+
+
+def shown_summary(summaries: dict[str, FlowSummary], symbol_id: str) -> tuple[str, str] | None:
+    """(kind, text) of the summary the Code page shows for a symbol: its flow, else its own. Also
+    what a symbol note keeps for its re-check."""
+    for kind in ("flow", "symbol"):
+        if found := summaries.get(f"{symbol_id}:{kind}"):
+            return kind, found.text
+    return None

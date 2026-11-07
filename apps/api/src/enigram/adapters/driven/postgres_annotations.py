@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS symbol_reviews (
     at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (workspace, repo_id, symbol_id)
 );
+-- Code page phase 6: the summary a symbol note was written (or last verified) against, kept
+-- for the re-check because a re-index deletes old summaries.
+ALTER TABLE annotations ADD COLUMN IF NOT EXISTS summary_kind TEXT;
+ALTER TABLE annotations ADD COLUMN IF NOT EXISTS summary_text TEXT;
 """
 
 # Annotation field -> column; `by` is a SQL keyword.
@@ -100,6 +104,8 @@ _COLUMNS = {
     "question": "question",
     "memory_id": "memory_id",
     "note_type": "note_type",
+    "summary_kind": "summary_kind",
+    "summary_text": "summary_text",
 }
 
 
@@ -137,6 +143,8 @@ def _annotation(row: asyncpg.Record) -> Annotation:
         question=row["question"],
         memory_id=row["memory_id"],
         note_type=row["note_type"],
+        summary_kind=row["summary_kind"],
+        summary_text=row["summary_text"],
     )
 
 
@@ -443,5 +451,13 @@ class PostgresAnnotations:
         return {r["symbol_id"]: _review(r) for r in rows}
 
 
+# Kept on the note, not in its events: a summary is long and the history never shows it.
+UNLOGGED = ("summary_text",)
+
+
 def _snapshot(note: Annotation, keys: list[str]) -> dict[str, Any]:
-    return {k: list(v) if isinstance(v := getattr(note, k), tuple) else v for k in keys}
+    return {
+        k: list(v) if isinstance(v := getattr(note, k), tuple) else v
+        for k in keys
+        if k not in UNLOGGED
+    }
