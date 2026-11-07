@@ -237,6 +237,17 @@ class FakeCodeGraph:
             if s.qualified_name in names or any(s.qualified_name.endswith(f".{n}") for n in names)
         ]
 
+    async def callers(self, repo_id, symbol_id):
+        symbols, graph = self._symbols(repo_id), self.graphs[repo_id]
+        ids = {
+            e.src
+            for e in graph.edges
+            if e.kind == "calls" and e.dst == symbol_id and e.src != symbol_id
+        }
+        return sorted(
+            (symbols[i] for i in ids if i in symbols), key=lambda s: (s.file, s.line_start, s.id)
+        )
+
     async def callees(self, repo_id, symbol_id):
         symbols, graph = self._symbols(repo_id), self.graphs[repo_id]
         out = []

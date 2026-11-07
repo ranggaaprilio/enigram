@@ -990,8 +990,17 @@ def test_symbol_detail_has_summaries_steps_and_notes(notes_env):
     [step] = detail["steps"]
     assert (step["id"], step["summary"], step["notes"]) == (SERVICE, "Finds a user by id.", 1)
     assert "body" not in step and detail["external"] == [] and detail["notes"] == []
+    assert detail["callers"] == []  # an entry point: nothing in the repository calls it
 
     service = client.get(f"/repos/1/symbols/{quote(SERVICE, safe='')}", headers=web).json()
+
+    [caller] = service["callers"]
+    assert (caller["id"], caller["qualified_name"], caller["notes"]) == (
+        CONTROLLER,
+        "AppController.find",
+        0,
+    )
+    assert "body" not in caller
 
     assert [s["qualified_name"] for s in service["steps"]] == [
         "AppService.helper",

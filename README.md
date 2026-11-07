@@ -305,7 +305,7 @@ write the same index.
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50), for the annotation form |
 | `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each and whether their summary has a current ✓ (`reviewed`), the first 500 whose route or symbol name contains `q`, plus `total` |
 | `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |
-| `GET /repos/{id}/symbols/{symbol_id}` | One symbol (`<file>#<qualified_name>`, URL-encoded) with its location, entry points, flow and symbol summaries, steps (direct callees with their summaries and note counts), notes and ✓ (`review`, with `current: false` once the summary changed) |
+| `GET /repos/{id}/symbols/{symbol_id}` | One symbol (`<file>#<qualified_name>`, URL-encoded) with its location, entry points, flow and symbol summaries, steps (direct callees with their summaries and note counts), callers (the repository symbols that call it directly, with note counts), notes and ✓ (`review`, with `current: false` once the summary changed) |
 | `POST /repos/{id}/symbols/{symbol_id}/review` `{"by"?}` | Mark the summary the Code page shows for the symbol as right (✓): not a note, never cited or shown to agents; a later mark replaces it; 422 without a summary |
 | `DELETE /repos/{id}/symbols/{symbol_id}/review` | Remove the ✓ (204; 404 when there is none; 403 unless the key that set it or a key in `ANNOTATION_VERIFIERS`) |
 | `POST /repos/{id}/secret` | Create or rotate the repository's webhook secret; returned once, never again |
@@ -412,7 +412,10 @@ API. It has five pages in its menu:
   verify them). A note flagged for re-check shows the summary it was written against (kept on
   the note, refreshed when it is verified) next to the summary now, with **Still right**, **Code
   is wrong now** (verified, marked as conflicting) and **Note is outdated** (rejected). Views
-  are linkable (`/code?repo=1&symbol=…`).
+  are linkable (`/code?repo=1&symbol=…`). **Files** switches the list to every indexed file by
+  folder, each opening to its symbols (members under their class) with their note counts, for
+  developers writing technical notes on any symbol (`/code?repo=1&view=files`); the filter
+  matches a path or a symbol name. Each symbol also lists what calls it (**Called by**).
 - **Trace**: recent queries, and for each one the router's decision, the chunks, entities,
   relations and sources behind the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
   code sources have an `Annotate` link, note sources open the note.

@@ -398,6 +398,11 @@ class CodeGraphRepository(Protocol):
         implementation."""
         ...
 
+    async def callers(self, repo_id: int, symbol_id: str) -> list["CodeSymbol"]:
+        """The repository symbols with a `calls` edge to this one, once each, by file and line.
+        Direct calls only: a call through an interface member lists under that member."""
+        ...
+
     async def edges_from(
         self, repo_id: int, symbol_id: str, kinds: tuple[str, ...]
     ) -> list[tuple["CodeEdge", "CodeSymbol | None"]]:

@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Annotation, Feature, SymbolView } from '../api'
 import { mockFetch } from '../test/mockFetch'
 import Code from './Code'
@@ -97,8 +97,86 @@ const view: SymbolView = {
     },
   ],
   external: [],
+  callers: [],
   notes: [note(3)],
   review: null,
+}
+
+const TREE = {
+  files: [
+    {
+      path: 'src/app.controller.ts',
+      symbols: [
+        {
+          id: 'src/app.controller.ts#AppController',
+          qualified_name: 'AppController',
+          kind: 'class',
+          line_start: 3,
+          line_end: 12,
+          parent: null,
+          notes: 0,
+        },
+        {
+          id: CONTROLLER,
+          qualified_name: 'AppController.find',
+          kind: 'method',
+          line_start: 8,
+          line_end: 11,
+          parent: 'AppController',
+          notes: 1,
+        },
+      ],
+    },
+    {
+      path: 'src/app.service.ts',
+      symbols: [
+        {
+          id: SERVICE,
+          qualified_name: 'AppService.find',
+          kind: 'method',
+          line_start: 3,
+          line_end: 9,
+          parent: 'AppService',
+          notes: 2,
+        },
+      ],
+    },
+    { path: 'src/types.ts', symbols: [] },
+    {
+      path: 'main.ts',
+      symbols: [
+        {
+          id: 'main.ts#bootstrap',
+          qualified_name: 'bootstrap',
+          kind: 'function',
+          line_start: 1,
+          line_end: 4,
+          parent: null,
+          notes: 0,
+        },
+      ],
+    },
+  ],
+}
+const FILES = { 'GET /api/repos': { body: REPOS }, 'GET /api/repos/1/tree': { body: TREE } }
+const SERVICE_VIEW: SymbolView = {
+  ...view,
+  symbol: { ...view.symbol, id: SERVICE, qualified_name: 'AppService.find' },
+  entrypoints: [],
+  summary: { flow: null, symbol: 'Finds a user by id.' },
+  steps: [],
+  callers: [
+    {
+      id: CONTROLLER,
+      qualified_name: 'AppController.find',
+      kind: 'method',
+      file: 'src/app.controller.ts',
+      line_start: 8,
+      line_end: 11,
+      notes: 1,
+    },
+  ],
+  notes: [],
 }
 
 const FEATURES = {
@@ -549,6 +627,147 @@ describe('Code', () => {
     expect(await screen.findByText('GET /users/:id')).toBeInTheDocument()
     expect(screen.getByLabelText('Repository')).toHaveValue('1')
     expect(fetch.mock.calls.map(([url]) => url)).not.toContain('/api/repos/9/features')
+  })
+
+  describe('Files mode', () => {
+    it('lists files by folder and opens a file to its symbol outline', async () => {
+      const fetch = mockFetch(FILES)
+
+      renderAt('/code?repo=1&view=files')
+
+      expect(await screen.findByText('4 files · 4 symbols')).toBeInTheDocument()
+      const headings = screen.getAllByRole('heading', { level: 4 }).map((h) => h.textContent)
+      expect(headings).toEqual(['(root)', 'src'])
+      expect(screen.getByText('Pick a symbol to see what it does.')).toBeInTheDocument()
+      // Closed until opened; a file without symbols cannot be opened.
+      expect(screen.queryByRole('button', { name: /AppService\.find/ })).toBeNull()
+      expect(screen.getByRole('button', { name: /types\.ts/ })).toBeDisabled()
+
+      await userEvent.click(screen.getByRole('button', { name: /app\.controller\.ts/ }))
+
+      expect(screen.getByRole('button', { name: /^class AppController/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^method find/ })).toBeInTheDocument()
+      expect(fetch.mock.calls.map(([url]) => url)).not.toContain('/api/repos/1/features')
+    })
+
+    it('opens a symbol from the outline in the same panels as a feature', async () => {
+      mockFetch({ ...FILES, [`GET ${SYMBOL_URL}`]: { body: view } })
+
+      renderAt('/code?repo=1&view=files')
+      await userEvent.click(await screen.findByRole('button', { name: /app\.controller\.ts/ }))
+      await userEvent.click(screen.getByRole('button', { name: /^method find/ }))
+
+      expect(await screen.findByRole('heading', { name: 'AppController.find' })).toBeInTheDocument()
+      expect(screen.getByText('Notes (1)')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^method find/ })).toHaveAttribute(
+        'aria-current',
+        'true',
+      )
+    })
+
+    it('opens the file of a linked symbol', async () => {
+      mockFetch({ ...FILES, [`GET ${SERVICE_URL}`]: { body: SERVICE_VIEW } })
+
+      renderAt(`/code?repo=1&view=files&symbol=${encodeURIComponent(SERVICE)}`)
+
+      expect(await screen.findByRole('button', { name: /^method find/ })).toHaveAttribute(
+        'aria-current',
+        'true',
+      )
+      expect(screen.queryByRole('button', { name: /^class AppController/ })).toBeNull()
+    })
+
+    it('filters files by path or symbol name, opening the files a symbol matched in', async () => {
+      mockFetch(FILES)
+
+      renderAt('/code?repo=1&view=files')
+      await screen.findByText('4 files · 4 symbols')
+      await userEvent.type(screen.getByLabelText('Filter files'), 'boot')
+
+      expect(screen.getByText('1 of 4 files')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^function bootstrap/ })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /app\.service\.ts/ })).toBeNull()
+
+      await userEvent.clear(screen.getByLabelText('Filter files'))
+      await userEvent.type(screen.getByLabelText('Filter files'), 'nothing')
+      expect(screen.getByText('No files match.')).toBeInTheDocument()
+    })
+
+    it('scrolls the list, not the page, to the open symbol', async () => {
+      mockFetch({ ...FILES, [`GET ${SERVICE_URL}`]: { body: SERVICE_VIEW } })
+      // jsdom has no layout: the open symbol sits 900px down a list whose box ends at 300px.
+      const rect = vi
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function (this: HTMLElement) {
+          const top = this.getAttribute('aria-current') === 'true' ? 900 : 0
+          return { top, bottom: top + (top ? 20 : 300), height: top ? 20 : 300 } as DOMRect
+        })
+      const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+
+      renderAt(`/code?repo=1&view=files&symbol=${encodeURIComponent(SERVICE)}`)
+      const open = await screen.findByRole('button', { name: /^method find/ })
+
+      const list = open.closest('.overflow-y-auto') as HTMLElement
+      await waitFor(() => expect(list.scrollTop).toBeGreaterThan(600))
+      expect(scrollTo).not.toHaveBeenCalled()
+      rect.mockRestore()
+      scrollTo.mockRestore()
+    })
+
+    it('keeps the file of the open symbol in a filtered list', async () => {
+      mockFetch({ ...FILES, [`GET ${SERVICE_URL}`]: { body: SERVICE_VIEW } })
+
+      // A caller opened from another file stays visible although the filter misses it.
+      renderAt(`/code?repo=1&view=files&q=boot&symbol=${encodeURIComponent(SERVICE)}`)
+
+      expect(await screen.findByRole('button', { name: /^method find/ })).toHaveAttribute(
+        'aria-current',
+        'true',
+      )
+      expect(screen.getByRole('button', { name: /^function bootstrap/ })).toBeInTheDocument()
+      expect(screen.getByText('2 of 4 files')).toBeInTheDocument()
+    })
+
+    it('switches between features and files, keeping the open symbol', async () => {
+      mockFetch({ ...BASE, ...FILES, [`GET ${SYMBOL_URL}`]: { body: view } })
+
+      renderAt(AT_SYMBOL)
+      expect(await screen.findByText('GET /users/:id')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Features' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+
+      await userEvent.click(screen.getByRole('button', { name: 'Files' }))
+
+      expect(await screen.findByText('4 files · 4 symbols')).toBeInTheDocument()
+      expect(screen.queryByText('GET /users/:id')).toBeNull()
+      expect(screen.getByRole('heading', { name: 'AppController.find' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^method find/ })).toHaveAttribute(
+        'aria-current',
+        'true',
+      )
+
+      await userEvent.click(screen.getByRole('button', { name: 'Features' }))
+      expect(await screen.findByText('GET /users/:id')).toBeInTheDocument()
+    })
+  })
+
+  it('lists the callers of a symbol and opens one', async () => {
+    mockFetch({
+      ...BASE,
+      [`GET ${SERVICE_URL}`]: { body: SERVICE_VIEW },
+      [`GET ${SYMBOL_URL}`]: { body: view },
+    })
+
+    renderAt(`/code?repo=1&symbol=${encodeURIComponent(SERVICE)}`)
+
+    expect(await screen.findByText('Called by (1)')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'AppController.find' }))
+
+    expect(await screen.findByRole('heading', { name: 'AppController.find' })).toBeInTheDocument()
+    expect(screen.getByText('Called by (0)')).toBeInTheDocument()
+    expect(screen.getByText(/Nothing in the repository calls it/)).toBeInTheDocument()
   })
 
   it('asks for a repository when none is indexed', async () => {
