@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from enigram.domain.errors import EnigramError
+from enigram.domain.normalize import CODE_PATH
 
 SYMBOL_KINDS = (
     "class",
@@ -36,7 +37,17 @@ EDGE_KINDS = (
     "provides",
     "provides_config",
 )
-ENTRYPOINT_KINDS = ("http_route", "cron", "event", "job", "cli_main")
+ENTRYPOINT_KINDS = (
+    "http_route",
+    "cron",
+    "event",
+    "job",
+    "cli_main",
+    "page",  # Next.js: default export of app/**/page
+    "middleware",  # Next.js middleware
+    "action",  # Next.js "use server" action
+    "root",  # generic fallback: an uncalled exported function
+)
 SUMMARY_KINDS = ("symbol", "flow")
 # CodeGraphRepository.callees(): a call through an interface or abstract member, resolved to one
 # of its implementations. Derived from `implements`/`extends` edges, never stored.
@@ -108,7 +119,7 @@ class CodeCitation:
 # Same shape as domain/normalize.py's _CODE_CITATION, so the blind normaliser strips what the
 # answerers write.
 CITATION = re.compile(
-    r"(?P<file>[\w./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|cts|mts|json|md))"
+    rf"(?P<file>{CODE_PATH}\.(?:ts|tsx|js|jsx|mjs|cjs|cts|mts|json|md))"
     r":(?P<start>\d+)(?:-(?P<end>\d+))?@(?P<sha>[0-9a-f]{7,40})"
 )
 
@@ -153,7 +164,8 @@ def _field(row: dict[str, Any], name: str, kind: type, what: str) -> Any:
 def _choice(row: dict[str, Any], name: str, allowed: tuple[str, ...], what: str) -> str:
     value = _field(row, name, str, what)
     if value not in allowed:
-        raise EnigramError(f"{what} {row.get('id') or row.get('src')}: {name}={value!r} unknown")
+        ident = row.get("id") or row.get("src") or row.get("symbol")
+        raise EnigramError(f"{what} {ident}: {name}={value!r} unknown")
     return value
 
 
