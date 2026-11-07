@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { Link } from 'react-router'
+import { WsLink } from '@/workspace'
 import { ask, messageOf, type Mode, type QueryResult } from '../api'
 import { Clock, Loader2, Sparkles } from 'lucide-react'
 import ErrorAlert from '@/components/ErrorAlert'
@@ -124,7 +124,7 @@ export default function Ask() {
             <Badge variant="outline" className="text-muted-foreground">
               {modeLabel(result.mode)}
             </Badge>
-            <Link to={`/trace/${result.id}`}>View trace</Link>
+            <WsLink to={`/trace/${result.id}`}>View trace</WsLink>
           </p>
         </>
       )}

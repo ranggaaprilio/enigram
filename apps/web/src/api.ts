@@ -328,11 +328,30 @@ function errorMessage(res: Response, body: unknown): string {
   return `${res.status} ${res.statusText}`.trim()
 }
 
+export interface Workspace {
+  name: string
+  created_at: string
+}
+
+// The workspace every request works on (X-Enigram-Workspace), set by the page shell from the
+// URL; null sends none, which the API answers from its process workspace.
+let workspace: string | null = null
+
+export function setWorkspace(name: string | null) {
+  workspace = name
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, init)
+  const res = await fetch(`/api${path}`, workspace ? withWorkspace(init, workspace) : init)
   const body: unknown = await res.json().catch(() => null)
   if (!res.ok) throw new ApiError(res.status, errorMessage(res, body))
   return body as T
+}
+
+function withWorkspace(init: RequestInit | undefined, name: string): RequestInit {
+  const headers = new Headers(init?.headers)
+  headers.set('X-Enigram-Workspace', name)
+  return { ...init, headers }
 }
 
 export const getHealth = () => request<{ status: string; workspace: string }>('/health')
@@ -358,7 +377,11 @@ const sendJson = <T>(path: string, body: unknown) =>
     body: JSON.stringify(body),
   })
 
-export const ask = (question: string, mode: Mode, scope: Scope = 'auto') =>
+export const listWorkspaces = () => request<Workspace[]>('/workspaces')
+
+export const createWorkspace = (name: string) => sendJson<Workspace>('/workspaces', { name })
+
+export const ask= (question: string, mode: Mode, scope: Scope = 'auto') =>
   sendJson<QueryResult & { id: number }>('/query', { question, mode, scope })
 
 export const listQueries = (limit = 50) => request<QuerySummary[]>(`/queries?limit=${limit}`)

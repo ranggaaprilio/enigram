@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router'
+import { useParams } from 'react-router'
+import { WsLink } from '@/workspace'
 import { ArrowLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
@@ -81,7 +82,7 @@ export function TraceList() {
             {rows.map((q) => (
               <TableRow key={q.id}>
                 <TableCell>
-                  <Link to={`/trace/${q.id}`}>#{q.id}</Link>
+                  <WsLink to={`/trace/${q.id}`}>#{q.id}</WsLink>
                 </TableCell>
                 <TableCell className="whitespace-nowrap">{formatTime(q.created_at)}</TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
@@ -103,7 +104,9 @@ export function TraceList() {
 
 // Names open the Annotations page with a new note on that entity prefilled.
 const noteLink = (kind: string, ref: string) => (
-  <Link to={`/annotations?target_kind=${kind}&target_ref=${encodeURIComponent(ref)}`}>{ref}</Link>
+  <WsLink to={`/annotations?target_kind=${kind}&target_ref=${encodeURIComponent(ref)}`}>
+    {ref}
+  </WsLink>
 )
 
 // A code source resolved to a graph symbol can be annotated; a human source opens its note.
@@ -112,10 +115,10 @@ function sourceLink(s: Source) {
     const at = s.target.indexOf(':')
     const symbol = encodeURIComponent(s.target.slice(at + 1))
     const to = `/annotations?target_kind=symbol&repo=${s.target.slice(0, at)}&target_ref=${symbol}`
-    return <Link to={to}>Annotate</Link>
+    return <WsLink to={to}>Annotate</WsLink>
   }
   if (s.origin === 'human' && s.target) {
-    return <Link to={`/annotations?id=${s.target}`}>note#{s.target}</Link>
+    return <WsLink to={`/annotations?id=${s.target}`}>note#{s.target}</WsLink>
   }
   return null
 }
@@ -182,9 +185,9 @@ export function TraceDetail() {
   }, [id, valid])
 
   const back = (
-    <Link to="/trace" className="mb-4 inline-flex items-center gap-1 text-sm">
+    <WsLink to="/trace" className="mb-4 inline-flex items-center gap-1 text-sm">
       <ArrowLeft className="size-4" /> All queries
-    </Link>
+    </WsLink>
   )
 
   if (!valid || notFound) {

@@ -1,0 +1,160 @@
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter, useLocation } from 'react-router'
+import { afterEach, describe, expect, it } from 'vitest'
+import App from './App'
+import { setWorkspace } from './api'
+import { mockFetch, type Reply } from './test/mockFetch'
+import { WORKSPACE_RULE } from './workspace'
+
+function Where() {
+  const { pathname, search } = useLocation()
+  return <output data-testid="where">{pathname + search}</output>
+}
+
+function renderAt(path: string) {
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+      <Where />
+    </MemoryRouter>,
+  )
+}
+
+const where = () => screen.getByTestId('where').textContent
+
+const WORKSPACES = [
+  { name: 'default', created_at: '2026-11-07T00:00:00Z' },
+  { name: 'ws-a', created_at: '2026-11-07T00:00:00Z' },
+]
+
+const ROUTES: Record<string, Reply> = {
+  'GET /api/health': { body: { status: 'ok', workspace: 'default' } },
+  'GET /api/workspaces': { body: WORKSPACES },
+  'GET /api/documents': { body: [] },
+  'GET /api/repos': { body: [] },
+}
+
+const header = (init?: RequestInit) => new Headers(init?.headers).get('X-Enigram-Workspace')
+
+// The workspace header of every call to `url`, in order.
+function headersOf(fetch: ReturnType<typeof mockFetch>, url: string) {
+  return fetch.mock.calls.filter(([u]) => u === url).map(([, init]) => header(init))
+}
+
+afterEach(() => setWorkspace(null))
+
+describe('App workspaces', () => {
+  it('redirects / to the process workspace', async () => {
+    mockFetch(ROUTES)
+    renderAt('/')
+    await waitFor(() => expect(where()).toBe('/w/default/documents'))
+  })
+
+  it('redirects old links into the process workspace with their query', async () => {
+    mockFetch(ROUTES)
+    renderAt('/code?repo=1&symbol=x')
+    await waitFor(() => expect(where()).toBe('/w/default/code?repo=1&symbol=x'))
+  })
+
+  it('redirects an old trace link', async () => {
+    mockFetch(ROUTES)
+    renderAt('/trace/12')
+    await waitFor(() => expect(where()).toBe('/w/default/trace/12'))
+  })
+
+  it('takes the process workspace from /health', async () => {
+    mockFetch({
+      ...ROUTES,
+      'GET /api/health': { body: { status: 'ok', workspace: 'main' } },
+      'GET /api/workspaces': { body: [{ name: 'main', created_at: '2026-11-07T00:00:00Z' }] },
+    })
+    renderAt('/')
+    await waitFor(() => expect(where()).toBe('/w/main/documents'))
+  })
+
+  it("sends the URL's workspace and keeps it in links and the title", async () => {
+    const fetch = mockFetch(ROUTES)
+    renderAt('/w/ws-a/documents')
+    await waitFor(() => expect(headersOf(fetch, '/api/documents')).toContain('ws-a'))
+    expect(headersOf(fetch, '/api/documents').every((h) => h === 'ws-a')).toBe(true)
+    expect(screen.getByRole('link', { name: 'Code' })).toHaveAttribute('href', '/w/ws-a/code')
+    expect(document.title).toBe('ws-a · enigram')
+  })
+
+  it('switches to the same page in the other workspace', async () => {
+    const fetch = mockFetch(ROUTES)
+    renderAt('/w/ws-a/code?repo=1')
+    const select = await screen.findByLabelText('Workspace')
+    await waitFor(() => expect(headersOf(fetch, '/api/repos')).toEqual(['ws-a']))
+    await userEvent.selectOptions(select, 'default')
+    expect(where()).toBe('/w/default/code')
+    await waitFor(() => expect(headersOf(fetch, '/api/repos').at(-1)).toBe('default'))
+    expect(document.title).toBe('default · enigram')
+  })
+
+  it('checks the name, then creates the workspace and opens it', async () => {
+    const fetch = mockFetch({
+      ...ROUTES,
+      'POST /api/workspaces': {
+        status: 201,
+        body: { name: 'whiteboard', created_at: '2026-11-07T00:00:00Z' },
+      },
+    })
+    renderAt('/w/default/code')
+    await userEvent.click(await screen.findByRole('button', { name: 'New workspace' }))
+    const input = screen.getByLabelText('Workspace name')
+
+    await userEvent.type(input, 'Bad_Name')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(screen.getByText(`Use ${WORKSPACE_RULE}.`)).toBeInTheDocument()
+    expect(fetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+
+    await userEvent.clear(input)
+    await userEvent.type(input, 'whiteboard')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(where()).toBe('/w/whiteboard/documents'))
+    const post = fetch.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(JSON.parse(post?.[1]?.body as string)).toEqual({ name: 'whiteboard' })
+    expect(screen.getByLabelText('Workspace')).toHaveValue('whiteboard')
+    await waitFor(() => expect(headersOf(fetch, '/api/documents')).toContain('whiteboard'))
+  })
+
+  it("shows the API's refusal", async () => {
+    mockFetch({
+      ...ROUTES,
+      'POST /api/workspaces': { status: 409, body: { detail: "Workspace 'ws-a' already exists" } },
+    })
+    renderAt('/w/default/documents')
+    await userEvent.click(await screen.findByRole('button', { name: 'New workspace' }))
+    await userEvent.type(screen.getByLabelText('Workspace name'), 'ws-a')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByText("Workspace 'ws-a' already exists")).toBeInTheDocument()
+    expect(where()).toBe('/w/default/documents')
+  })
+
+  it('names an unknown workspace and sends no page request', async () => {
+    const fetch = mockFetch(ROUTES)
+    renderAt('/w/nope/documents')
+    expect(await screen.findByText(/No workspace “nope”/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open default' })).toHaveAttribute(
+      'href',
+      '/w/default/documents',
+    )
+    expect(headersOf(fetch, '/api/documents')).toEqual([])
+  })
+
+  it('sends no header for a name off the rule', async () => {
+    const fetch = mockFetch(ROUTES)
+    renderAt('/w/a%20b/documents')
+    expect(await screen.findByText(/No workspace/)).toBeInTheDocument()
+    expect(headersOf(fetch, '/api/workspaces')).toEqual([null])
+  })
+
+  it('shows the API as unreachable and still renders the page', async () => {
+    const fetch = mockFetch({ ...ROUTES, 'GET /api/workspaces': { status: 500, body: null } })
+    renderAt('/w/ws-a/documents')
+    expect(await screen.findByText('API unreachable')).toBeInTheDocument()
+    await waitFor(() => expect(headersOf(fetch, '/api/documents')).toContain('ws-a'))
+  })
+})
