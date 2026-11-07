@@ -105,6 +105,38 @@ async def test_without_a_decider_no_rule_is_unsure():
     assert (d.method, d.targets, trace) == ("unsure", ("code", "docs"), [])
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "what do you know about whiteboard",
+        "Tell me about this project",
+        "Give me an overview of the app",
+        "ceritakan tentang whiteboard",
+        "Apa yang kamu ketahui tentang whiteboard?",
+    ],
+)
+async def test_an_overview_question_asks_both_sources_without_the_choice(question):
+    # The choice wavers around its threshold on these (white-board traces #202 0.48, #207 0.58).
+    decider = FakeDecider({"route": choice("code", 0.9)})
+    d, trace = await _route(question, decider)
+    assert (d.route, d.targets, d.method, d.rules) == (
+        "graph_flow",
+        ("code", "docs"),
+        "rule",
+        ("overview",),
+    )
+    assert decider.calls == [] and trace == []
+
+
+async def test_an_overview_question_yields_to_a_route_rule_or_a_named_identifier():
+    flow, _ = await _route("Tell me about the flow of POST /auth/refresh")
+    assert (flow.targets, flow.method) == (("code",), "rule")
+    decider = FakeDecider({"route": choice("code", 0.9)})
+    named, _ = await _route("What do you know about UsersService?", decider)
+    assert (named.targets, named.method) == (("code",), "choice")
+    assert "overview" not in rule_routes("Tell me about this project")[1]  # not a golden label
+
+
 def test_route_question_criteria_are_the_targets():
     assert set(QUESTIONS["route"].criteria) == set(TARGETS)
     assert QUESTIONS["route"].kind == "choice"

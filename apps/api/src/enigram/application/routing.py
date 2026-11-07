@@ -35,6 +35,17 @@ _WHY = re.compile(r"\b(why|decided|decision|rationale|reason|kenapa|mengapa)\b",
 _FLOW = re.compile(
     r"\b(what happens|walk (?:me )?through|impact|flow|apa yang terjadi)\b", re.IGNORECASE
 )
+# A general question about a project or topic: both the code and the documents hold part of the
+# answer, and the choice wavers around its threshold on these (white-board "what do you know
+# about whiteboard": 0.48 then 0.58), so the answer changed from run to run. Not in RULES: it is
+# no golden route label, and no golden question matches it.
+_OVERVIEW = re.compile(
+    r"\b(what do you know about|tell me about|(?:give me )?an overview of|overview of"
+    r"|summari[sz]e (?:the|this) (?:project|repo|repository|app|application|codebase)"
+    r"|what is this (?:project|repo|repository|app|application|codebase)"
+    r"|ceritakan tentang|gambaran umum|apa yang kamu ketahui tentang)\b",
+    re.IGNORECASE,
+)
 _DEFINITION = re.compile(
     r"\b(what is|what type|which\b.*\bexist|where is\b.*\bdefined|signature|return type)",
     re.IGNORECASE,
@@ -98,6 +109,9 @@ async def route_question(
     if len(labels) == 1:
         route = next(iter(labels))
         return RouteDecision(route, targets_of(route), "rule", fired)
+    # An overview asks both sources, unless a rule fired or it names a symbol (a code question).
+    if not labels and _OVERVIEW.search(question) and not IDENTIFIER.search(question):
+        return RouteDecision(DEFAULT_ROUTE, ("code", "docs"), "rule", ("overview",))
     q = decision_question(PURPOSE)
     decided = None
     if decider is not None:
