@@ -260,8 +260,35 @@ export interface SymbolView {
   summary: { flow: string | null; symbol: string | null }
   steps: SymbolStep[]
   external: string[]
+  callers: SymbolRef[] // repository symbols that call this one directly
   notes: Annotation[]
   review: Review | null
+}
+
+export interface SymbolRef {
+  id: string
+  qualified_name: string
+  kind: string
+  file: string
+  line_start: number
+  line_end: number
+  notes: number
+}
+
+// GET /repos/{id}/tree (code_browse.tree_view): every indexed file, its symbols in line order.
+export interface TreeSymbol {
+  id: string
+  qualified_name: string
+  kind: string
+  line_start: number
+  line_end: number
+  parent: string | null
+  notes: number
+}
+
+export interface TreeFile {
+  path: string
+  symbols: TreeSymbol[]
 }
 
 // A "looks right" marker on a symbol's summary; `current` is false once the summary changed.
@@ -452,6 +479,8 @@ export const searchSymbols = (repoId: number, q: string) =>
 
 export const listFeatures = (repoId: number, q = '') =>
   request<FeatureList>(`/repos/${repoId}/features${q ? `?q=${encodeURIComponent(q)}` : ''}`)
+
+export const getTree = (repoId: number) => request<{ files: TreeFile[] }>(`/repos/${repoId}/tree`)
 
 // Symbol ids are "<file>#<qualified_name>": encode them as one path segment (%2F, %23).
 export const getSymbol = (repoId: number, symbolId: string) =>

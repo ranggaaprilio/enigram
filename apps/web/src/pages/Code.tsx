@@ -7,6 +7,7 @@ import { Check, ChevronRight, Plus, X } from 'lucide-react'
 import {
   ApiError,
   getSymbol,
+  getTree,
   listFeatures,
   listRepos,
   messageOf,
@@ -18,6 +19,7 @@ import {
   type FeatureList,
   type RepoRow,
   type SymbolView,
+  type TreeFile,
 } from '../api'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
@@ -47,14 +49,15 @@ function readName(): string {
   }
 }
 
-// A repository browsed by its entry points (features): the selected one's summary, steps and
-// code in the middle, with "looks right" / "not right" / "add context" under the summary; its
-// notes and the guided note form on the right. Repository, symbol and filter live in the URL,
-// so a view can be linked.
+// A repository browsed by its entry points (features) or, for developers, by its files and their
+// symbols: the selected symbol's summary, steps, callers and code in the middle, with "looks
+// right" / "not right" / "add context" under the summary; its notes and the guided note form on
+// the right. Repository, mode, symbol and filter live in the URL, so a view can be linked.
 export default function Code() {
   const [params, setParams] = useSearchParams()
   const [repos, setRepos] = useState<RepoRow[] | null>(null)
   const [features, setFeatures] = useState<FeatureList | null>(null)
+  const [tree, setTree] = useState<TreeFile[] | null>(null)
   const [view, setView] = useState<SymbolView | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -65,18 +68,18 @@ export default function Code() {
   const repoId = repos?.some((r) => r.id === asked) ? asked : (repos?.[0]?.id ?? null)
   const symbolId = params.get('symbol')
   const q = params.get('q') ?? ''
+  const files = params.get('view') === 'files'
   // What is on screen now, so a reload that finishes after the user moved on is dropped.
   const shown = useRef('')
-  shown.current = `${repoId}\u0000${symbolId}\u0000${q}`
+  shown.current = `${repoId}\u0000${symbolId}\u0000${q}\u0000${files}`
 
   function setParam(key: string, value: string, replace = false) {
     const next = new URLSearchParams(params)
     if (value) next.set(key, value)
     else next.delete(key)
-    if (key === 'repo') {
-      next.delete('symbol')
-      next.delete('q')
-    }
+    if (key === 'repo') next.delete('symbol')
+    // The two filters match different things: a new repository or mode starts unfiltered.
+    if (key === 'repo' || key === 'view') next.delete('q')
     setParams(next, { replace })
   }
 
@@ -86,14 +89,15 @@ export default function Code() {
       .catch((e) => setError(messageOf(e)))
   }, [])
 
-  // A new repository clears the list; a new filter keeps it until the new one arrives.
+  // A new repository clears the lists; a new filter keeps them until the new one arrives.
   useEffect(() => {
     setFeatures(null)
+    setTree(null)
   }, [repoId])
 
   useEffect(() => {
     setError(null)
-    if (!repoId) return
+    if (!repoId || files) return
     // A slower response for an older filter must not replace this one.
     let current = true
     listFeatures(repoId, q)
@@ -102,7 +106,19 @@ export default function Code() {
     return () => {
       current = false
     }
-  }, [repoId, q])
+  }, [repoId, q, files])
+
+  // The file list is filtered in the browser: one request per repository.
+  useEffect(() => {
+    if (!repoId || !files) return
+    let current = true
+    getTree(repoId)
+      .then((t) => current && setTree(t.files))
+      .catch((e) => current && setError(messageOf(e)))
+    return () => {
+      current = false
+    }
+  }, [repoId, files])
 
   useEffect(() => {
     setView(null)
@@ -127,11 +143,18 @@ export default function Code() {
   const reload = useCallback(async () => {
     if (!repoId || !symbolId) return
     const asked = shown.current
+    if (files) {
+      const [v, t] = await Promise.all([getSymbol(repoId, symbolId), getTree(repoId)])
+      if (shown.current !== asked) return
+      setView(v)
+      setTree(t.files)
+      return
+    }
     const [v, f] = await Promise.all([getSymbol(repoId, symbolId), listFeatures(repoId, q)])
     if (shown.current !== asked) return
     setView(v)
     setFeatures(f)
-  }, [repoId, symbolId, q])
+  }, [repoId, symbolId, q, files])
 
   function saveName(value: string) {
     setBy(value)
@@ -155,7 +178,7 @@ export default function Code() {
   const header = (
     <PageHeader
       title="Code"
-      description="Browse an indexed repository by its entry points, read what each one does, and leave a note on it."
+      description="Browse an indexed repository by its entry points or its files, read what each one does, and leave a note on it."
     />
   )
 
@@ -202,15 +225,47 @@ export default function Code() {
       </div>
       {error && <ErrorAlert>{error}</ErrorAlert>}
       <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
-        <Features
-          list={features}
-          q={q}
-          selected={symbolId}
-          onFilter={(value) => setParam('q', value, true)}
-          onPick={(id) => setParam('symbol', id)}
-        />
+        <div className="flex min-w-0 flex-col gap-2">
+          <div role="group" aria-label="Browse by" className="flex gap-1 rounded-xl bg-card p-1">
+            {(
+              [
+                ['Features', false],
+                ['Files', true],
+              ] as const
+            ).map(([label, value]) => (
+              <Button
+                key={label}
+                type="button"
+                size="sm"
+                variant={files === value ? 'secondary' : 'ghost'}
+                className="flex-1"
+                aria-pressed={files === value}
+                onClick={() => files !== value && setParam('view', value ? 'files' : '')}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+          {files ? (
+            <Files
+              tree={tree}
+              q={q}
+              selected={symbolId}
+              onFilter={(value) => setParam('q', value, true)}
+              onPick={(id) => setParam('symbol', id)}
+            />
+          ) : (
+            <Features
+              list={features}
+              q={q}
+              selected={symbolId}
+              onFilter={(value) => setParam('q', value, true)}
+              onPick={(id) => setParam('symbol', id)}
+            />
+          )}
+        </div>
         {!symbolId ? (
-          <Empty>Pick a feature to see what it does.</Empty>
+          <Empty>Pick a {files ? 'symbol' : 'feature'} to see what it does.</Empty>
         ) : notFound ? (
           <Empty>Symbol not found. It may have been removed by a re-index.</Empty>
         ) : !view ? (
@@ -387,6 +442,163 @@ function Features(props: {
   )
 }
 
+const ROOT_DIR = '(root)'
+
+function dirOf(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash < 0 ? ROOT_DIR : path.slice(0, slash)
+}
+
+// Files under their folder, root files first; folders and files in path order.
+function byDir(files: TreeFile[]): [string, TreeFile[]][] {
+  const groups = new Map<string, TreeFile[]>()
+  for (const f of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
+    const dir = dirOf(f.path)
+    groups.set(dir, [...(groups.get(dir) ?? []), f])
+  }
+  return [...groups].sort(([a], [b]) =>
+    a === ROOT_DIR ? -1 : b === ROOT_DIR ? 1 : a.localeCompare(b),
+  )
+}
+
+// Every indexed file by folder; a file opens to its symbol outline (members under their class).
+// The filter matches a path or a symbol name; files where a symbol matched open by themselves,
+// as does the file of the open symbol (listed whatever the filter), until the user closes them.
+function Files(props: {
+  tree: TreeFile[] | null
+  q: string
+  selected: string | null
+  onFilter: (value: string) => void
+  onPick: (symbolId: string) => void
+}) {
+  const { tree } = props
+  const [toggled, setToggled] = useState<Map<string, boolean>>(new Map())
+  const needle = props.q.trim().toLowerCase()
+  const selectedFile = props.selected?.split('#')[0] ?? null
+  const symbolMatch = (f: TreeFile) =>
+    needle !== '' && f.symbols.some((s) => s.qualified_name.toLowerCase().includes(needle))
+  // The open symbol's file stays listed: a caller opened from another file must stay visible.
+  const shown = (tree ?? []).filter(
+    (f) =>
+      !needle || f.path === selectedFile || f.path.toLowerCase().includes(needle) || symbolMatch(f),
+  )
+  const symbolCount = (tree ?? []).reduce((n, f) => n + f.symbols.length, 0)
+
+  function toggle(path: string, open: boolean) {
+    setToggled((prev) => new Map(prev).set(path, !open))
+  }
+
+  return (
+    <div className="rounded-xl bg-card p-3">
+      <Input
+        aria-label="Filter files"
+        placeholder="Filter by path or symbol"
+        value={props.q}
+        onChange={(e) => props.onFilter(e.target.value)}
+      />
+      {tree === null ? (
+        <p className={cn('mt-2 px-2', muted)}>Loading…</p>
+      ) : (
+        <>
+          <p className={cn('mt-2 mb-1 px-2', muted)}>
+            {needle
+              ? `${shown.length} of ${tree.length} files`
+              : `${tree.length} ${tree.length === 1 ? 'file' : 'files'} · ${symbolCount} ${symbolCount === 1 ? 'symbol' : 'symbols'}`}
+          </p>
+          {shown.length === 0 ? (
+            <p className={cn('px-2 py-4', muted)}>
+              {needle ? 'No files match.' : 'No files indexed in this repository.'}
+            </p>
+          ) : (
+            byDir(shown).map(([dir, rows]) => (
+              <div key={dir}>
+                <h4
+                  className={cn('mt-3 mb-1 px-2 font-mono [overflow-wrap:anywhere]', muted)}
+                  title={dir}
+                >
+                  {dir}
+                </h4>
+                <ul>
+                  {rows.map((f) => {
+                    const open =
+                      toggled.get(f.path) ?? (f.path === selectedFile || symbolMatch(f))
+                    const notes = f.symbols.reduce((n, s) => n + s.notes, 0)
+                    return (
+                      <li key={f.path}>
+                        <button
+                          type="button"
+                          disabled={f.symbols.length === 0}
+                          aria-expanded={f.symbols.length > 0 ? open : undefined}
+                          title={f.path}
+                          className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
+                          onClick={() => toggle(f.path, open)}
+                        >
+                          <ChevronRight
+                            className={cn(
+                              'size-3.5 shrink-0 text-muted-foreground transition-transform',
+                              open && 'rotate-90',
+                              f.symbols.length === 0 && 'invisible',
+                            )}
+                          />
+                          <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
+                            {f.path.slice(f.path.lastIndexOf('/') + 1)}
+                          </span>
+                          {notes > 0 && (
+                            <Badge
+                              variant="outline"
+                              className="rounded-[4px] text-muted-foreground"
+                            >
+                              {notes}
+                            </Badge>
+                          )}
+                        </button>
+                        {open && f.symbols.length > 0 && (
+                          <ul className="mb-1">
+                            {f.symbols.map((s) => (
+                              <li key={s.id}>
+                                <button
+                                  type="button"
+                                  aria-current={s.id === props.selected ? 'true' : undefined}
+                                  title={`${s.qualified_name} · lines ${s.line_start}-${s.line_end}`}
+                                  className={cn(
+                                    'flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-2 text-left text-sm hover:bg-secondary',
+                                    s.parent ? 'pl-12' : 'pl-7',
+                                    s.id === props.selected && 'bg-secondary',
+                                  )}
+                                  onClick={() => props.onPick(s.id)}
+                                >
+                                  <span className="shrink-0 text-xs text-muted-foreground">
+                                    {s.kind}
+                                  </span>{' '}
+                                  <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
+                                    {s.parent
+                                      ? s.qualified_name.slice(s.parent.length + 1)
+                                      : s.qualified_name}
+                                  </span>{' '}
+                                  <Badge
+                                    variant="outline"
+                                    className="rounded-[4px] text-muted-foreground"
+                                  >
+                                    {s.notes}
+                                  </Badge>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            ))
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function SymbolPanel({
   view,
   onPick,
@@ -486,6 +698,34 @@ function SymbolPanel({
               </li>
             ))}
           </ol>
+        )}
+        <h3 className={heading}>Called by ({view.callers.length})</h3>
+        {view.callers.length === 0 ? (
+          <p className={muted}>
+            Nothing in the repository calls it
+            {view.entrypoints.length > 0 ? ': it is an entry point.' : '.'}
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {view.callers.map((c) => (
+              <li key={c.id}>
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto p-0 text-link"
+                  onClick={() => onPick(c.id)}
+                >
+                  {c.qualified_name}
+                </Button>{' '}
+                <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
+                  {c.notes} {c.notes === 1 ? 'note' : 'notes'}
+                </Badge>{' '}
+                <span className={cn('[overflow-wrap:anywhere]', muted)}>
+                  {c.file}:{c.line_start}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
       <Section title="Code" count={body.split('\n').length}>

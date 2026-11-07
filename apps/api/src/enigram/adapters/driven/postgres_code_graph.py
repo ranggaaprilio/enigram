@@ -372,6 +372,17 @@ class PostgresCodeGraph:
         )
         return [_symbol(r) for r in rows]
 
+    async def callers(self, repo_id: int, symbol_id: str) -> list[CodeSymbol]:
+        rows = await self.pool.fetch(
+            f"SELECT {_JOINED_SYMBOL_COLUMNS} FROM code_symbols s "
+            "WHERE s.repo_id = $1 AND s.id <> $2 AND EXISTS (SELECT 1 FROM code_edges e "
+            "WHERE e.repo_id = s.repo_id AND e.src = s.id AND e.dst = $2 AND e.kind = 'calls') "
+            "ORDER BY s.file, s.line_start, s.id",
+            repo_id,
+            symbol_id,
+        )
+        return [_symbol(r, "s_") for r in rows]
+
     async def callees(
         self, repo_id: int, symbol_id: str
     ) -> list[tuple[CodeEdge, CodeSymbol | None]]:

@@ -76,6 +76,15 @@ async def test_callees_follow_an_interface_to_its_implementation(graph):
     assert ("calls_external", "bcrypt.compare", None) in pairs
 
 
+async def test_callers_are_the_resolved_symbols_that_call_one(graph):
+    repo_id = await graph.replace_repo(URL, None, SHA, [], fixture_graph())
+
+    callers = await graph.callers(repo_id, SERVICE)
+
+    assert [s.qualified_name for s in callers] == ["AppController.find"]
+    assert await graph.callers(repo_id, "src/app.controller.ts#AppController.find") == []
+
+
 async def test_search_matches_summary_words_and_names(graph):
     repo_id = await graph.replace_repo(URL, None, SHA, [], fixture_graph())
     await graph.save_summaries(

@@ -148,6 +148,10 @@ async def symbol_view(
             for s in steps
         ],
         "external": sorted(external),
+        "callers": [
+            {**_pick(s, _STEP_KEYS), "notes": counts.get(s.id, 0)}
+            for s in await graph.callers(repo_id, symbol_id)
+        ],
         "notes": await notes.list(target_kind="symbol", repo_id=repo_id, target_ref=symbol_id),
         "review": review_json(review, _current(review, summaries)) if review else None,
     }
