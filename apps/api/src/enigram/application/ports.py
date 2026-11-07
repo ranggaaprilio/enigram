@@ -99,6 +99,19 @@ class JobRepository(Protocol):
         """One worker per workspace."""
         ...
 
+    def for_workspace(self, workspace: str) -> "JobRepository":
+        """The same connections scoped to another workspace; close() only the store
+        open_store returned."""
+        ...
+
+    async def add_workspace(self, name: str) -> dict[str, Any] | None:
+        """Registers a workspace; None when it already exists."""
+        ...
+
+    async def list_workspaces(self) -> list[dict[str, Any]]:
+        """Every registered workspace ({name, created_at}), by name."""
+        ...
+
     async def log_query(
         self,
         source: str,

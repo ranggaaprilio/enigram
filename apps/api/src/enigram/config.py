@@ -267,6 +267,13 @@ class Config:
             llm_max_tokens=self.judge_max_tokens,
         )
 
+    def for_workspace(self, workspace: str) -> "Config":
+        """This config for another workspace, with its files in data/workspaces/<name>/; the
+        process workspace keeps data_dir. Bare clones (repo_store) stay shared: keyed by URL."""
+        if workspace == self.workspace:
+            return self
+        return replace(self, workspace=workspace, data_dir=self.data_dir / "workspaces" / workspace)
+
     @property
     def parsed_dir(self) -> Path:
         return self.data_dir / "parsed"

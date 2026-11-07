@@ -326,7 +326,16 @@ write the same index.
 | `POST /graph/entity/merge` `{"sources": [...], "target", "description"?}` | Queue a merge into `target` (new or existing) |
 | `DELETE /graph/entity/{name}` | Queue deleting an entity and its relations |
 | `DELETE /graph/relation?source=&target=` | Queue deleting one relation |
+| `GET /workspaces` | The workspaces, by name; the process `WORKSPACE` is always one |
+| `POST /workspaces` `{"name"}` | Create a workspace (201; 422 unless 1-32 of `a-z`, `0-9`, `-`, starting with a letter or digit; 409 exists) |
 | `GET /health` | Liveness; with `POST /repos/{id}/webhook` the only routes without a key |
+
+A request works on the workspace named in its `X-Enigram-Workspace` header (404 for an unknown
+name), and on the process `WORKSPACE` without one. Each workspace has its own documents, graph,
+repositories, notes, query log and daily budget; the files of a workspace other than the process
+one live in `data/workspaces/<name>/`. `/health`, the webhook and `/mcp` stay on the process
+workspace. The worker still runs one workspace (`WORKSPACE`): jobs queued in another one wait until
+a worker runs with that `WORKSPACE`.
 
 ```bash
 export AUTH="Authorization: Bearer <key>"   # skip -H "$AUTH" when no keys are set
