@@ -32,6 +32,8 @@ function note(id: number, overrides: Partial<Annotation> = {}): Annotation {
     question: null,
     memory_id: null,
     note_type: 'technical',
+    summary_kind: null,
+    summary_text: null,
     ...overrides,
   }
 }

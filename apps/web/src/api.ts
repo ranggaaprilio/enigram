@@ -138,6 +138,11 @@ export interface Annotation {
   question: string | null // the question an MCP proposal answers
   memory_id: number | null // the agent memory it was promoted from
   note_type: NoteType
+  // The summary the Code page showed when the note was written or last verified (symbol notes
+  // only; null on older notes): kept for the re-check, as a re-index deletes old summaries.
+  // The GET /annotations list leaves the text out.
+  summary_kind: 'flow' | 'symbol' | null
+  summary_text?: string | null
 }
 
 // What a note claims; old notes and agent proposals are technical.

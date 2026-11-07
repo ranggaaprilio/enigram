@@ -1003,6 +1003,13 @@ def test_symbol_detail_has_summaries_steps_and_notes(notes_env):
     assert [(n["id"], n["status"], n["text"]) for n in service["notes"]] == [
         (note["id"], "verified", "Find also writes an audit row.")
     ]
+    # The summary shown when the note was written, kept for the re-check after a re-index.
+    assert (note["summary_kind"], service["notes"][0]["summary_text"]) == (
+        "symbol",
+        "Finds a user by id.",
+    )
+    [listed] = client.get("/annotations?target_kind=symbol", headers=web).json()
+    assert listed["summary_kind"] == "symbol" and "summary_text" not in listed  # lists stay small
     assert client.get("/repos/1/symbols/src%2Fnope.ts%23Nope", headers=web).status_code == 404
     missing_repo = client.get(f"/repos/9/symbols/{quote(SERVICE, safe='')}", headers=web)
     assert missing_repo.status_code == 404

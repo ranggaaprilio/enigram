@@ -60,6 +60,8 @@ class Annotation:
     question: str | None = None  # the question an MCP proposal answers
     memory_id: int | None = None  # the agent memory an MCP proposal was promoted from
     note_type: str = DEFAULT_NOTE_TYPE  # one of NOTE_TYPES
+    summary_kind: str | None = None  # "flow" or "symbol": the summary shown when written/verified
+    summary_text: str | None = None  # that summary, kept: a re-index deletes old summaries
 
 
 @dataclass(frozen=True)

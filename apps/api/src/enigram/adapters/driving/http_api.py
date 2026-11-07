@@ -240,8 +240,12 @@ def _actor(request: Request) -> str:
     return _key_name(request) or "anonymous"
 
 
-def _note_json(note: Annotation) -> dict[str, Any]:
-    return jsonable_encoder(asdict(note))
+def _note_json(note: Annotation, *, summary: bool = True) -> dict[str, Any]:
+    """`summary=False` drops `summary_text` (the Code page re-check reads it; lists do not)."""
+    data = asdict(note)
+    if not summary:
+        del data["summary_text"]
+    return jsonable_encoder(data)
 
 
 def _raise_http(e: EnigramError) -> HTTPException:
@@ -633,7 +637,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             target_ref=target_ref,
             limit=limit,
         )
-        return [_note_json(n) for n in notes]
+        return [_note_json(n, summary=False) for n in notes]
 
     @app.post("/annotations", status_code=201)
     async def create_annotation_route(request: Request, body: AnnotationCreate) -> Any:

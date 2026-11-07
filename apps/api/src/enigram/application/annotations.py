@@ -1,6 +1,7 @@
 """Annotation use cases shared by the API, MCP, the CLI and the golden runner: create, propose
 (agents over MCP) and change with the verifier rule (domain.may_verify), one event per change."""
 
+import asyncio
 import dataclasses
 import logging
 from dataclasses import dataclass
@@ -30,7 +31,7 @@ from enigram.domain.annotation import (
     warnings_for,
 )
 from enigram.domain.answer import QueryResult
-from enigram.domain.code import CodeSymbol
+from enigram.domain.code import CodeSymbol, shown_summary
 from enigram.domain.decision import DECIDER_ACTOR
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
 from enigram.domain.origin import tag_origins
@@ -142,6 +143,16 @@ def _check_kind(target_kind: str, scope: str) -> None:
         raise EnigramError(f"scope must be one of {SCOPES}")
 
 
+async def _summary_fields(
+    graph: CodeGraphRepository, repo_id: int, symbol_id: str
+) -> dict[str, Any]:
+    """The summary the Code page shows for the symbol now (flow, else symbol), or None: kept on
+    the note for the re-check, as a re-index deletes old summaries."""
+    shown = shown_summary(await graph.summaries(repo_id, [symbol_id]), symbol_id)
+    kind, text = shown or (None, None)
+    return {"summary_kind": kind, "summary_text": text}
+
+
 async def _target_fields(
     graph: CodeGraphRepository | None,
     target_kind: str,
@@ -163,12 +174,15 @@ async def _target_fields(
         if await graph.get_repo_by_id(repo_id) is None:
             raise NotFound(f"No repository {repo_id}")
         symbol = await resolve_symbol(graph, repo_id, target_ref.strip())
-        target_hash, deps_hash = await hashes_for(graph, repo_id, symbol, scope)
+        (target_hash, deps_hash), summary = await asyncio.gather(
+            hashes_for(graph, repo_id, symbol, scope), _summary_fields(graph, repo_id, symbol.id)
+        )
         fields |= {
             "target_ref": symbol.id,
             "repo_id": repo_id,
             "target_hash": target_hash,
             "deps_hash": deps_hash,
+            **summary,
         }
     elif repo_id is not None:
         raise EnigramError("Only a symbol annotation belongs to a repository")
@@ -303,8 +317,13 @@ async def _reverified(
         if strict:
             raise EnigramError(f"{target_ref} no longer exists; relink the note first")
         return {}
-    target_hash, deps_hash = await hashes_for(graph, repo_id, symbol, note.scope)
-    return fields | {"target_hash": target_hash, "deps_hash": deps_hash}
+    (target_hash, deps_hash), summary = await asyncio.gather(
+        hashes_for(graph, repo_id, symbol, note.scope), _summary_fields(graph, repo_id, symbol.id)
+    )
+    # Verified during a re-index (old summaries deleted, new ones not yet written): keep the
+    # summary the note was last checked against rather than none.
+    kept = summary if summary["summary_kind"] is not None else {}
+    return fields | {"target_hash": target_hash, "deps_hash": deps_hash, **kept}
 
 
 async def change_annotation(

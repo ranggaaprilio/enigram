@@ -81,6 +81,22 @@ async def test_note_type_round_trips_and_defaults_to_technical(notes):
     assert event.new["note_type"] == "known_issue"
 
 
+async def test_summary_snapshot_round_trips(notes):
+    kept = await notes.create(_symbol_note(summary_kind="flow", summary_text="Old."), "web")
+    plain = await notes.create(_symbol_note("src/b.ts#B"), "web")
+
+    got = await notes.get(kept.id)
+    assert (got.summary_kind, got.summary_text) == ("flow", "Old.")
+    assert (await notes.get(plain.id)).summary_text is None
+    changed = await notes.update(
+        kept.id, {"summary_kind": "symbol", "summary_text": "New."}, "web", "verified"
+    )
+    assert (changed.summary_kind, changed.summary_text) == ("symbol", "New.")
+    created, verified = await notes.events(kept.id)
+    assert (created.new["summary_kind"], verified.new) == ("flow", {"summary_kind": "symbol"})
+    assert "summary_text" not in created.new and verified.old == {"summary_kind": "flow"}
+
+
 async def test_count_by_symbol_counts_every_status_but_rejected_per_repo(notes):
     await notes.create(_symbol_note(), "web")
     await notes.create(_symbol_note(status="proposed"), "web")

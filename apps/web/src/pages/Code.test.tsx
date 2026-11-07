@@ -35,6 +35,8 @@ function note(id: number, overrides: Partial<Annotation> = {}): Annotation {
     question: null,
     memory_id: null,
     note_type: 'expected_behavior',
+    summary_kind: null,
+    summary_text: null,
     ...overrides,
   }
 }
@@ -326,6 +328,128 @@ describe('Code', () => {
 
     expect(await screen.findByText('2 features · 1 reviewed')).toBeInTheDocument()
     expect(screen.getAllByLabelText('reviewed')).toHaveLength(1)
+  })
+
+  describe('re-check of a flagged note', () => {
+    const PATCH = 'PATCH /api/annotations/3'
+    const flagged = (changes: Partial<Annotation> = {}): SymbolView => ({
+      ...view,
+      notes: [
+        note(3, {
+          status: 'needs_verification',
+          reason: 'hash',
+          summary_kind: 'flow',
+          summary_text: '1. `AppService.find` reads a cache.',
+          ...changes,
+        }),
+      ],
+    })
+
+    it('shows the summary when written next to the summary now', async () => {
+      mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: flagged() } })
+
+      renderAt(AT_SYMBOL)
+
+      expect(await screen.findByText('Re-check: The code of this symbol changed.')).toBeInTheDocument()
+      expect(screen.getByText('Summary when written (flow)')).toBeInTheDocument()
+      expect(screen.getByText('reads a cache.', { exact: false })).toBeInTheDocument()
+      expect(screen.getByText('Summary now (flow)')).toBeInTheDocument()
+      // The main summary and the "now" of the re-check: the same text twice.
+      expect(screen.getAllByText('loads the user.', { exact: false })).toHaveLength(2)
+    })
+
+    it.each([
+      ['Still right', { status: 'verified', conflict: false }],
+      ['Code is wrong now', { status: 'verified', conflict: true }],
+      ['Note is outdated', { status: 'rejected' }],
+    ])('%s sends its change and reloads', async (name, body) => {
+      const fetch = mockFetch({
+        ...BASE,
+        [`GET ${SYMBOL_URL}`]: { body: flagged() },
+        [PATCH]: { body: note(3) },
+      })
+
+      renderAt(AT_SYMBOL)
+      await userEvent.click(await screen.findByRole('button', { name }))
+
+      await waitFor(() => expect(bodyOf(fetch, PATCH)).toEqual(body))
+      await waitFor(() =>
+        expect(fetch.mock.calls.filter(([url]) => url === SYMBOL_URL)).toHaveLength(2),
+      )
+    })
+
+    it('says when the summary did not change, or the note kept none', async () => {
+      mockFetch({
+        ...BASE,
+        [`GET ${SYMBOL_URL}`]: {
+          body: {
+            ...flagged({ summary_text: view.summary.flow }),
+            notes: [
+              ...flagged({ summary_text: view.summary.flow }).notes,
+              note(5, { status: 'needs_verification', reason: 'deps' }),
+            ],
+          },
+        },
+      })
+
+      renderAt(AT_SYMBOL)
+
+      expect(await screen.findByText('Unchanged since the note was written.')).toBeInTheDocument()
+      expect(screen.getByText('Re-check: Code it calls changed.')).toBeInTheDocument()
+      expect(screen.getByText('No summary was saved with this note.')).toBeInTheDocument()
+    })
+
+    it('compares with the summary shown now, not the kind the note kept', async () => {
+      // Written against a flow; the symbol is no longer an entry point and has its own summary.
+      const moved = { ...flagged(), summary: { flow: null, symbol: 'Finds one user.' } }
+      mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: moved } })
+
+      renderAt(AT_SYMBOL)
+
+      expect(await screen.findByText('Summary now (symbol)')).toBeInTheDocument()
+      expect(screen.queryByText(/No summary yet/)).toBeNull()
+      // The main summary and the "now" of the re-check.
+      expect(screen.getAllByText('Finds one user.')).toHaveLength(2)
+    })
+
+    it('says the reason for an orphan flag without claiming the note moved', async () => {
+      mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: flagged({ reason: 'orphan' }) } })
+
+      renderAt(AT_SYMBOL)
+
+      expect(
+        await screen.findByText(
+          'Re-check: The note was moved, or its symbol was removed and came back.',
+        ),
+      ).toBeInTheDocument()
+    })
+
+    it('shows the API error when the key may not verify the note', async () => {
+      mockFetch({
+        ...BASE,
+        [`GET ${SYMBOL_URL}`]: { body: flagged() },
+        [PATCH]: { status: 403, body: { detail: 'Only the owner (dev) may verify this note' } },
+      })
+
+      renderAt(AT_SYMBOL)
+      await userEvent.click(await screen.findByRole('button', { name: 'Still right' }))
+
+      expect(await screen.findByText(/Only the owner \(dev\)/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Still right' })).toBeEnabled()
+    })
+
+    it('shows no re-check on a verified note, and marks a conflict', async () => {
+      mockFetch({
+        ...BASE,
+        [`GET ${SYMBOL_URL}`]: { body: { ...view, notes: [note(3, { conflict: true })] } },
+      })
+
+      renderAt(AT_SYMBOL)
+
+      expect(await screen.findByText('Conflicts with code')).toBeInTheDocument()
+      expect(screen.queryByText('Summary now')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Still right' })).toBeNull()
+    })
   })
 
   it('opens a step as its own symbol', async () => {

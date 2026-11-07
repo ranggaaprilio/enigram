@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from enigram.domain.annotation import SymbolReview, summary_hash
-from enigram.domain.code import CodeSymbol, FlowSummary, code_citation
+from enigram.domain.code import CodeSymbol, FlowSummary, code_citation, shown_summary
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
 
 if TYPE_CHECKING:
@@ -38,19 +38,11 @@ def _pick(symbol: CodeSymbol, keys: tuple[str, ...]) -> dict[str, Any]:
     return {k: getattr(symbol, k) for k in keys}
 
 
-def _shown(summaries: dict[str, FlowSummary], symbol_id: str) -> tuple[str, str] | None:
-    """(kind, text) of the summary the Code page shows for a symbol: its flow, else its own."""
-    for kind in ("flow", "symbol"):
-        if found := summaries.get(f"{symbol_id}:{kind}"):
-            return kind, found.text
-    return None
-
-
 def _current(review: SymbolReview | None, summaries: dict[str, FlowSummary]) -> bool:
     """The marker still matches the summary shown now."""
     if review is None:
         return False
-    shown = _shown(summaries, review.symbol_id)
+    shown = shown_summary(summaries, review.symbol_id)
     return shown is not None and summary_hash(*shown) == review.summary_hash
 
 
@@ -174,7 +166,7 @@ async def review_symbol(
     repo_id = repo["id"]
     if symbol_id not in await graph.symbols_by_id(repo_id, [symbol_id]):
         raise NotFound(f"No symbol {symbol_id!r} in repository {repo_id}")
-    shown = _shown(await graph.summaries(repo_id, [symbol_id]), symbol_id)
+    shown = shown_summary(await graph.summaries(repo_id, [symbol_id]), symbol_id)
     if shown is None:
         raise EnigramError("No summary to review")
     by = by.strip()
