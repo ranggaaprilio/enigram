@@ -19,6 +19,15 @@ PRECEDENCE = (
     "Document Chunk, follow the Knowledge Graph description: it holds curated corrections. "
     "Team notes (note#N) rank above both."
 )
+# LightRAG's answer prompt asks only for a References section at the end, so without this rule
+# no sentence carries a citation and origin tagging (domain/origin.py) marks every one of them
+# [unsupported]. The [n] are the reference_ids LightRAG gives the References section.
+INLINE_CITATION_RULE = (
+    "End every sentence that states a fact from the Context with the [n] reference_id of the "
+    "Document Chunk that supports it, before the final punctuation (e.g. 'Boards are stored in "
+    "Convex [2].'); a sentence that uses several chunks cites each ([1, 3]). Use the same [n] as "
+    "the References section."
+)
 DOC_NOTE_KINDS = ("entity", "document")
 NO_ANSWER_RULE = (
     "If the Context has no information that answers the question, reply with one sentence "
@@ -52,8 +61,8 @@ async def answer_question(
     abstain guard judges the answer against the notes, entities, relations and chunks it had."""
     if mode not in QUERY_MODES:
         raise EnigramError(f"mode must be one of {QUERY_MODES}, got {mode!r}")
-    # The no-answer rule is always on.
-    instructions = " ".join(p for p in (user_prompt, NO_ANSWER_RULE) if p)
+    # The inline-citation and no-answer rules are always on.
+    instructions = " ".join(p for p in (user_prompt, INLINE_CITATION_RULE, NO_ANSWER_RULE) if p)
     found = await notes.search_text(question, DOC_NOTE_KINDS) if notes else []
     if found:
         instructions += "\n" + notes_prompt(found)
