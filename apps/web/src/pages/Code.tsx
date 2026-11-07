@@ -37,6 +37,12 @@ import { cn } from '@/lib/utils'
 import { formatTime } from '../format'
 
 const muted = 'text-[13px] text-muted-foreground'
+// The left list scrolls inside its card, under its filter and count; on wide screens the
+// column sticks below the header like the notes panel (toggle + gap = the extra 3.5rem).
+// The filter and count keep their height; only the list (listScroll, flex-1) gives way.
+const listCard =
+  'flex max-h-[60vh] flex-col rounded-xl bg-card p-3 lg:max-h-[calc(100vh-9.5rem)] [&>input]:shrink-0 [&>p]:shrink-0'
+const listScroll = '-mx-1 min-h-0 flex-1 overflow-y-auto px-1'
 const heading = 'mt-4 mb-1 text-sm font-semibold'
 const NAME_KEY = 'enigram.by'
 
@@ -225,7 +231,7 @@ export default function Code() {
       </div>
       {error && <ErrorAlert>{error}</ErrorAlert>}
       <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
-        <div className="flex min-w-0 flex-col gap-2">
+        <div className="flex min-w-0 flex-col gap-2 lg:sticky lg:top-20">
           <div role="group" aria-label="Browse by" className="flex gap-1 rounded-xl bg-card p-1">
             {(
               [
@@ -372,7 +378,7 @@ function Features(props: {
 }) {
   const { list } = props
   return (
-    <div className="rounded-xl bg-card p-3">
+    <div className={listCard}>
       <Input
         aria-label="Filter features"
         placeholder="Filter by route or name"
@@ -392,50 +398,52 @@ function Features(props: {
             {list.features.some((f) => f.kind === 'root') &&
               ' · no framework adapter: showing top-level functions'}
           </p>
-          {list.features.length === 0 ? (
-            <p className={cn('px-2 py-4', muted)}>
-              {props.q ? 'No features match.' : 'No entry points found in this repository.'}
-            </p>
-          ) : (
-            byKind(list.features).map(([label, features], _, groups) => (
-              <div key={label}>
-                {groups.length > 1 && (
-                  <h4 className={cn('mt-3 mb-1 px-2 font-semibold uppercase', muted)}>
-                    {label}
-                  </h4>
-                )}
-                <ul>
-                  {features.map((f) => (
-                    <li key={`${f.symbol_id}\u0000${f.route}`}>
-                      <button
-                        type="button"
-                        className={cn(
-                          'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary',
-                          f.symbol_id === props.selected && 'bg-secondary',
-                        )}
-                        onClick={() => props.onPick(f.symbol_id)}
-                      >
-                        {f.reviewed ? (
-                          <Check className="size-3.5 shrink-0 text-success" aria-label="reviewed" />
-                        ) : (
-                          <span className="size-3.5 shrink-0" />
-                        )}
-                        <span
-                          className="min-w-0 flex-1 truncate font-mono text-[13px]"
-                          title={`${f.qualified_name} · ${f.file}`}
+          <div className={listScroll}>
+            {list.features.length === 0 ? (
+              <p className={cn('px-2 py-4', muted)}>
+                {props.q ? 'No features match.' : 'No entry points found in this repository.'}
+              </p>
+            ) : (
+              byKind(list.features).map(([label, features], _, groups) => (
+                <div key={label}>
+                  {groups.length > 1 && (
+                    <h4 className={cn('mt-3 mb-1 px-2 font-semibold uppercase', muted)}>
+                      {label}
+                    </h4>
+                  )}
+                  <ul>
+                    {features.map((f) => (
+                      <li key={`${f.symbol_id}\u0000${f.route}`}>
+                        <button
+                          type="button"
+                          className={cn(
+                            'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary',
+                            f.symbol_id === props.selected && 'bg-secondary',
+                          )}
+                          onClick={() => props.onPick(f.symbol_id)}
                         >
-                          {f.route}
-                        </span>
-                        <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
-                          {f.notes}
-                        </Badge>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))
-          )}
+                          {f.reviewed ? (
+                            <Check className="size-3.5 shrink-0 text-success" aria-label="reviewed" />
+                          ) : (
+                            <span className="size-3.5 shrink-0" />
+                          )}
+                          <span
+                            className="min-w-0 flex-1 truncate font-mono text-[13px]"
+                            title={`${f.qualified_name} · ${f.file}`}
+                          >
+                            {f.route}
+                          </span>
+                          <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
+                            {f.notes}
+                          </Badge>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))
+            )}
+          </div>
         </>
       )}
     </div>
@@ -489,7 +497,7 @@ function Files(props: {
   }
 
   return (
-    <div className="rounded-xl bg-card p-3">
+    <div className={listCard}>
       <Input
         aria-label="Filter files"
         placeholder="Filter by path or symbol"
@@ -505,94 +513,96 @@ function Files(props: {
               ? `${shown.length} of ${tree.length} files`
               : `${tree.length} ${tree.length === 1 ? 'file' : 'files'} · ${symbolCount} ${symbolCount === 1 ? 'symbol' : 'symbols'}`}
           </p>
-          {shown.length === 0 ? (
-            <p className={cn('px-2 py-4', muted)}>
-              {needle ? 'No files match.' : 'No files indexed in this repository.'}
-            </p>
-          ) : (
-            byDir(shown).map(([dir, rows]) => (
-              <div key={dir}>
-                <h4
-                  className={cn('mt-3 mb-1 px-2 font-mono [overflow-wrap:anywhere]', muted)}
-                  title={dir}
-                >
-                  {dir}
-                </h4>
-                <ul>
-                  {rows.map((f) => {
-                    const open =
-                      toggled.get(f.path) ?? (f.path === selectedFile || symbolMatch(f))
-                    const notes = f.symbols.reduce((n, s) => n + s.notes, 0)
-                    return (
-                      <li key={f.path}>
-                        <button
-                          type="button"
-                          disabled={f.symbols.length === 0}
-                          aria-expanded={f.symbols.length > 0 ? open : undefined}
-                          title={f.path}
-                          className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
-                          onClick={() => toggle(f.path, open)}
-                        >
-                          <ChevronRight
-                            className={cn(
-                              'size-3.5 shrink-0 text-muted-foreground transition-transform',
-                              open && 'rotate-90',
-                              f.symbols.length === 0 && 'invisible',
+          <div className={listScroll}>
+            {shown.length === 0 ? (
+              <p className={cn('px-2 py-4', muted)}>
+                {needle ? 'No files match.' : 'No files indexed in this repository.'}
+              </p>
+            ) : (
+              byDir(shown).map(([dir, rows]) => (
+                <div key={dir}>
+                  <h4
+                    className={cn('mt-3 mb-1 px-2 font-mono [overflow-wrap:anywhere]', muted)}
+                    title={dir}
+                  >
+                    {dir}
+                  </h4>
+                  <ul>
+                    {rows.map((f) => {
+                      const open =
+                        toggled.get(f.path) ?? (f.path === selectedFile || symbolMatch(f))
+                      const notes = f.symbols.reduce((n, s) => n + s.notes, 0)
+                      return (
+                        <li key={f.path}>
+                          <button
+                            type="button"
+                            disabled={f.symbols.length === 0}
+                            aria-expanded={f.symbols.length > 0 ? open : undefined}
+                            title={f.path}
+                            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
+                            onClick={() => toggle(f.path, open)}
+                          >
+                            <ChevronRight
+                              className={cn(
+                                'size-3.5 shrink-0 text-muted-foreground transition-transform',
+                                open && 'rotate-90',
+                                f.symbols.length === 0 && 'invisible',
+                              )}
+                            />
+                            <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
+                              {f.path.slice(f.path.lastIndexOf('/') + 1)}
+                            </span>
+                            {notes > 0 && (
+                              <Badge
+                                variant="outline"
+                                className="rounded-[4px] text-muted-foreground"
+                              >
+                                {notes}
+                              </Badge>
                             )}
-                          />
-                          <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
-                            {f.path.slice(f.path.lastIndexOf('/') + 1)}
-                          </span>
-                          {notes > 0 && (
-                            <Badge
-                              variant="outline"
-                              className="rounded-[4px] text-muted-foreground"
-                            >
-                              {notes}
-                            </Badge>
-                          )}
-                        </button>
-                        {open && f.symbols.length > 0 && (
-                          <ul className="mb-1">
-                            {f.symbols.map((s) => (
-                              <li key={s.id}>
-                                <button
-                                  type="button"
-                                  aria-current={s.id === props.selected ? 'true' : undefined}
-                                  title={`${s.qualified_name} · lines ${s.line_start}-${s.line_end}`}
-                                  className={cn(
-                                    'flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-2 text-left text-sm hover:bg-secondary',
-                                    s.parent ? 'pl-12' : 'pl-7',
-                                    s.id === props.selected && 'bg-secondary',
-                                  )}
-                                  onClick={() => props.onPick(s.id)}
-                                >
-                                  <span className="shrink-0 text-xs text-muted-foreground">
-                                    {s.kind}
-                                  </span>{' '}
-                                  <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
-                                    {s.parent
-                                      ? s.qualified_name.slice(s.parent.length + 1)
-                                      : s.qualified_name}
-                                  </span>{' '}
-                                  <Badge
-                                    variant="outline"
-                                    className="rounded-[4px] text-muted-foreground"
+                          </button>
+                          {open && f.symbols.length > 0 && (
+                            <ul className="mb-1">
+                              {f.symbols.map((s) => (
+                                <li key={s.id}>
+                                  <button
+                                    type="button"
+                                    aria-current={s.id === props.selected ? 'true' : undefined}
+                                    title={`${s.qualified_name} · lines ${s.line_start}-${s.line_end}`}
+                                    className={cn(
+                                      'flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-2 text-left text-sm hover:bg-secondary',
+                                      s.parent ? 'pl-12' : 'pl-7',
+                                      s.id === props.selected && 'bg-secondary',
+                                    )}
+                                    onClick={() => props.onPick(s.id)}
                                   >
-                                    {s.notes}
-                                  </Badge>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </li>
-                    )
-                  })}
-                </ul>
-              </div>
-            ))
-          )}
+                                    <span className="shrink-0 text-xs text-muted-foreground">
+                                      {s.kind}
+                                    </span>{' '}
+                                    <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
+                                      {s.parent
+                                        ? s.qualified_name.slice(s.parent.length + 1)
+                                        : s.qualified_name}
+                                    </span>{' '}
+                                    <Badge
+                                      variant="outline"
+                                      className="rounded-[4px] text-muted-foreground"
+                                    >
+                                      {s.notes}
+                                    </Badge>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              ))
+            )}
+          </div>
         </>
       )}
     </div>
