@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Annotation, Feature, SymbolView } from '../api'
 import { mockFetch } from '../test/mockFetch'
 import Code from './Code'
@@ -691,6 +691,27 @@ describe('Code', () => {
       await userEvent.clear(screen.getByLabelText('Filter files'))
       await userEvent.type(screen.getByLabelText('Filter files'), 'nothing')
       expect(screen.getByText('No files match.')).toBeInTheDocument()
+    })
+
+    it('scrolls the list, not the page, to the open symbol', async () => {
+      mockFetch({ ...FILES, [`GET ${SERVICE_URL}`]: { body: SERVICE_VIEW } })
+      // jsdom has no layout: the open symbol sits 900px down a list whose box ends at 300px.
+      const rect = vi
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function (this: HTMLElement) {
+          const top = this.getAttribute('aria-current') === 'true' ? 900 : 0
+          return { top, bottom: top + (top ? 20 : 300), height: top ? 20 : 300 } as DOMRect
+        })
+      const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+
+      renderAt(`/code?repo=1&view=files&symbol=${encodeURIComponent(SERVICE)}`)
+      const open = await screen.findByRole('button', { name: /^method find/ })
+
+      const list = open.closest('.overflow-y-auto') as HTMLElement
+      await waitFor(() => expect(list.scrollTop).toBeGreaterThan(600))
+      expect(scrollTo).not.toHaveBeenCalled()
+      rect.mockRestore()
+      scrollTo.mockRestore()
     })
 
     it('keeps the file of the open symbol in a filtered list', async () => {

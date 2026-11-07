@@ -492,6 +492,19 @@ function Files(props: {
   )
   const symbolCount = (tree ?? []).reduce((n, f) => n + f.symbols.length, 0)
 
+  // A linked or newly opened symbol may sit below the fold of a long list: centre it in the
+  // list. Only the list scrolls; scrollIntoView would move the page as well.
+  const scroller = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const list = scroller.current
+    const open = list?.querySelector<HTMLElement>('[aria-current="true"]')
+    if (!list || !open) return
+    const box = list.getBoundingClientRect()
+    const row = open.getBoundingClientRect()
+    if (row.top >= box.top && row.bottom <= box.bottom) return
+    list.scrollTop += row.top - box.top - (box.height - row.height) / 2
+  }, [props.selected, tree])
+
   function toggle(path: string, open: boolean) {
     setToggled((prev) => new Map(prev).set(path, !open))
   }
@@ -513,7 +526,7 @@ function Files(props: {
               ? `${shown.length} of ${tree.length} files`
               : `${tree.length} ${tree.length === 1 ? 'file' : 'files'} · ${symbolCount} ${symbolCount === 1 ? 'symbol' : 'symbols'}`}
           </p>
-          <div className={listScroll}>
+          <div ref={scroller} className={listScroll}>
             {shown.length === 0 ? (
               <p className={cn('px-2 py-4', muted)}>
                 {needle ? 'No files match.' : 'No files indexed in this repository.'}
