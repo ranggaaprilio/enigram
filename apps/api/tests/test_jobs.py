@@ -186,3 +186,21 @@ async def test_token_ledger_sums_per_day_and_key(store, pool):
     other = PostgresJobStore(pool, f"test_{uuid4().hex[:8]}")
     assert await other.tokens_today() == 0
     await pool.execute("DELETE FROM enigram_token_usage WHERE workspace = $1", store.workspace)
+
+
+async def test_workspace_registry_and_scoped_store(store, pool):
+    name = f"t-{uuid4().hex[:8]}"
+    try:
+        first, again = await store.add_workspace(name), await store.add_workspace(name)
+        listed = [w["name"] for w in await store.list_workspaces()]
+        scoped = store.for_workspace(name)
+        job = await scoped.enqueue("index", {"book": "a"})
+
+        assert (first["name"], again) == (name, None)
+        assert name in listed
+        assert scoped.pool is store.pool
+        assert await store.get_job(job.id) is None
+        assert (await scoped.get_job(job.id)).id == job.id
+    finally:
+        await pool.execute("DELETE FROM enigram_workspaces WHERE name = $1", name)
+        await pool.execute("DELETE FROM enigram_jobs WHERE workspace = $1", name)

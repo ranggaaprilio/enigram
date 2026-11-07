@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS enigram_token_usage (
     tokens BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (workspace, day, source, api_key)
 );
+-- The workspaces the API and the UI know (GET/POST /workspaces); rows elsewhere carry the name.
+CREATE TABLE IF NOT EXISTS enigram_workspaces (
+    name TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -90,6 +95,25 @@ class PostgresJobStore:
 
     async def close(self) -> None:
         await self.pool.close()
+
+    def for_workspace(self, workspace: str) -> "PostgresJobStore":
+        """The same pool scoped to another workspace; close() only the store open_store made."""
+        return PostgresJobStore(self.pool, workspace)
+
+    async def add_workspace(self, name: str) -> dict[str, Any] | None:
+        """None when it already exists. The registry itself is not scoped to a workspace."""
+        row = await self.pool.fetchrow(
+            "INSERT INTO enigram_workspaces (name) VALUES ($1) ON CONFLICT (name) DO NOTHING "
+            "RETURNING name, created_at",
+            name,
+        )
+        return dict(row) if row else None
+
+    async def list_workspaces(self) -> list[dict[str, Any]]:
+        rows = await self.pool.fetch(
+            "SELECT name, created_at FROM enigram_workspaces ORDER BY name"
+        )
+        return [dict(r) for r in rows]
 
     async def enqueue(self, kind: str, payload: dict[str, Any]) -> Job:
         row = await self.pool.fetchrow(

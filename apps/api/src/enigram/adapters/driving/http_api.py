@@ -6,15 +6,15 @@ import logging
 import os
 import re
 import secrets
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from mcp.server import MCPServer
@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from enigram.adapters.driving.mcp_server import AppContext, create_server
+from enigram.adapters.driving.workspaces import WORKSPACE_HEADER, Workspace, Workspaces
 from enigram.application.annotations import (
     NewAnnotation,
     change_annotation,
@@ -41,7 +42,7 @@ from enigram.application.code_browse import (
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
-from enigram.application.ports import Deps, JobRepository
+from enigram.application.ports import Deps
 from enigram.application.querying import answer_question
 from enigram.application.repo_sync import check_ref, check_repo_url
 from enigram.application.routing import answer_routed, scope_mode
@@ -49,7 +50,7 @@ from enigram.application.webhooks import parse_push, verify_webhook
 from enigram.bootstrap import build_deps
 from enigram.config import Config
 from enigram.domain.annotation import ANNOTATION_MAX_CHARS, Annotation
-from enigram.domain.answer import QUERY_MODE
+from enigram.domain.answer import QUERY_MODE, QueryResult
 from enigram.domain.budget import BudgetExceeded, metered
 from enigram.domain.chunk import SOURCE_SUFFIXES, book_name
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
@@ -167,6 +168,10 @@ class RepoRequest(BaseModel):
     ref: str | None = None  # branch or tag; the repository's default branch when missing
 
 
+class WorkspaceCreate(BaseModel):
+    name: Name  # checked by domain/workspace.py: 422 when not 1-32 of a-z, 0-9, "-"
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -256,8 +261,25 @@ def _raise_http(e: EnigramError) -> HTTPException:
     return HTTPException(422, str(e))
 
 
-def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
-    """`deps` defaults to the real adapters; tests pass fakes."""
+async def _workspace(request: Request) -> Workspace:
+    """The workspace of the X-Enigram-Workspace header; the process workspace without it."""
+    name = request.headers.get(WORKSPACE_HEADER, "").strip() or None
+    try:
+        return await request.app.state.workspaces.get(name)
+    except NotFound as e:
+        raise HTTPException(404, str(e)) from e
+
+
+Scoped = Annotated[Workspace, Depends(_workspace)]
+
+
+def create_app(
+    cfg: Config,
+    deps: Deps | None = None,
+    deps_for: Callable[[Config], Deps] = build_deps,
+) -> FastAPI:
+    """`deps` (the process workspace) defaults to the real adapters and `deps_for` builds them
+    for another workspace from `cfg.for_workspace(name)`; tests pass fakes for both."""
     deps = deps or build_deps(cfg)
     if cfg.storage != "postgres":
         raise EnigramError(
@@ -267,16 +289,18 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def mcp_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
-        # Entered once by session_manager.run() below, after app.state is set.
+        # Entered once by session_manager.run() below, after app.state is set. MCP stays on the
+        # process workspace.
+        home = app.state.workspaces.home
         yield AppContext(
-            engine=app.state.engine,
-            store=app.state.store,
-            memory=app.state.memory,
-            code_graph=app.state.code_graph,
-            notes=app.state.notes,
-            decider=app.state.decider,
-            code_embedder=app.state.code_embedder,
-            conflicts=app.state.conflicts,
+            engine=home.engine,
+            store=home.store,
+            memory=home.memory,
+            code_graph=home.code_graph,
+            notes=home.notes,
+            decider=home.decider,
+            code_embedder=home.code_embedder,
+            conflicts=home.conflicts,
         )
 
     mcp = create_server(cfg, lifespan=mcp_lifespan, deps=deps)
@@ -298,20 +322,13 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         if not cfg.api_keys:
             log.warning("[api] ENIGRAM_API_KEYS is not set: every route is open")
         store = await deps.open_store()
-        app.state.memory = await deps.new_memory(store)
-        app.state.code_graph = await deps.new_code_graph(store)
-        # Docs-vs-code results, written by the worker's detect_conflicts job (FK to code_repos).
-        app.state.conflicts = await deps.new_conflicts(store)
-        # Written synchronously by the annotation routes; the worker writes staleness flags.
-        app.state.notes = await deps.new_annotations(store)
-        # The decision layer: the abstain guard on /query, conflict checks on verification.
-        app.state.decider = deps.decider()
-        # search_code's semantic channel on /query and MCP.
-        app.state.code_embedder = deps.code_embedder()
         try:
-            # require_index=False: a fresh deployment has no index yet and must still start.
-            async with deps.open_engine(query_cache=False, require_index=False) as engine:
-                app.state.store, app.state.engine = store, engine
+            # The engines close before the pool the stores share.
+            async with AsyncExitStack() as stack:
+                workspaces = Workspaces(cfg, deps, deps_for, store, stack)
+                await workspaces.start()
+                # Only the registry: every route reads its workspace's adapters from it.
+                app.state.workspaces = workspaces
                 # A mounted app's own lifespan never runs, so the MCP session manager starts here.
                 async with mcp.session_manager.run():
                     yield
@@ -322,21 +339,34 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
     if cfg.api_keys:
         app.add_middleware(ApiKeyMiddleware, keys=cfg.api_keys)
 
-    def store_of(request: Request) -> JobRepository:
-        return request.app.state.store
-
     @app.get("/health")
     async def health() -> dict[str, str]:
+        # The process workspace: an open path must not tell which workspace names exist.
         return {"status": "ok", "workspace": cfg.workspace}
 
+    @app.get("/workspaces")
+    async def list_workspaces(request: Request) -> list[dict[str, Any]]:
+        return jsonable_encoder(await request.app.state.workspaces.list())
+
+    @app.post("/workspaces", status_code=201)
+    async def create_workspace(request: Request, body: WorkspaceCreate) -> Any:
+        try:
+            row = await request.app.state.workspaces.create(body.name)
+        except EnigramError as e:
+            raise HTTPException(422, str(e)) from e
+        if row is None:
+            raise HTTPException(409, f"Workspace {body.name!r} already exists")
+        log.info("[api] workspace %s created by %s", body.name, _actor(request))
+        return jsonable_encoder(row)
+
     @app.post("/documents", status_code=202)
-    async def upload_document(request: Request, file: Annotated[UploadFile, File()]) -> Any:
+    async def upload_document(ws: Scoped, file: Annotated[UploadFile, File()]) -> Any:
         name = Path(file.filename or "").name
         # The indexer skips hidden files (macOS `._name` metadata) and other suffixes.
         if not name or name.startswith(".") or Path(name).suffix.lower() not in SOURCE_SUFFIXES:
             raise HTTPException(400, f"Expected a PDF or Markdown file, got {name!r}")
         book = book_name(Path(name))
-        books_dir = cfg.books_dir
+        books_dir = ws.cfg.books_dir
         books_dir.mkdir(parents=True, exist_ok=True)
         clash = next(
             (p.name for p in list_sources(books_dir) if book_name(p) == book and p.name != name),
@@ -345,12 +375,12 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         if clash:
             raise HTTPException(409, f"{clash} and {name} both map to document id {book!r}")
 
-        store = store_of(request)
+        store = ws.store
         # Unique per request: two uploads of one name must not write into the same file.
         tmp = books_dir / f".{uuid4().hex}.{name}.upload"
         try:
             sha = await _save_upload(file, tmp)
-            entry = load_manifest(cfg)["books"].get(book, {})
+            entry = load_manifest(ws.cfg)["books"].get(book, {})
             if entry.get("sha256") and entry["sha256"] != sha:
                 raise HTTPException(
                     409,
@@ -377,41 +407,41 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         return {"book": book, "status": job.status, "job": asdict(job)}
 
     @app.get("/documents")
-    async def list_documents(request: Request) -> list[dict[str, Any]]:
-        return await documents_overview(cfg, store_of(request))
+    async def list_documents(ws: Scoped) -> list[dict[str, Any]]:
+        return await documents_overview(ws.cfg, ws.store)
 
-    def known_book(book: str) -> bool:
+    def known_book(ws: Workspace, book: str) -> bool:
         """In the manifest, or uploaded and not yet indexed."""
-        if book in load_manifest(cfg)["books"]:
+        if book in load_manifest(ws.cfg)["books"]:
             return True
-        return cfg.books_dir.exists() and any(
-            book_name(p) == book for p in list_sources(cfg.books_dir)
+        return ws.cfg.books_dir.exists() and any(
+            book_name(p) == book for p in list_sources(ws.cfg.books_dir)
         )
 
     @app.delete("/documents/{book}", status_code=202)
-    async def delete_document_route(request: Request, book: str) -> Any:
-        if not known_book(book):
+    async def delete_document_route(ws: Scoped, request: Request, book: str) -> Any:
+        if not known_book(ws, book):
             raise HTTPException(404, f"No document {book!r}")
-        store = store_of(request)
+        store = ws.store
         if any(j.payload.get("book") == book for j in await store.active_jobs()):
             raise HTTPException(409, f"{book} has a queued or running job; wait for it to finish")
         job = await store.enqueue("delete_document", {"book": book, "api_key": _key_name(request)})
         log.info("[api] queued job %d: delete %s", job.id, book)
         return {"book": book, "status": "deleting", "job": asdict(job)}
 
-    async def _refuse_when_exhausted(store: JobRepository) -> None:
-        if message := await daily_exhausted(store, cfg):
+    async def _refuse_when_exhausted(ws: Workspace) -> None:
+        if message := await daily_exhausted(ws.store, ws.cfg):
             raise HTTPException(429, message)
 
     @app.post("/repos", status_code=202)
-    async def index_repo_route(request: Request, body: RepoRequest) -> Any:
+    async def index_repo_route(ws: Scoped, request: Request, body: RepoRequest) -> Any:
         try:
-            check_repo_url(body.url, cfg.repo_hosts)
+            check_repo_url(body.url, ws.cfg.repo_hosts)
             check_ref(body.ref)
         except EnigramError as e:
             raise HTTPException(422, str(e)) from e
-        store = store_of(request)
-        await _refuse_when_exhausted(store)
+        store = ws.store
+        await _refuse_when_exhausted(ws)
         if any(j.payload.get("url") == body.url for j in await store.active_jobs()):
             raise HTTPException(409, f"{body.url} is already queued or running")
         payload = {"url": body.url, "api_key": _key_name(request)}
@@ -421,22 +451,22 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         log.info("[api] queued job %d: repository %s", job.id, body.url)
         return {"repo": body.url, "job": asdict(job)}
 
-    async def _repo_or_404(request: Request, repo_id: int) -> dict[str, Any]:
-        repo = await request.app.state.code_graph.get_repo_by_id(repo_id)
+    async def _repo_or_404(ws: Workspace, repo_id: int) -> dict[str, Any]:
+        repo = await ws.code_graph.get_repo_by_id(repo_id)
         if repo is None:
             raise HTTPException(404, f"No repository {repo_id}")
         return repo
 
     @app.get("/repos")
-    async def list_repos(request: Request) -> list[dict[str, Any]]:
-        repos = await request.app.state.code_graph.list_repos()
+    async def list_repos(ws: Scoped) -> list[dict[str, Any]]:
+        repos = await ws.code_graph.list_repos()
         return jsonable_encoder(
             [
                 {
                     "id": r["id"],
                     "url": r["url"],
                     "ref": r["ref"],
-                    "name": repo_name(r, cfg.repo_hosts),
+                    "name": repo_name(r, ws.cfg.repo_hosts),
                     "indexed_sha": r["indexed_sha"],
                     "indexed_at": r.get("indexed_at"),
                     "webhook": bool(r.get("webhook")),
@@ -447,41 +477,39 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
 
     @app.get("/repos/{repo_id}/symbols")
     async def repo_symbols(
-        request: Request, repo_id: int, q: Annotated[str, Query(min_length=1)]
+        ws: Scoped, repo_id: int, q: Annotated[str, Query(min_length=1)]
     ) -> list[dict[str, Any]]:
         """Exact qualified names or names ending in ".<q>" (`find`, `AuthService.logout`)."""
-        await _repo_or_404(request, repo_id)
-        found = await request.app.state.code_graph.find_symbols(repo_id, [q.strip()])
+        await _repo_or_404(ws, repo_id)
+        found = await ws.code_graph.find_symbols(repo_id, [q.strip()])
         keys = ("id", "qualified_name", "kind", "file", "line_start", "line_end")
         return [{k: getattr(s, k) for k in keys} for s in found[:SYMBOL_LOOKUP_MAX]]
 
     @app.get("/repos/{repo_id}/features")
-    async def repo_features(request: Request, repo_id: int, q: str | None = None) -> dict[str, Any]:
+    async def repo_features(ws: Scoped, repo_id: int, q: str | None = None) -> dict[str, Any]:
         """Entry points with the number of notes on each, the first FEATURE_LIST_MAX whose
         route or symbol name contains `q`; `total` counts every match."""
-        await _repo_or_404(request, repo_id)
-        rows = await features_view(
-            request.app.state.code_graph, request.app.state.notes, repo_id, q
-        )
+        await _repo_or_404(ws, repo_id)
+        rows = await features_view(ws.code_graph, ws.notes, repo_id, q)
         return {"features": rows[:FEATURE_LIST_MAX], "total": len(rows)}
 
     @app.get("/repos/{repo_id}/tree")
-    async def repo_tree(request: Request, repo_id: int) -> dict[str, Any]:
+    async def repo_tree(ws: Scoped, repo_id: int) -> dict[str, Any]:
         """Every indexed file with its symbols (no bodies) and their note counts."""
-        await _repo_or_404(request, repo_id)
-        return await tree_view(request.app.state.code_graph, request.app.state.notes, repo_id)
+        await _repo_or_404(ws, repo_id)
+        return await tree_view(ws.code_graph, ws.notes, repo_id)
 
     # The Code page's "looks right" marker; POST/DELETE only, so the GET below never takes them.
     @app.post("/repos/{repo_id}/symbols/{symbol_id:path}/review")
     async def review_repo_symbol(
-        request: Request, repo_id: int, symbol_id: str, body: ReviewCreate | None = None
+        ws: Scoped, request: Request, repo_id: int, symbol_id: str, body: ReviewCreate | None = None
     ) -> dict[str, Any]:
         """Mark the symbol's current summary as right; a later mark replaces it."""
-        repo = await _repo_or_404(request, repo_id)
+        repo = await _repo_or_404(ws, repo_id)
         try:
             review = await review_symbol(
-                request.app.state.code_graph,
-                request.app.state.notes,
+                ws.code_graph,
+                ws.notes,
                 repo,
                 symbol_id,
                 _actor(request),
@@ -492,44 +520,44 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         return jsonable_encoder({**review_json(review, True), "symbol_id": review.symbol_id})
 
     @app.delete("/repos/{repo_id}/symbols/{symbol_id:path}/review", status_code=204)
-    async def unreview_repo_symbol(request: Request, repo_id: int, symbol_id: str) -> None:
-        await _repo_or_404(request, repo_id)
+    async def unreview_repo_symbol(
+        ws: Scoped, request: Request, repo_id: int, symbol_id: str
+    ) -> None:
+        await _repo_or_404(ws, repo_id)
         try:
             await unreview_symbol(
-                request.app.state.notes,
+                ws.notes,
                 repo_id,
                 symbol_id,
                 _actor(request),
-                cfg.annotation_verifiers,
+                ws.cfg.annotation_verifiers,
             )
         except EnigramError as e:
             raise _raise_http(e) from e
 
     # :path because symbol ids are "<file>#<qualified_name>" (sent as %2F and %23).
     @app.get("/repos/{repo_id}/symbols/{symbol_id:path}")
-    async def repo_symbol(request: Request, repo_id: int, symbol_id: str) -> dict[str, Any]:
+    async def repo_symbol(ws: Scoped, repo_id: int, symbol_id: str) -> dict[str, Any]:
         """One symbol with its summaries, steps (direct callees) and notes."""
-        repo = await _repo_or_404(request, repo_id)
-        view = await symbol_view(
-            request.app.state.code_graph, request.app.state.notes, repo, symbol_id
-        )
+        repo = await _repo_or_404(ws, repo_id)
+        view = await symbol_view(ws.code_graph, ws.notes, repo, symbol_id)
         if view is None:
             raise HTTPException(404, f"No symbol {symbol_id!r} in repository {repo_id}")
         return jsonable_encoder({**view, "notes": [_note_json(n) for n in view["notes"]]})
 
     @app.post("/repos/{repo_id}/secret")
-    async def rotate_webhook_secret(request: Request, repo_id: int) -> dict[str, str]:
+    async def rotate_webhook_secret(ws: Scoped, request: Request, repo_id: int) -> dict[str, str]:
         """A new webhook secret, returned once; the previous one stops working."""
-        await _repo_or_404(request, repo_id)
+        await _repo_or_404(ws, repo_id)
         secret = secrets.token_hex(32)
-        await request.app.state.code_graph.set_webhook_secret(repo_id, secret)
+        await ws.code_graph.set_webhook_secret(repo_id, secret)
         log.info("[api] webhook secret set for repository %d by %s", repo_id, _actor(request))
         return {"secret": secret}
 
     @app.delete("/repos/{repo_id}", status_code=202)
-    async def delete_repo_route(request: Request, repo_id: int) -> Any:
-        repo = await _repo_or_404(request, repo_id)
-        store = store_of(request)
+    async def delete_repo_route(ws: Scoped, request: Request, repo_id: int) -> Any:
+        repo = await _repo_or_404(ws, repo_id)
+        store = ws.store
         if any(j.payload.get("url") == repo["url"] for j in await store.active_jobs()):
             raise HTTPException(409, f"{repo['url']} has a queued or running job")
         payload = {
@@ -544,7 +572,10 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
 
     @app.post("/repos/{repo_id}/webhook")
     async def repo_webhook(request: Request, repo_id: int) -> Any:
-        graph = request.app.state.code_graph
+        # The process workspace: the push carries no workspace header. Phase 2 of the workspace
+        # PRD looks the repository up across workspaces.
+        ws = request.app.state.workspaces.home
+        graph = ws.code_graph
         repo = await graph.get_repo_by_id(repo_id)
         secret = await graph.webhook_secret(repo_id) if repo else None
         if repo is None or secret is None:
@@ -562,8 +593,8 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
             return {"ignored": f"ref {event.ref_name}"}
         if event.after == repo["indexed_sha"]:
             return {"ignored": f"already indexed {event.after[:12]}"}
-        store = store_of(request)
-        await _refuse_when_exhausted(store)
+        store = ws.store
+        await _refuse_when_exhausted(ws)
         active = next(
             (j for j in await store.active_jobs() if j.payload.get("url") == repo["url"]), None
         )
@@ -584,29 +615,27 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         return JSONResponse({"job": jsonable_encoder(asdict(job))}, status_code=202)
 
     @app.get("/conflicts")
-    async def list_conflicts(request: Request, repo: int | None = None) -> dict[str, Any]:
+    async def list_conflicts(ws: Scoped, repo: int | None = None) -> dict[str, Any]:
         """Notes in conflict with the code and the stored docs-vs-code conflicts, for one
         repository or all (then with entity and document notes too)."""
-        graph = request.app.state.code_graph
-        repos = (
-            [await _repo_or_404(request, repo)] if repo is not None else await graph.list_repos()
-        )
+        graph = ws.code_graph
+        repos = [await _repo_or_404(ws, repo)] if repo is not None else await graph.list_repos()
         view = await conflicts_view(
             graph,
-            request.app.state.notes,
-            request.app.state.conflicts,
+            ws.notes,
+            ws.conflicts,
             repos,
             all_notes=repo is None,
         )
         return jsonable_encoder({**view, "notes": [_note_json(n) for n in view["notes"]]})
 
     @app.post("/conflicts/detect", status_code=202)
-    async def detect_conflicts_route(request: Request, body: ConflictDetect) -> Any:
+    async def detect_conflicts_route(ws: Scoped, request: Request, body: ConflictDetect) -> Any:
         ref = body.ref or None
-        if await request.app.state.code_graph.get_repo(body.url, ref) is None:
+        if await ws.code_graph.get_repo(body.url, ref) is None:
             raise HTTPException(404, f"{body.url} ({ref or 'default branch'}) is not indexed")
-        store = store_of(request)
-        await _refuse_when_exhausted(store)
+        store = ws.store
+        await _refuse_when_exhausted(ws)
         if any(
             j.kind == "detect_conflicts"
             and j.payload.get("url") == body.url
@@ -623,14 +652,14 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
 
     @app.get("/annotations")
     async def list_annotations(
-        request: Request,
+        ws: Scoped,
         status: str | None = None,
         target_kind: str | None = None,
         repo: int | None = None,
         target_ref: str | None = None,
         limit: Annotated[int, Query(ge=1, le=ANNOTATION_LIST_MAX)] = 200,
     ) -> list[dict[str, Any]]:
-        notes = await request.app.state.notes.list(
+        notes = await ws.notes.list(
             status=status,
             target_kind=target_kind,
             repo_id=repo,
@@ -640,7 +669,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         return [_note_json(n, summary=False) for n in notes]
 
     @app.post("/annotations", status_code=201)
-    async def create_annotation_route(request: Request, body: AnnotationCreate) -> Any:
+    async def create_annotation_route(ws: Scoped, request: Request, body: AnnotationCreate) -> Any:
         new = NewAnnotation(
             target_kind=body.target_kind,
             target_ref=body.target_ref,
@@ -655,20 +684,20 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         )
         try:
             note = await create_annotation(
-                cfg,
-                request.app.state.code_graph,
-                request.app.state.notes,
+                ws.cfg,
+                ws.code_graph,
+                ws.notes,
                 new,
                 _actor(request),
-                decider=request.app.state.decider,
+                decider=ws.decider,
             )
         except EnigramError as e:
             raise _raise_http(e) from e
         return _note_json(note)
 
     @app.get("/annotations/{annotation_id}")
-    async def get_annotation(request: Request, annotation_id: int) -> dict[str, Any]:
-        notes = request.app.state.notes
+    async def get_annotation(ws: Scoped, annotation_id: int) -> dict[str, Any]:
+        notes = ws.notes
         note = await notes.get(annotation_id)
         if note is None:
             raise HTTPException(404, f"No annotation {annotation_id}")
@@ -677,69 +706,70 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
 
     @app.patch("/annotations/{annotation_id}")
     async def patch_annotation(
-        request: Request, annotation_id: int, body: AnnotationPatch
+        ws: Scoped, request: Request, annotation_id: int, body: AnnotationPatch
     ) -> dict[str, Any]:
         changes = body.model_dump(exclude_unset=True)
         try:
             note = await change_annotation(
-                cfg,
-                request.app.state.code_graph,
-                request.app.state.notes,
+                ws.cfg,
+                ws.code_graph,
+                ws.notes,
                 annotation_id,
                 changes,
                 _actor(request),
-                decider=request.app.state.decider,
+                decider=ws.decider,
             )
         except EnigramError as e:
             raise _raise_http(e) from e
         return _note_json(note)
 
     @app.get("/jobs/{job_id}")
-    async def get_job(request: Request, job_id: int) -> dict[str, Any]:
-        job = await store_of(request).get_job(job_id)
+    async def get_job(ws: Scoped, job_id: int) -> dict[str, Any]:
+        job = await ws.store.get_job(job_id)
         if job is None:
             raise HTTPException(404, f"No job {job_id}")
         return asdict(job)
 
     @app.post("/query")
-    async def query(request: Request, body: QueryRequest) -> dict[str, Any]:
-        store, state = store_of(request), request.app.state
+    async def query(ws: Scoped, request: Request, body: QueryRequest) -> dict[str, Any]:
+        store = ws.store
         key = _key_name(request)
         try:
-            cap = await query_allowance(store, cfg, key)
+            cap = await query_allowance(store, ws.cfg, key)
         except BudgetExceeded as e:
             raise HTTPException(429, str(e)) from e
         with metered(cap, "this query") as meter:  # the route choice and both answers count
             try:
 
                 async def repo_names() -> list[str]:
-                    repos = await state.code_graph.list_repos()
-                    return [repo_name(r, cfg.repo_hosts) for r in repos]
+                    repos = await ws.code_graph.list_repos()
+                    return [repo_name(r, ws.cfg.repo_hosts) for r in repos]
+
+                async def ask_docs() -> QueryResult:
+                    # A workspace's engine opens on its first docs question.
+                    engine = await request.app.state.workspaces.engine(ws)
+                    return await answer_question(
+                        engine, body.question, body.mode, notes=ws.notes, decider=ws.decider
+                    )
 
                 result = await answer_routed(
                     body.question,
                     scope=body.scope,
                     repo=body.repo,
-                    decider=state.decider,
+                    decider=ws.decider,
                     repo_names=repo_names,
                     ask_code=lambda: answer_with_agent(
-                        cfg,
-                        deps.generator(),
-                        state.code_graph,
+                        ws.cfg,
+                        ws.deps.generator(),
+                        ws.code_graph,
                         body.question,
                         repo_url=body.repo,
-                        model=cfg.llm_model,
-                        notes=state.notes,
-                        decider=state.decider,
-                        embedder=state.code_embedder,
+                        model=ws.cfg.llm_model,
+                        notes=ws.notes,
+                        decider=ws.decider,
+                        embedder=ws.code_embedder,
                     ),
-                    ask_docs=lambda: answer_question(
-                        state.engine,
-                        body.question,
-                        body.mode,
-                        notes=state.notes,
-                        decider=state.decider,
-                    ),
+                    ask_docs=ask_docs,
                 )
             except EnigramError as e:
                 mode = scope_mode(body.scope, body.repo, body.mode)
@@ -757,56 +787,63 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
 
     @app.get("/queries")
     async def list_queries(
-        request: Request, limit: Annotated[int, Query(ge=1, le=200)] = 50
+        ws: Scoped, limit: Annotated[int, Query(ge=1, le=200)] = 50
     ) -> list[dict[str, Any]]:
-        return await store_of(request).list_queries(limit)
+        return await ws.store.list_queries(limit)
 
     @app.get("/queries/{query_id}")
-    async def get_query(request: Request, query_id: int) -> dict[str, Any]:
-        row = await store_of(request).get_query(query_id)
+    async def get_query(ws: Scoped, query_id: int) -> dict[str, Any]:
+        row = await ws.store.get_query(query_id)
         if row is None:
             raise HTTPException(404, f"No query {query_id}")
         return row
 
     # Graph edits are jobs: only the worker writes the index (see adapters/driving/worker.py).
-    async def enqueue_graph(request: Request, kind: str, payload: dict[str, Any]) -> Any:
+    async def enqueue_graph(
+        ws: Workspace, request: Request, kind: str, payload: dict[str, Any]
+    ) -> Any:
         # The key's name records who edited.
-        job = await store_of(request).enqueue(kind, {**payload, "api_key": _key_name(request)})
+        job = await ws.store.enqueue(kind, {**payload, "api_key": _key_name(request)})
         log.info("[api] queued job %d: %s", job.id, kind)
         return {"job": asdict(job)}
 
     @app.get("/graph/search")
     async def search_graph(
-        request: Request,
+        ws: Scoped,
         q: Annotated[str, Query(min_length=1)],
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> dict[str, list[dict[str, Any]]]:
-        return await store_of(request).search_graph(q, limit)
+        return await ws.store.search_graph(q, limit)
 
     @app.post("/graph/entity/edit", status_code=202)
-    async def edit_entity(request: Request, body: EntityEdit) -> Any:
-        return await enqueue_graph(request, "edit_entity", body.model_dump(exclude_none=True))
+    async def edit_entity(ws: Scoped, request: Request, body: EntityEdit) -> Any:
+        return await enqueue_graph(ws, request, "edit_entity", body.model_dump(exclude_none=True))
 
     @app.post("/graph/relation/edit", status_code=202)
-    async def edit_relation(request: Request, body: RelationEdit) -> Any:
-        return await enqueue_graph(request, "edit_relation", body.model_dump(exclude_none=True))
+    async def edit_relation(ws: Scoped, request: Request, body: RelationEdit) -> Any:
+        return await enqueue_graph(ws, request, "edit_relation", body.model_dump(exclude_none=True))
 
     @app.post("/graph/entity/merge", status_code=202)
-    async def merge_entities(request: Request, body: EntityMerge) -> Any:
-        return await enqueue_graph(request, "merge_entities", body.model_dump(exclude_none=True))
+    async def merge_entities(ws: Scoped, request: Request, body: EntityMerge) -> Any:
+        return await enqueue_graph(
+            ws, request, "merge_entities", body.model_dump(exclude_none=True)
+        )
 
     # :path because entity names may contain "/" (sent encoded as %2F).
     @app.delete("/graph/entity/{name:path}", status_code=202)
-    async def delete_entity(request: Request, name: str) -> Any:
-        return await enqueue_graph(request, "delete_entity", {"name": name})
+    async def delete_entity(ws: Scoped, request: Request, name: str) -> Any:
+        return await enqueue_graph(ws, request, "delete_entity", {"name": name})
 
     @app.delete("/graph/relation", status_code=202)
     async def delete_relation(
+        ws: Scoped,
         request: Request,
         source: Annotated[str, Query(min_length=1)],
         target: Annotated[str, Query(min_length=1)],
     ) -> Any:
-        return await enqueue_graph(request, "delete_relation", {"source": source, "target": target})
+        return await enqueue_graph(
+            ws, request, "delete_relation", {"source": source, "target": target}
+        )
 
     # After the routes: FastAPI routes match first; the MCP app answers only /mcp.
     app.mount("/", mcp_app)

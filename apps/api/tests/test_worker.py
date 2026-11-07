@@ -13,7 +13,10 @@ from enigram.domain.job import ACTIVE, Job
 class FakeJobStore:
     """In-memory JobRepository."""
 
-    def __init__(self):
+    def __init__(self, workspaces=None):
+        # name -> created_at, shared with the stores for_workspace returns
+        self.workspaces = workspaces if workspaces is not None else {}
+        self.scoped: dict[str, FakeJobStore] = {}
         self.jobs: list[Job] = []
         self.queries: list[dict] = []
         self.closed = False
@@ -90,6 +93,20 @@ class FakeJobStore:
     @asynccontextmanager
     async def worker_lock(self):
         yield
+
+    def for_workspace(self, workspace):
+        if workspace not in self.scoped:
+            self.scoped[workspace] = FakeJobStore(self.workspaces)
+        return self.scoped[workspace]
+
+    async def add_workspace(self, name):
+        if name in self.workspaces:
+            return None
+        self.workspaces[name] = datetime.now(UTC)
+        return {"name": name, "created_at": self.workspaces[name]}
+
+    async def list_workspaces(self):
+        return [{"name": n, "created_at": t} for n, t in sorted(self.workspaces.items())]
 
 
 @pytest.fixture

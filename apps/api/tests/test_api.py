@@ -273,7 +273,7 @@ def test_query_scope_code_uses_the_agent(env, monkeypatch):
 
 def _routed(client, monkeypatch):
     """One indexed repository and a fake agent; returns the questions the agent was asked."""
-    graph = client.app.state.code_graph
+    graph = client.app.state.workspaces.home.code_graph
     graph.repos[1] = {
         "id": 1,
         "url": "https://github.com/o/a",
@@ -314,14 +314,14 @@ def test_query_scope_docs_asks_no_route_choice(env, monkeypatch):
 
     assert response.json()["mode"] == "mix" and asked == [] and len(rag.params) == 1
     assert response.json()["extra"]["route"]["method"] == "forced"
-    decider = client.app.state.decider
+    decider = client.app.state.workspaces.home.decider
     assert all("route" not in purposes for _, purposes in decider.calls)
 
 
 def test_query_unsure_answers_from_both_and_merges(env, monkeypatch):
     client, store, rag, _ = env
     asked = _routed(client, monkeypatch)
-    client.app.state.decider.answers["route"] = choice("docs", 0.3)
+    client.app.state.workspaces.home.decider.answers["route"] = choice("docs", 0.3)
 
     response = client.post("/query", json={"question": "How can an admin filter users?"})
 
@@ -1329,7 +1329,7 @@ def test_conflicts_routes(notes_env):
     assert again.status_code == 409
 
     client.portal.call(
-        client.app.state.conflicts.replace,
+        client.app.state.workspaces.home.conflicts.replace,
         1,
         sha,
         [],
