@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { useSearchParams } from 'react-router'
+import { WsLink } from '@/workspace'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, ChevronRight, Plus, X } from 'lucide-react'
@@ -163,7 +164,8 @@ export default function Code() {
       <section>
         {header}
         <Empty>
-          No repository indexed yet. Index one on the <Link to="/documents">Documents</Link> page.
+          No repository indexed yet. Index one on the{' '}
+          <WsLink to="/documents">Documents</WsLink> page.
         </Empty>
       </section>
     )

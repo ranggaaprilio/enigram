@@ -415,6 +415,9 @@ The **Graph** page (`/graph`, linked from Annotations, no menu entry) finds enti
 whose name or description contains a phrase, then edits, merges or deletes them (see [Correcting
 the graph](#correcting-the-graph)).
 
+Pages live under `/w/<workspace>/…` (old links such as `/code?repo=1` open the process workspace).
+The header picks a workspace or creates one; every request then carries `X-Enigram-Workspace`.
+
 The UI has no login: nginx adds `ENIGRAM_WEB_KEY` to every `/api` call, so the browser never
 sees a key, and the port stays bound to localhost. Open it as `http://localhost:3000` or `http://127.0.0.1:3000`: nginx
 drops any other host name and refuses `/api` calls from other origins, so a web page cannot

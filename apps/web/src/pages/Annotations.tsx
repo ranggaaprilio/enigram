@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { useSearchParams } from 'react-router'
+import { WsLink } from '@/workspace'
 import {
   getAnnotation,
   listAnnotations,
@@ -104,9 +105,9 @@ export default function Annotations() {
         description="Human notes on code symbols, graph entities and documents. Answers cite them, and they ask for review when the code they describe changes."
         action={
           <Button asChild variant="secondary">
-            <Link to="/graph" className="hover:no-underline">
+            <WsLink to="/graph" className="hover:no-underline">
               <Network /> Graph editor
-            </Link>
+            </WsLink>
           </Button>
         }
       />
