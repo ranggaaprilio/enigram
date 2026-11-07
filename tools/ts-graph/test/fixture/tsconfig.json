@@ -4,7 +4,8 @@
     "target": "ES2021",
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "strictNullChecks": true
+    "strictNullChecks": true,
+    "jsx": "preserve"
   },
   "include": ["src/**/*"]
 }

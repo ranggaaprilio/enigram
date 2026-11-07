@@ -1,19 +1,10 @@
 import { Node } from "ts-morph";
+import { argText, joinRoute, literal, property } from "./common.mjs";
+
+export { joinRoute };
 
 const HTTP = { Get: "GET", Post: "POST", Put: "PUT", Patch: "PATCH", Delete: "DELETE", Options: "OPTIONS", Head: "HEAD", All: "ALL" };
 const EVENTS = new Set(["EventPattern", "MessagePattern"]);
-
-function literal(node) {
-  if (!node) return null;
-  if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)) return node.getLiteralValue();
-  if (Node.isArrayLiteralExpression(node)) return literal(node.getElements()[0]);
-  return null;
-}
-
-function property(obj, name) {
-  const prop = obj.getProperty(name);
-  return prop && Node.isPropertyAssignment(prop) ? prop.getInitializer() : undefined;
-}
 
 /** `@Controller('users')` or `@Controller({ path: 'auth', version: '1' })` → {path, version}. */
 function controllerPath(decorator) {
@@ -23,18 +14,6 @@ function controllerPath(decorator) {
     return { path: literal(property(arg, "path")) ?? "", version: literal(property(arg, "version")) ?? "" };
   }
   return { path: literal(arg) ?? "", version: "" };
-}
-
-/** "/a//b/" + ":id" → "/a/b/:id"; the root stays "/". */
-export function joinRoute(...parts) {
-  const joined = `/${parts.filter(Boolean).join("/")}`.replace(/\/+/g, "/");
-  return joined.length > 1 ? joined.replace(/\/$/, "") : joined;
-}
-
-/** Text of the first decorator argument: its literal value, else its source text. */
-function argText(decorator) {
-  const arg = decorator.getArguments()[0];
-  return arg ? (literal(arg) ?? arg.getText()) : "";
 }
 
 /**

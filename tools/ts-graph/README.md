@@ -65,14 +65,22 @@ through an interface has a target; the `implements` edges lead to the implementa
 
 Calls inside decorators (`@Post('login')`, `@Body()`) are metadata and are not edges. A call to the
 caller's own parameter or local function is not an edge either (counted in `report.calls_local`).
+A JSX element whose tag resolves to a repository component (`<BoardList />`) is a `calls` edge to
+it; intrinsic tags (`<div>`) and package components are not edges.
 
 ### `entrypoints.jsonl`
 
 `{"symbol", "kind", "route", "framework", "version"}` with `kind` one of `http_route`
 (`"POST /auth/email/login"`, controller path and method path joined), `cron` (the expression),
 `event` (`@EventPattern`/`@MessagePattern` name), `job` (`<processor>:<process>`) and `cli_main`
-(`bootstrap`/`main` in `src/main.ts`). Framework adapters live in `lib/entrypoints/` and export
-`detect({project, root, symbols}) -> {entrypoints, matched}`; Nest is the only one so far.
+(`bootstrap`/`main` in `src/main.ts`) for Nest; `page` (`/board/[boardId]`), `http_route`
+(`"POST /api/auth"`, one row per HTTP-method export of a `route` file), `middleware` and `action`
+(exported `"use server"` functions) for the Next.js App Router (`app/` or `src/app/`; route groups
+and parallel slots drop out of the path, `_private` folders are skipped). Framework adapters live
+in `lib/entrypoints/` and export `detect({project, root, symbols, deps}) -> {entrypoints, matched}`.
+When no adapter matches anything, `lib/entrypoints/generic.mjs` adds `root` rows (framework
+`generic`, route = the name): exported top-level functions that nothing in the repository calls
+and that call at least one repository symbol.
 
 ### `report.json`
 
@@ -80,11 +88,11 @@ caller's own parameter or local function is not an edge either (counted in `repo
 {"files": 171, "files_skipped": {"test": 13, "dts": 0, "generated": 0, "outside": 0},
  "symbols": 390, "edges": {"calls": 232, "calls_external": 729, "...": 0},
  "calls_resolved_share": 0.395, "calls_in_repo_share": 0.241, "calls_local": 0,
- "entrypoints": 25, "adapters": {"nest": 25}, "unmatched_frameworks": [],
+ "entrypoints": 25, "adapters": {"nest": 25}, "fallback": null, "unmatched_frameworks": [],
  "diagnostics_sample": ["<file>:<line> <message>", "... at most 10"], "secs": 0.3}
 ```
 
 `calls_resolved_share` is the share of call sites whose callee has a declaration (repository or
 TypeScript lib); `calls_in_repo_share` the share that lands on a repository symbol.
 `unmatched_frameworks` lists frameworks in the repository's `package.json` dependencies (parsed,
-never run) that have no adapter yet.
+never run) that have no adapter yet. `fallback` is `"generic"` when the `root` rows were used, else `null`.

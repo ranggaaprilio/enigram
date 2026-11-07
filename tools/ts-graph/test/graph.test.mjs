@@ -7,6 +7,10 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { buildGraph } from "../lib/graph.mjs";
 import { joinRoute } from "../lib/entrypoints/nest.mjs";
+import { defaultExportSymbol } from "../lib/entrypoints/common.mjs";
+import { appRoute } from "../lib/entrypoints/next.mjs";
+import { openProject } from "../lib/project.mjs";
+import { fileSymbols } from "../lib/symbols.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(HERE, "fixture");
@@ -74,7 +78,7 @@ test("imports are file to file inside the repository, bare specifiers outside", 
 test("spec files are skipped and counted", () => {
   assert.ok(!graph.symbols.some((s) => s.file.endsWith(".spec.ts")));
   assert.equal(graph.report.files_skipped.test, 1);
-  assert.equal(graph.report.files, 11);
+  assert.equal(graph.report.files, 13);
 });
 
 test("symbol rows carry lines, decorators, signature and body", () => {
@@ -183,4 +187,70 @@ test("registerAs gives a provides_config edge to the namespace", () => {
   assert.equal(graph.report.edges.provides_config, 1);
   assert.ok(edge("reads_env", "default", "AUTH_SECRET"));
   assert.ok(edge("reads_env", "database", "DB"));
+});
+
+test("a JSX element is a call to the repository component; intrinsic tags are not edges", () => {
+  const e = edge("calls", "View", "Widget");
+  assert.equal(e.dst, "src/widget.tsx#Widget");
+  assert.equal(e.resolved, true);
+  assert.equal(e.line, 6);
+  assert.ok(!graph.edges.some((x) => x.src_file.endsWith(".tsx") && ["div", "span"].includes(x.dst)));
+});
+
+test("defaultExportSymbol resolves `export default X` to X, and keeps declarations and expressions", () => {
+  const { files } = openProject(FIXTURE);
+  const symbolsOf = (name) => fileSymbols(FIXTURE, files.find((f) => f.getFilePath().endsWith(name)));
+  assert.equal(defaultExportSymbol(symbolsOf("widget.tsx")).row.id, "src/widget.tsx#Widget");
+  assert.equal(defaultExportSymbol(symbolsOf("auth.config.ts")).row.id, "src/auth.config.ts#default");
+  assert.equal(defaultExportSymbol(symbolsOf("view.tsx")), null);
+});
+
+const FIXTURE_NEXT = path.join(HERE, "fixture-next");
+const nextGraph = buildGraph(FIXTURE_NEXT, { diagnostics: false });
+
+test("Next: pages, route handlers, middleware and server actions, by file convention", () => {
+  const rows = (symbol, kind, route) => ({ symbol, kind, route, framework: "next", version: "" });
+  assert.deepEqual(nextGraph.entrypoints, [
+    rows("app/(marketing)/page.tsx#LandingPage", "page", "/"),
+    rows("app/@modal/(.)photo/page.tsx#PhotoModal", "page", "/photo"),
+    rows("app/actions.ts#createBoard", "action", "createBoard"),
+    rows("app/api/auth/route.ts#GET", "http_route", "GET /api/auth"),
+    rows("app/api/auth/route.ts#POST", "http_route", "POST /api/auth"),
+    rows("app/board/[boardId]/page.tsx#BoardPage", "page", "/board/[boardId]"),
+    rows("middleware.ts#middleware", "middleware", "middleware"),
+  ]);
+  assert.deepEqual(nextGraph.report.adapters, { next: 7 });
+  assert.deepEqual(nextGraph.report.unmatched_frameworks, []);
+});
+
+test("Next: a page's flow reaches the components it renders", () => {
+  const e = nextGraph.edges.find((x) => x.kind === "calls" && x.src === "app/board/[boardId]/page.tsx#BoardPage");
+  assert.equal(e.dst, "app/board/[boardId]/_components/canvas.tsx#Canvas");
+});
+
+test("Next: the adapter stays off without next in package.json or a next.config", () => {
+  assert.ok(!graph.entrypoints.some((e) => e.framework === "next"));
+});
+
+test("appRoute drops groups and slots, strips intercepting prefixes, keeps dynamic segments", () => {
+  assert.equal(appRoute([]), "/");
+  assert.equal(appRoute(["(shop)", "cart"]), "/cart");
+  assert.equal(appRoute(["@modal", "(..)(..)photo", "[id]"]), "/photo/[id]");
+  assert.equal(appRoute(["sign-in", "[[...sign-in]]"]), "/sign-in/[[...sign-in]]");
+});
+
+test("fallback: with no adapter, exported functions nothing calls (and that call something) are roots", () => {
+  const plain = buildGraph(path.join(HERE, "fixture-plain"), { diagnostics: false });
+  assert.deepEqual(plain.entrypoints, [
+    { symbol: "src/cli.ts#main", kind: "root", route: "main", framework: "generic", version: "" },
+    { symbol: "src/worker.ts#tick", kind: "root", route: "tick", framework: "generic", version: "" },
+  ]);
+  assert.deepEqual(plain.report.adapters, { generic: 2 });
+  assert.equal(plain.report.fallback, "generic");
+});
+
+test("fallback: never runs when an adapter matched", () => {
+  assert.equal(graph.report.fallback, null);
+  assert.ok(!graph.entrypoints.some((e) => e.kind === "root"));
+  assert.equal(nextGraph.report.fallback, null);
 });

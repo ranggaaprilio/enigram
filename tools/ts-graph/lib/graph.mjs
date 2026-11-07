@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { ts } from "ts-morph";
 import { buildEdges, edgeContext } from "./edges.mjs";
+import * as generic from "./entrypoints/generic.mjs";
 import * as nest from "./entrypoints/nest.mjs";
+import * as next from "./entrypoints/next.mjs";
 import { openProject, relPath } from "./project.mjs";
 import { fileSymbols } from "./symbols.mjs";
 
-const ADAPTERS = { nest };
+const ADAPTERS = { nest, next };
 // Frameworks with entry points but no adapter yet; reported so a miss is visible.
 const KNOWN_FRAMEWORKS = ["express", "next", "fastify", "koa", "hono"];
 const MAX_DIAGNOSTICS = 10;
@@ -50,9 +52,19 @@ export function buildGraph(root, { tsconfig = "tsconfig.json", diagnostics = tru
   const entrypoints = [];
   const adapters = {};
   for (const [name, adapter] of Object.entries(ADAPTERS)) {
-    const found = adapter.detect({ project, root, symbols });
+    const found = adapter.detect({ project, root, symbols, deps });
     if (found.matched) adapters[name] = found.matched;
     entrypoints.push(...found.entrypoints);
+  }
+  // No framework recognised: exported functions nothing calls, so the repository still has flows.
+  let fallback = null;
+  if (!Object.keys(adapters).length) {
+    const found = generic.roots({ symbols, edges });
+    if (found.matched) {
+      adapters.generic = found.matched;
+      entrypoints.push(...found.entrypoints);
+      fallback = "generic";
+    }
   }
 
   const count = (kind) => edges.filter((e) => e.kind === kind).length;
@@ -74,6 +86,7 @@ export function buildGraph(root, { tsconfig = "tsconfig.json", diagnostics = tru
     calls_local: local,
     entrypoints: entrypoints.length,
     adapters,
+    fallback,
     unmatched_frameworks: KNOWN_FRAMEWORKS.filter((f) => deps.has(f) && !adapters[f]),
     diagnostics_sample: diagnostics ? diagnosticsSample(root, project, files) : [],
     secs: Number(((performance.now() - start) / 1000).toFixed(1)),

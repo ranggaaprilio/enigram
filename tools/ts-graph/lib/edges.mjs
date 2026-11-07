@@ -167,6 +167,20 @@ function callEdges(ctx, sym, file, edges, counts) {
       }
     }
   }
+  // <Widget /> renders (calls) the Widget component. Only repository components are edges: an
+  // intrinsic tag (<div>) or a package component would be one calls_external per element.
+  const elements = [
+    ...node.getDescendantsOfKind(SyntaxKind.JsxOpeningElement),
+    ...node.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement),
+  ];
+  for (const element of elements) {
+    const tag = element.getTagNameNode();
+    if (/^[a-z]/.test(tag.getText())) continue;
+    const to = target(ctx, tag, row.id);
+    if (to.id) {
+      edges.push({ src: row.id, dst: to.id, kind: "calls", src_file: file, line: element.getStartLineNumber(), resolved: true });
+    }
+  }
 }
 
 function envEdges(sym, file, edges) {

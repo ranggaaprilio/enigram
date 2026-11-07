@@ -13,6 +13,7 @@ import {
   patchAnnotation,
   reviewSymbol,
   unreviewSymbol,
+  type Feature,
   type FeatureList,
   type RepoRow,
   type SymbolView,
@@ -283,6 +284,28 @@ export default function Code() {
   )
 }
 
+// Feature list groups, in display order; a kind not listed falls under "Other".
+const KIND_LABELS: [string, string][] = [
+  ['http_route', 'Routes'],
+  ['page', 'Pages'],
+  ['cron', 'Cron'],
+  ['job', 'Jobs'],
+  ['event', 'Events'],
+  ['middleware', 'Middleware'],
+  ['action', 'Server actions'],
+  ['cli_main', 'Main'],
+  ['root', 'Functions'],
+]
+
+function byKind(features: Feature[]): [string, Feature[]][] {
+  const known = new Map(KIND_LABELS)
+  const groups = new Map<string, Feature[]>(
+    [...KIND_LABELS.map(([, label]) => label), 'Other'].map((label) => [label, []]),
+  )
+  for (const f of features) groups.get(known.get(f.kind) ?? 'Other')!.push(f)
+  return [...groups].filter(([, rows]) => rows.length > 0)
+}
+
 function Features(props: {
   list: FeatureList | null
   q: string
@@ -309,41 +332,52 @@ function Features(props: {
               : `${list.total} ${list.total === 1 ? 'feature' : 'features'}`}
             {` · ${list.features.filter((f) => f.reviewed).length} reviewed`}
             {list.features.length < list.total && ' in this list'}
+            {list.features.some((f) => f.kind === 'root') &&
+              ' · no framework adapter: showing top-level functions'}
           </p>
           {list.features.length === 0 ? (
             <p className={cn('px-2 py-4', muted)}>
               {props.q ? 'No features match.' : 'No entry points found in this repository.'}
             </p>
           ) : (
-            <ul>
-              {list.features.map((f) => (
-                <li key={`${f.symbol_id}\u0000${f.route}`}>
-                  <button
-                    type="button"
-                    className={cn(
-                      'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary',
-                      f.symbol_id === props.selected && 'bg-secondary',
-                    )}
-                    onClick={() => props.onPick(f.symbol_id)}
-                  >
-                    {f.reviewed ? (
-                      <Check className="size-3.5 shrink-0 text-success" aria-label="reviewed" />
-                    ) : (
-                      <span className="size-3.5 shrink-0" />
-                    )}
-                    <span
-                      className="min-w-0 flex-1 truncate font-mono text-[13px]"
-                      title={`${f.qualified_name} · ${f.file}`}
-                    >
-                      {f.route}
-                    </span>
-                    <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
-                      {f.notes}
-                    </Badge>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            byKind(list.features).map(([label, features], _, groups) => (
+              <div key={label}>
+                {groups.length > 1 && (
+                  <h4 className={cn('mt-3 mb-1 px-2 font-semibold uppercase', muted)}>
+                    {label}
+                  </h4>
+                )}
+                <ul>
+                  {features.map((f) => (
+                    <li key={`${f.symbol_id}\u0000${f.route}`}>
+                      <button
+                        type="button"
+                        className={cn(
+                          'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary',
+                          f.symbol_id === props.selected && 'bg-secondary',
+                        )}
+                        onClick={() => props.onPick(f.symbol_id)}
+                      >
+                        {f.reviewed ? (
+                          <Check className="size-3.5 shrink-0 text-success" aria-label="reviewed" />
+                        ) : (
+                          <span className="size-3.5 shrink-0" />
+                        )}
+                        <span
+                          className="min-w-0 flex-1 truncate font-mono text-[13px]"
+                          title={`${f.qualified_name} · ${f.file}`}
+                        >
+                          {f.route}
+                        </span>
+                        <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
+                          {f.notes}
+                        </Badge>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))
           )}
         </>
       )}
