@@ -383,8 +383,9 @@ API. It has five pages in its menu:
 - **Ask**: a question in `Auto (router)` mode (default: the router picks the documents, the code
   or both), `mix` (GraphRAG) or `naive` (vector only) on the documents, or `Code (agent)` for
   the indexed repositories, answered with sources and per-sentence origin tags.
-- **Code**: an indexed repository by its entry points (routes, jobs), each with its AI summary,
-  the steps it calls, its code (collapsed) and the notes on it, plus a note form with the target
+- **Code**: an indexed repository by its entry points (routes, pages, jobs, ..., grouped by
+  kind), each with its AI summary, the steps it calls, its code (collapsed) and the notes on it,
+  plus a note form with the target
   already set, for people who know the feature but not the symbol. Under each summary: **Looks
   right** (a ✓ that counts as reviewed until the summary changes), **Not right** and **Add
   context** (a note with a question per type). Not right, expected behaviour and known issues are
@@ -440,7 +441,9 @@ Markdown files is refused. The image installs `git`; without Docker, `git` must 
 A repository with a `tsconfig.json` at its root also gets a code graph (needs
 `STORAGE_BACKEND=postgres`): the `tools/ts-graph` sidecar (Node 22, ts-morph) reads its symbols,
 calls, injections, environment reads and entry points (Nest routes, `@Cron`, events, jobs,
-`bootstrap`) without running or installing anything from the repository, then the generator
+`bootstrap`; Next.js App Router pages, route handlers, middleware and server actions; with no
+framework recognised, the exported functions nothing in the repository calls, marked `root`)
+without running or installing anything from the repository, then the generator
 writes a summary of every symbol an entry point reaches and a step-by-step flow per entry point
 (cached by body hash, so a re-index only pays for what changed). Secret-named files are skipped
 and secret-looking values redacted. Limits: 2,000 TypeScript files, 50,000 lines. The job result

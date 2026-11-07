@@ -162,6 +162,49 @@ describe('Code', () => {
     expect(screen.queryByText('bootstrap')).toBeNull()
   })
 
+  it('groups features by kind under headings when there is more than one kind', async () => {
+    mockFetch({
+      ...BASE,
+      'GET /api/repos/1/features': {
+        body: {
+          features: [
+            feature({ kind: 'cron', route: '0 * * * *', symbol_id: 'src/a.ts#A.tick' }),
+            feature(),
+            feature({ kind: 'page', route: '/dashboard', symbol_id: 'app/dashboard/page.tsx#D' }),
+          ],
+          total: 3,
+        },
+      },
+    })
+
+    renderAt('/code')
+
+    expect(await screen.findByText('/dashboard')).toBeInTheDocument()
+    const headings = screen.getAllByRole('heading', { level: 4 }).map((h) => h.textContent)
+    expect(headings).toEqual(['Routes', 'Pages', 'Cron'])
+  })
+
+  it('says when the features are top-level functions found without a framework adapter', async () => {
+    mockFetch({
+      ...BASE,
+      'GET /api/repos/1/features': {
+        body: {
+          features: [feature({ kind: 'root', route: 'main', framework: 'generic' })],
+          total: 1,
+        },
+      },
+    })
+
+    renderAt('/code')
+
+    expect(
+      await screen.findByText(
+        '1 feature · 0 reviewed · no framework adapter: showing top-level functions',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 4 })).toBeNull()
+  })
+
   it('shows the summary, steps and notes of a feature, and posts a note on it', async () => {
     const fetch = mockFetch({
       ...BASE,

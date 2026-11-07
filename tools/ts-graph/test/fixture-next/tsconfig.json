@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "ES2021",
+    "jsx": "preserve",
+    "strict": true
+  },
+  "include": ["**/*.ts", "**/*.tsx"]
+}

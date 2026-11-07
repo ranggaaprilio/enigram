@@ -180,6 +180,7 @@ async def index_code(
         "entrypoints": len(parsed.entrypoints),
         "adapters": report.get("adapters"),
         "unmatched_frameworks": report.get("unmatched_frameworks"),
+        "fallback": report.get("fallback"),
         "files_skipped": report.get("files_skipped"),
         "diagnostics_sample": report.get("diagnostics_sample"),
         "secrets_redacted": redacted,
