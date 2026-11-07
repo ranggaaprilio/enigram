@@ -1,9 +1,10 @@
 from dataclasses import replace
+from unittest.mock import AsyncMock
 
 import pytest
 from code_fakes import FakeAnnotations, FakeCodeGraph
 from fastapi.testclient import TestClient
-from test_api import LAPTOP_KEY, _deps, _upload
+from test_api import LAPTOP_KEY, _deps, _push, _signed, _upload
 from test_query import FakeRag
 from test_worker import FakeJobStore
 
@@ -236,3 +237,32 @@ def test_workspace_routes_need_a_key(pg_cfg, clean_env, monkeypatch):
 
     assert anonymous.status_code == 401
     assert [w["name"] for w in keyed.json()] == ["default"]
+
+
+def test_webhook_queues_in_the_repository_workspace(ws_env, monkeypatch):
+    client, store, _, graphs, _ = ws_env
+    client.get("/repos", headers=A)  # builds ws-a
+    graphs["ws-a"].repos[1] = REPO
+    graphs["ws-a"].secrets[1] = "s3cret"
+    monkeypatch.setattr(graphs["default"], "repo_workspace", AsyncMock(return_value="ws-a"))
+    body = _push()
+
+    response = client.post("/repos/1/webhook", content=body, headers=_signed(body, "s3cret"))
+
+    assert response.status_code == 202
+    assert [(j.kind, j.payload["trigger"]) for j in store.scoped["ws-a"].jobs] == [
+        ("index_repo", "webhook")
+    ]
+    assert store.jobs == []
+
+
+@pytest.mark.parametrize("found", [None, "ghost"])  # no such repository; unregistered workspace
+def test_webhook_for_an_unknown_repository_is_404(ws_env, monkeypatch, found):
+    client, store, _, graphs, _ = ws_env
+    monkeypatch.setattr(graphs["default"], "repo_workspace", AsyncMock(return_value=found))
+    body = _push()
+
+    response = client.post("/repos/9/webhook", content=body, headers=_signed(body, "x"))
+
+    assert response.status_code == 404
+    assert store.jobs == [] and "ghost" not in store.scoped

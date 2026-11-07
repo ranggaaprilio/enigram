@@ -96,7 +96,15 @@ class JobRepository(Protocol):
     async def active_jobs(self) -> "list[Job]": ...
 
     def worker_lock(self) -> AbstractAsyncContextManager[None]:
-        """One worker per workspace."""
+        """One worker for every workspace."""
+        ...
+
+    async def claim_any(self) -> "Job | None":
+        """The oldest queued job of any registered workspace, now running."""
+        ...
+
+    async def requeue_running_any(self) -> int:
+        """Running jobs of every registered workspace back to queued; only under worker_lock."""
         ...
 
     def for_workspace(self, workspace: str) -> "JobRepository":
@@ -446,6 +454,11 @@ class CodeGraphRepository(Protocol):
         ...
 
     async def get_repo_by_id(self, repo_id: int) -> dict[str, Any] | None: ...
+
+    async def repo_workspace(self, repo_id: int) -> str | None:
+        """The workspace of a repository id in any workspace (ids are unique database-wide): the
+        webhook's lookup, since a push carries no workspace."""
+        ...
 
     async def webhook_secret(self, repo_id: int) -> str | None: ...
 

@@ -51,7 +51,7 @@ services:
 
   worker:
     <<: *enigram
-    # Exactly one per workspace: a second one exits ("Another worker is already indexing").
+    # Exactly one, for every workspace: a second one exits ("Another worker is already running").
     command: ["enigram", "worker"]
 
   web:

@@ -79,14 +79,69 @@ async def test_workspaces_do_not_see_each_other(store, pool):
     assert await other.active_jobs() == []
 
 
-async def test_worker_lock_is_exclusive_per_workspace(store, pool):
-    rival = PostgresJobStore(pool, store.workspace)
+async def test_worker_lock_is_global(store, pool):
+    rival = PostgresJobStore(pool, f"{store.workspace}_other")  # another workspace, same lock
     async with store.worker_lock():
         with pytest.raises(EnigramError, match="Another worker"):
             async with rival.worker_lock():
                 pass
     async with rival.worker_lock():  # released when the first one exits
         pass
+
+
+async def _claim_mine(store, ids):
+    """claim_any until it runs dry, keeping the claims among `ids`; a job of the developer's
+    database (another registered workspace) goes straight back to queued."""
+    mine, foreign = [], []
+    while (job := await store.claim_any()) is not None:
+        (mine if job.id in ids else foreign).append(job)
+    if foreign:
+        await store.pool.execute(
+            "UPDATE enigram_jobs SET status = 'queued', started_at = NULL WHERE id = ANY($1)",
+            [j.id for j in foreign],
+        )
+    return mine
+
+
+async def test_claim_any_is_fifo_across_registered_workspaces(store, pool):
+    a, b = (store.for_workspace(f"t-{uuid4().hex[:8]}") for _ in range(2))
+    try:
+        for ws in (a, b):
+            await store.add_workspace(ws.workspace)
+        jobs = [
+            await a.enqueue("index", {"book": "a1"}),
+            await b.enqueue("index", {"book": "b1"}),
+            await a.enqueue("index", {"book": "a2"}),
+        ]
+        hidden = await store.enqueue("index", {"book": "x"})  # `store` is not registered
+
+        claimed = await _claim_mine(store, {j.id for j in jobs} | {hidden.id})
+
+        assert [(j.id, j.workspace) for j in claimed] == [(j.id, j.workspace) for j in jobs]
+        assert all(j.status == "running" for j in claimed)
+        assert (await store.get_job(hidden.id)).status == "queued"
+        busy = await pool.fetchval(
+            "SELECT count(*) FROM enigram_jobs WHERE status = 'running' AND workspace <> ALL($1) "
+            "AND workspace IN (SELECT name FROM enigram_workspaces)",
+            [a.workspace, b.workspace],
+        )
+        if busy:  # a live worker is running a job here; requeueing it would run it twice
+            pytest.skip("another worker is running jobs in this database")
+        assert await a.requeue_running_any() == 3
+        assert [j.status for j in await a.active_jobs()] == ["queued", "queued"]
+    finally:
+        for ws in (a, b):
+            await pool.execute("DELETE FROM enigram_workspaces WHERE name = $1", ws.workspace)
+            await pool.execute("DELETE FROM enigram_jobs WHERE workspace = $1", ws.workspace)
+
+
+async def test_requeue_running_any_leaves_unregistered_workspaces(store):
+    job = await store.enqueue("index", {"book": "a"})
+    await store.claim()
+
+    await store.requeue_running_any()
+
+    assert (await store.get_job(job.id)).status == "running"
 
 
 async def test_query_log_round_trip(store):

@@ -599,6 +599,10 @@ class PostgresCodeGraph:
         )
         return _repo(row) if row else None
 
+    async def repo_workspace(self, repo_id: int) -> str | None:
+        # Not scoped to self.workspace: ids are unique across workspaces.
+        return await self.pool.fetchval("SELECT workspace FROM code_repos WHERE id = $1", repo_id)
+
     async def webhook_secret(self, repo_id: int) -> str | None:
         return await self.pool.fetchval(
             "SELECT webhook_secret FROM code_repos WHERE workspace = $1 AND id = $2",
