@@ -198,8 +198,8 @@ async def test_answer_question_sends_the_precedence_instruction():
     )
 
     assert [p.user_prompt for p in rag.params] == [
-        f"{querying.PRECEDENCE} {querying.NO_ANSWER_RULE}",
-        querying.NO_ANSWER_RULE,
+        f"{querying.PRECEDENCE} {querying.INLINE_CITATION_RULE} {querying.NO_ANSWER_RULE}",
+        f"{querying.INLINE_CITATION_RULE} {querying.NO_ANSWER_RULE}",
     ]
 
 
