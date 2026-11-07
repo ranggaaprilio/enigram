@@ -80,6 +80,7 @@ def _job(row: asyncpg.Record) -> Job:
         created_at=row["created_at"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        workspace=row["workspace"],
     )
 
 
@@ -165,6 +166,30 @@ class PostgresJobStore:
             self.workspace,
         )
         return int(status.split()[-1])  # "UPDATE <n>"
+
+    async def claim_any(self) -> Job | None:
+        """The oldest queued job of any registered workspace, now running (one worker serves
+        them all); jobs of unregistered workspaces wait."""
+        row = await self.pool.fetchrow(
+            """
+            UPDATE enigram_jobs SET status = 'running', started_at = now()
+            WHERE id = (
+                SELECT id FROM enigram_jobs
+                WHERE status = 'queued' AND workspace IN (SELECT name FROM enigram_workspaces)
+                ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
+            )
+            RETURNING *
+            """
+        )
+        return _job(row) if row else None
+
+    async def requeue_running_any(self) -> int:
+        """Running jobs of every registered workspace back to queued; only under worker_lock."""
+        status = await self.pool.execute(
+            "UPDATE enigram_jobs SET status = 'queued', started_at = NULL "
+            "WHERE status = 'running' AND workspace IN (SELECT name FROM enigram_workspaces)"
+        )
+        return int(status.split()[-1])
 
     async def get_job(self, job_id: int) -> Job | None:
         row = await self.pool.fetchrow(
@@ -283,14 +308,12 @@ class PostgresJobStore:
 
     @asynccontextmanager
     async def worker_lock(self) -> AsyncIterator[None]:
-        """One worker per workspace: two would write the manifest and the index at once."""
-        key = f"enigram-worker:{self.workspace}"
+        """One worker for every workspace: two would write the same manifests and indexes."""
+        key = "enigram-worker"
         # Advisory locks belong to the session, so the connection is held until release.
         async with self.pool.acquire() as conn:
             if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtext($1))", key):
-                raise EnigramError(
-                    f"Another worker is already indexing workspace {self.workspace!r}."
-                )
+                raise EnigramError("Another worker is already running.")
             try:
                 yield
             finally:

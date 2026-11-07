@@ -157,6 +157,7 @@ class FakeCodeGraph:
     """CodeGraphRepository in memory, with the same callee/implementation rules as Postgres."""
 
     def __init__(self, graph: ParsedGraph | None = None):
+        self.workspace = "default"  # what repo_workspace answers for its repositories
         self.repos: dict[int, dict[str, Any]] = {}
         self.graphs: dict[int, ParsedGraph] = {}
         self.blobs: dict[int, list] = {}  # repo id -> CodeFile list (the port's files())
@@ -342,6 +343,9 @@ class FakeCodeGraph:
     async def get_repo_by_id(self, repo_id):
         repo = self.repos.get(repo_id)
         return self._repo_row(repo) if repo else None
+
+    async def repo_workspace(self, repo_id):
+        return self.workspace if repo_id in self.repos else None
 
     async def webhook_secret(self, repo_id):
         return self.secrets.get(repo_id) if repo_id in self.repos else None

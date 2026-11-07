@@ -4,8 +4,10 @@ only one process writes the index."""
 import asyncio
 import logging
 import time
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 
+from enigram.adapters.driving.workspaces import Workspaces
 from enigram.application.budget import daily_exhausted
 from enigram.application.doc_conflicts import detect_doc_conflicts
 from enigram.application.graph_edits import GRAPH_JOB_KINDS, apply_graph_job
@@ -187,14 +189,41 @@ async def process_next(
     decider: DecisionProvider | None = None,
     conflicts: ConflictRepository | None = None,
 ) -> Job | None:
-    """Claim and run one job; None when the queue is empty. `graph` is the code graph that
-    repository jobs fill, `notes` the annotations they check, `decider` the decision layer that
-    checks flagged notes for conflicts, `conflicts` where detect_conflicts stores its results. A
-    job stops with status budget_exceeded when the daily budget is already used up or it crosses
-    MAX_TOKENS_PER_JOB; re-queue it by hand once the budget allows."""
+    """Claim and run the next job of the store's workspace; None when its queue is empty."""
     job = await store.claim()
     if job is None:
         return None
+    return await run_job(cfg, store, deps, job, graph, notes, decider, conflicts)
+
+
+async def process_any(workspaces: Workspaces) -> Job | None:
+    """Claim the oldest queued job of any registered workspace and run it with that workspace's
+    config and adapters; None when every queue is empty."""
+    job = await workspaces.store.claim_any()
+    if job is None:
+        return None
+    ws = await workspaces.get(job.workspace)
+    log.info("[worker] job %d: workspace %s", job.id, job.workspace)
+    return await run_job(
+        ws.cfg, ws.store, ws.deps, job, ws.code_graph, ws.notes, ws.decider, ws.conflicts
+    )
+
+
+async def run_job(
+    cfg: Config,
+    store: JobRepository,
+    deps: Deps,
+    job: Job,
+    graph: CodeGraphRepository | None = None,
+    notes: AnnotationRepository | None = None,
+    decider: DecisionProvider | None = None,
+    conflicts: ConflictRepository | None = None,
+) -> Job:
+    """Run one claimed job with its workspace's config and adapters. `graph` is the code graph
+    that repository jobs fill, `notes` the annotations they check, `decider` the decision layer
+    that checks flagged notes for conflicts, `conflicts` where detect_conflicts stores its
+    results. A job stops with status budget_exceeded when the daily budget is already used up or
+    it crosses MAX_TOKENS_PER_JOB; re-queue it by hand once the budget allows."""
     if message := await daily_exhausted(store, cfg):
         log.warning("[worker] job %d not run: %s", job.id, message)
         await store.finish(job.id, BUDGET_EXCEEDED, error=message)
@@ -260,40 +289,38 @@ async def _dispatch(
     return job
 
 
-async def _poll_tick(
-    cfg: Config, store: JobRepository, graph: CodeGraphRepository, notes: AnnotationRepository
-) -> None:
-    """Repository polling and verify-by expiry, when the queue is empty; never raises."""
-    try:
-        await poll_repos(cfg, store, graph)
-        await expire_verify_by(notes)
-    except Exception:  # noqa: BLE001 - polling must never stop the worker
-        log.exception("[worker] poll tick failed")
+async def _poll_tick(workspaces: Workspaces) -> None:
+    """Repository polling and verify-by expiry in every workspace, when the queues are empty; a
+    failure in one workspace never stops the others or the worker."""
+    for row in await workspaces.list():
+        try:
+            ws = await workspaces.get(row["name"])
+            await poll_repos(ws.cfg, ws.store, ws.code_graph)
+            await expire_verify_by(ws.notes)
+        except Exception:  # noqa: BLE001 - polling must never stop the worker
+            log.exception("[worker] poll tick failed in workspace %s", row["name"])
 
 
 async def run_worker(cfg: Config) -> None:
+    """One worker for every registered workspace; the process WORKSPACE registers itself."""
     deps = build_deps(cfg)
     store = await deps.open_store()
     try:
-        graph = await deps.new_code_graph(store)
-        notes = await deps.new_annotations(store)
-        conflicts = await deps.new_conflicts(store)  # after the code graph (FK)
-        decider = deps.decider()
-        async with store.worker_lock():
+        async with store.worker_lock(), AsyncExitStack() as stack:
+            await store.add_workspace(cfg.workspace)
+            # Jobs open their engine per run (deps.open_engine), never through the registry.
+            workspaces = Workspaces(cfg, deps, build_deps, store, stack)
             # Safe under the lock: no other worker can be running these.
-            if requeued := await store.requeue_running():
+            if requeued := await store.requeue_running_any():
                 log.info("[worker] requeued %d interrupted job(s)", requeued)
-            log.info("[worker] waiting for jobs in workspace %r", cfg.workspace)
+            log.info("[worker] waiting for jobs in every workspace")
             last_poll = 0.0
             while True:
-                if (
-                    await process_next(cfg, store, deps, graph, notes, decider, conflicts)
-                    is not None
-                ):
+                if await process_any(workspaces) is not None:
                     continue
                 due = time.monotonic() - last_poll >= cfg.repo_poll_secs
                 if cfg.repo_poll_secs and due:
-                    await _poll_tick(cfg, store, graph, notes)
+                    await _poll_tick(workspaces)
                     last_poll = time.monotonic()
                 await asyncio.sleep(POLL_SECS)
     finally:

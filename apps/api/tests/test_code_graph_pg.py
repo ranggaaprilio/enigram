@@ -269,3 +269,11 @@ async def test_indexed_at_finds_every_indexed_commit(graph):
     [change] = await graph.symbol_changes(repo_id)
     assert first is not None and second is not None and first <= change["at"] <= second
     assert await graph.symbol_changes(repo_id, second) == []  # after its own changes
+
+
+async def test_repo_workspace_finds_a_repository_of_any_workspace(graph, pool):
+    repo_id = await graph.replace_repo(URL, None, SHA, [], fixture_graph())
+    other = PostgresCodeGraph(pool, f"test_{uuid4().hex[:8]}")
+
+    assert await other.repo_workspace(repo_id) == graph.workspace
+    assert await other.repo_workspace(-1) is None

@@ -333,9 +333,9 @@ write the same index.
 A request works on the workspace named in its `X-Enigram-Workspace` header (404 for an unknown
 name), and on the process `WORKSPACE` without one. Each workspace has its own documents, graph,
 repositories, notes, query log and daily budget; the files of a workspace other than the process
-one live in `data/workspaces/<name>/`. `/health`, the webhook and `/mcp` stay on the process
-workspace. The worker still runs one workspace (`WORKSPACE`): jobs queued in another one wait until
-a worker runs with that `WORKSPACE`.
+one live in `data/workspaces/<name>/`. `/health` and `/mcp` stay on the process workspace; the
+webhook finds its repository in any workspace. One worker runs the jobs of every registered
+workspace, oldest first, each with that workspace's files and index.
 
 ```bash
 export AUTH="Authorization: Bearer <key>"   # skip -H "$AUTH" when no keys are set
@@ -347,7 +347,9 @@ curl -H "$AUTH" localhost:8080/queries/1
 ```
 
 Without Docker, run `uv run enigram api` and `uv run enigram worker` next to
-`docker compose up -d postgres`. Only one worker per `WORKSPACE` runs; a second one exits.
+`docker compose up -d postgres`. Only one worker runs, for every workspace; a second one exits.
+A worker from before workspaces locked only its own `WORKSPACE`: stop it before starting this one
+(`docker compose up -d --build` replaces it).
 
 ### Token caps
 

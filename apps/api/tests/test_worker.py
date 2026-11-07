@@ -1,21 +1,26 @@
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
 import pytest
 
 from enigram.adapters.driving import worker
+from enigram.adapters.driving.workspaces import Workspaces
 from enigram.application.indexing import IndexRun
 from enigram.domain.errors import EnigramError
 from enigram.domain.job import ACTIVE, Job
 
 
 class FakeJobStore:
-    """In-memory JobRepository."""
+    """In-memory JobRepository; the stores for_workspace returns share its registry and its
+    job id sequence, like one database."""
 
-    def __init__(self, workspaces=None):
-        # name -> created_at, shared with the stores for_workspace returns
+    def __init__(self, workspaces=None, workspace="default", family=None):
+        self.workspace = workspace
+        # name -> created_at (the registry), and every store of this fake database
         self.workspaces = workspaces if workspaces is not None else {}
+        self.family: list[FakeJobStore] = family if family is not None else []
+        self.family.append(self)
         self.scoped: dict[str, FakeJobStore] = {}
         self.jobs: list[Job] = []
         self.queries: list[dict] = []
@@ -29,7 +34,8 @@ class FakeJobStore:
 
     async def enqueue(self, kind, payload):
         now = datetime.now(UTC)
-        job = Job(len(self.jobs) + 1, kind, payload, "queued", None, None, now, None, None)
+        job_id = 1 + max((j.id for s in self.family for j in s.jobs), default=0)
+        job = Job(job_id, kind, payload, "queued", None, None, now, None, None, self.workspace)
         self.jobs.append(job)
         return job
 
@@ -96,8 +102,21 @@ class FakeJobStore:
 
     def for_workspace(self, workspace):
         if workspace not in self.scoped:
-            self.scoped[workspace] = FakeJobStore(self.workspaces)
+            self.scoped[workspace] = FakeJobStore(self.workspaces, workspace, self.family)
         return self.scoped[workspace]
+
+    def _registered(self):
+        return [s for s in self.family if s.workspace in self.workspaces]
+
+    async def claim_any(self):
+        queued = [(j.id, s) for s in self._registered() for j in s.jobs if j.status == "queued"]
+        if not queued:
+            return None
+        job_id, owner = min(queued, key=lambda q: q[0])
+        return owner._set(job_id, status="running", started_at=datetime.now(UTC))
+
+    async def requeue_running_any(self):
+        return sum([await s.requeue_running() for s in self._registered()])
 
     async def add_workspace(self, name):
         if name in self.workspaces:
@@ -201,49 +220,110 @@ class _Stop(Exception):
     pass
 
 
-async def test_run_worker_requeues_interrupted_jobs_and_closes_store(cfg, deps, monkeypatch):
+async def test_run_worker_registers_requeues_every_workspace_and_closes_store(
+    cfg, deps, monkeypatch
+):
     store = FakeJobStore()
-    interrupted = await store.enqueue("index", {"book": "p"})
+    other = store.for_workspace("ws-a")
+    await store.add_workspace("ws-a")
+    here = await store.enqueue("index", {"book": "p"})
+    there = await other.enqueue("index", {"book": "q"})
     await store.claim()
-
-    graph = object()
+    await other.claim()
     seen = []
 
     async def fake_open_store():
         return store
 
-    async def fake_new_code_graph(s):
-        assert s is store
-        return graph
-
-    async def fake_new_annotations(s):
-        return "notes"
-
-    async def fake_new_conflicts(s):
-        return "conflicts"
-
-    async def stop(cfg, store, deps, code_graph, notes, decider, conflicts):
-        seen.append((code_graph, notes, decider, conflicts))
+    async def stop(workspaces):
+        seen.append(workspaces)
         raise _Stop
 
     deps.open_store = fake_open_store
-    deps.new_code_graph = fake_new_code_graph
-    deps.new_annotations = fake_new_annotations
-    deps.new_conflicts = fake_new_conflicts
     monkeypatch.setattr(worker, "build_deps", lambda cfg: deps)
-    monkeypatch.setattr(worker, "process_next", stop)
+    monkeypatch.setattr(worker, "process_any", stop)
     with pytest.raises(_Stop):
         await worker.run_worker(cfg)
 
-    assert (await store.get_job(interrupted.id)).status == "queued"
+    assert [(await store.get_job(here.id)).status, (await other.get_job(there.id)).status] == [
+        "queued",
+        "queued",
+    ]
+    assert sorted(store.workspaces) == ["default", "ws-a"]  # the process workspace registered
     assert store.closed
-    ((code_graph, notes, decider, conflicts),) = seen  # built once, passed to every job
-    assert (code_graph, notes, type(decider).__name__, conflicts) == (
-        graph,
-        "notes",
-        "FakeDecider",
-        "conflicts",
-    )
+    (registry,) = seen
+    assert registry.store is store
+
+
+def _fake_adapters(deps):
+    """Every per-workspace adapter factory as a fake tagged with its store's workspace."""
+
+    def tagged(kind):
+        async def new(store):
+            return (kind, store.workspace)
+
+        return new
+
+    deps.new_memory, deps.new_code_graph = tagged("memory"), tagged("graph")
+    deps.new_annotations, deps.new_conflicts = tagged("notes"), tagged("conflicts")
+    return deps
+
+
+def _workspaces(cfg, deps, store, *names):
+    """A worker registry over `store` with `names` registered; every workspace gets `deps`."""
+    for name in names:
+        store.workspaces[name] = datetime.now(UTC)
+    return Workspaces(cfg, _fake_adapters(deps), lambda c: deps, store, AsyncExitStack())
+
+
+async def test_process_any_runs_jobs_fifo_across_workspaces_with_their_adapters(
+    cfg, store, deps, fake_index
+):
+    workspaces = _workspaces(cfg, deps, store, "default", "ws-a")
+    other = store.for_workspace("ws-a")
+    a = await store.enqueue("index", {"book": "a"})
+    b = await other.enqueue("index", {"book": "b"})
+    c = await store.enqueue("index", {"book": "c"})
+
+    ran = [await worker.process_any(workspaces) for _ in range(4)]
+
+    assert [j.id if j else None for j in ran] == [a.id, b.id, c.id, None]
+    assert [j.workspace for j in ran[:3]] == ["default", "ws-a", "default"]
+    assert [(await s.get_job(j.id)).status for s, j in ((store, a), (other, b), (store, c))] == [
+        "done",
+        "done",
+        "done",
+    ]
+    assert fake_index.calls == [
+        (cfg.books_dir, ["a"]),
+        (cfg.for_workspace("ws-a").books_dir, ["b"]),
+        (cfg.books_dir, ["c"]),
+    ]
+
+
+async def test_process_any_skips_unregistered_workspaces(cfg, store, deps, fake_index):
+    workspaces = _workspaces(cfg, deps, store, "default")
+    ghost = store.for_workspace("ghost")
+    job = await ghost.enqueue("index", {"book": "g"})
+
+    assert await worker.process_any(workspaces) is None
+    assert (await ghost.get_job(job.id)).status == "queued"
+    assert fake_index.calls == []
+
+
+async def test_daily_budget_stops_only_its_workspace(cfg, store, deps, fake_index):
+    workspaces = _workspaces(replace(cfg, daily_token_budget=10), deps, store, "default", "ws-a")
+    other = store.for_workspace("ws-a")
+    await other.add_tokens("query", None, 50)
+    spent = await other.enqueue("index", {"book": "a"})
+    fresh = await store.enqueue("index", {"book": "b"})
+
+    await worker.process_any(workspaces)
+    await worker.process_any(workspaces)
+
+    assert (await other.get_job(spent.id)).status == "budget_exceeded"
+    assert (await store.get_job(fresh.id)).status == "done"
+    assert fake_index.calls == [(cfg.books_dir, ["b"])]
 
 
 @pytest.fixture
@@ -466,13 +546,47 @@ async def test_repo_job_records_trigger_metadata(cfg, store, deps, monkeypatch):
     }
 
 
-async def test_poll_tick_never_raises(cfg, store, monkeypatch, caplog):
-    async def boom(*a):
-        raise RuntimeError("database gone")
+async def test_poll_tick_runs_in_every_workspace(cfg, store, deps, monkeypatch):
+    workspaces = _workspaces(cfg, deps, store, "default", "ws-a")
+    polled, expired = [], []
 
-    monkeypatch.setattr(worker, "poll_repos", boom)
-    await worker._poll_tick(cfg, store, object(), object())
-    assert "poll tick failed" in caplog.text
+    async def fake_poll(cfg, store, graph):
+        polled.append((cfg.workspace, store.workspace, graph))
+
+    async def fake_expire(notes):
+        expired.append(notes)
+
+    monkeypatch.setattr(worker, "poll_repos", fake_poll)
+    monkeypatch.setattr(worker, "expire_verify_by", fake_expire)
+    await worker._poll_tick(workspaces)
+
+    assert polled == [
+        ("default", "default", ("graph", "default")),
+        ("ws-a", "ws-a", ("graph", "ws-a")),
+    ]
+    assert expired == [("notes", "default"), ("notes", "ws-a")]
+
+
+async def test_poll_tick_failure_in_one_workspace_does_not_stop_the_next(
+    cfg, store, deps, monkeypatch, caplog
+):
+    workspaces = _workspaces(cfg, deps, store, "default", "ws-a")
+    polled = []
+
+    async def poll(cfg, store, graph):
+        if cfg.workspace == "default":
+            raise RuntimeError("database gone")
+        polled.append(cfg.workspace)
+
+    async def expire(notes):
+        pass
+
+    monkeypatch.setattr(worker, "poll_repos", poll)
+    monkeypatch.setattr(worker, "expire_verify_by", expire)
+    await worker._poll_tick(workspaces)
+
+    assert polled == ["ws-a"]
+    assert "poll tick failed in workspace default" in caplog.text
 
 
 async def test_job_over_its_token_cap_stops_as_budget_exceeded(cfg, store, deps, monkeypatch):

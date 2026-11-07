@@ -1,6 +1,6 @@
-"""The API's adapters per workspace: the X-Enigram-Workspace header picks one set, no header the
-process workspace (WORKSPACE, `default` unless set). Built on first use and kept until shutdown;
-the repositories share the job store's pool."""
+"""Adapters per workspace, for the API (the X-Enigram-Workspace header picks one set, no header
+the process workspace: WORKSPACE, `default` unless set) and the worker (the workspace of each
+job). Built on first use and kept until shutdown; the repositories share the job store's pool."""
 
 import asyncio
 from collections.abc import Callable
@@ -80,8 +80,11 @@ class Workspaces:
                 return found
             if name not in {w["name"] for w in await self.store.list_workspaces()}:
                 raise NotFound(f"No workspace {name!r}")
-            cfg = self.cfg.for_workspace(name)
-            ws = await _build(cfg, self.deps_for(cfg), self.store.for_workspace(name))
+            if name == self.cfg.workspace:  # the worker builds it here, the API in start()
+                ws = await _build(self.cfg, self.deps, self.store)
+            else:
+                cfg = self.cfg.for_workspace(name)
+                ws = await _build(cfg, self.deps_for(cfg), self.store.for_workspace(name))
             self.open[name] = ws
             return ws
 

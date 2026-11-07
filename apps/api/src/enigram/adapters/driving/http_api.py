@@ -572,14 +572,17 @@ def create_app(
 
     @app.post("/repos/{repo_id}/webhook")
     async def repo_webhook(request: Request, repo_id: int) -> Any:
-        # The process workspace: the push carries no workspace header. Phase 2 of the workspace
-        # PRD looks the repository up across workspaces.
-        ws = request.app.state.workspaces.home
-        graph = ws.code_graph
-        repo = await graph.get_repo_by_id(repo_id)
-        secret = await graph.webhook_secret(repo_id) if repo else None
-        if repo is None or secret is None:
-            raise HTTPException(404, "No repository or no webhook secret")  # one answer for both
+        workspaces = request.app.state.workspaces
+        # A push carries no workspace: find the repository's (ids are unique database-wide).
+        name = await workspaces.home.code_graph.repo_workspace(repo_id)
+        try:
+            ws = await workspaces.get(name) if name else None
+        except NotFound:
+            ws = None  # a repository of an unregistered workspace
+        repo = await ws.code_graph.get_repo_by_id(repo_id) if ws else None
+        secret = await ws.code_graph.webhook_secret(repo_id) if ws and repo else None
+        if ws is None or repo is None or secret is None:
+            raise HTTPException(404, "No repository or no webhook secret")  # one answer for all
         raw = await request.body()
         if not verify_webhook(dict(request.headers), raw, secret):
             log.warning("[api] webhook for repository %d: bad signature", repo_id)
