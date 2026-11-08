@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { describe, expect, it } from 'vitest'
@@ -115,19 +115,31 @@ describe('Annotations', () => {
     expect(screen.getAllByText(/via MCP/)).toHaveLength(1) // not on the plain note
   })
 
-  it('creates a note on a symbol found through the picker', async () => {
+  it('creates a note on a feature found by its route, without knowing the symbol', async () => {
     const fetch = mockFetch({
       'GET /api/annotations': { body: [] },
       'GET /api/repos': { body: REPOS },
-      'GET /api/repos/1/symbols?q=logout': {
+      'GET /api/targets?q=logout': {
         body: [
           {
-            id: 'src/a.ts#AuthService.logout',
-            qualified_name: 'AuthService.logout',
-            kind: 'method',
-            file: 'src/a.ts',
-            line_start: 3,
-            line_end: 9,
+            kind: 'feature',
+            target_kind: 'symbol',
+            target_ref: 'src/a.ts#AuthController.logout',
+            repo: 1,
+            repo_name: 'org-app',
+            label: 'POST /auth/logout',
+            detail: 'AuthController.logout · src/a.ts:3',
+            summary: 'Ends the session and revokes the refresh token.',
+          },
+          {
+            kind: 'entity',
+            target_kind: 'entity',
+            target_ref: 'Logout',
+            repo: null,
+            repo_name: null,
+            label: 'Logout',
+            detail: 'concept',
+            summary: null,
           },
         ],
       },
@@ -136,35 +148,46 @@ describe('Annotations', () => {
 
     renderAt('/annotations')
     await screen.findByText('No annotations.')
-    await userEvent.click(screen.getByText('New annotation'))
-    await screen.findByRole('option', { name: 'org-app' })
-    await userEvent.type(screen.getByLabelText('Symbol'), 'logout')
-    await userEvent.click(screen.getByRole('button', { name: 'Find' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'AuthService.logout' }))
-    await userEvent.type(screen.getByLabelText('Note'), 'Revokes tokens.')
-    await userEvent.selectOptions(screen.getByLabelText('Type'), 'Expected behavior')
-    await userEvent.type(screen.getByLabelText('By'), 'Alice')
+    await userEvent.click(screen.getByText('Add a note'))
+    await userEvent.type(screen.getByLabelText('About what?'), 'logout')
+    const features = await screen.findByRole('group', { name: 'Features' })
+    expect(screen.getByRole('group', { name: 'Entities' })).toHaveTextContent('Logout')
+    await userEvent.click(within(features).getByRole('button', { name: /POST \/auth\/logout/ }))
+    expect(screen.getByText('Ends the session and revokes the refresh token.')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('radio', { name: /Technical/ }))
+    await userEvent.type(screen.getByLabelText('What should a developer know?'), 'Revokes tokens.')
+    await userEvent.type(screen.getByLabelText('Your name'), 'Alice')
+    await userEvent.click(screen.getByText('More options'))
+    await userEvent.selectOptions(screen.getByLabelText('Check it again'), 'In 3 months')
+    await userEvent.click(screen.getByRole('radio', { name: 'only this code changes' }))
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-    await screen.findByText('No annotations.')
-    expect(bodyOf(fetch, 'POST /api/annotations')).toEqual({
+    await waitFor(() => expect(bodyOf(fetch, 'POST /api/annotations')).toBeDefined())
+    const { verify_by, ...rest } = bodyOf(fetch, 'POST /api/annotations')
+    expect(rest).toEqual({
       target_kind: 'symbol',
-      target_ref: 'src/a.ts#AuthService.logout',
+      target_ref: 'src/a.ts#AuthController.logout',
       text: 'Revokes tokens.',
-      note_type: 'expected_behavior',
+      note_type: 'technical',
       repo: 1,
-      scope: 'deps',
+      scope: 'body',
       by: 'Alice',
     })
+    const months = (new Date(verify_by).getTime() - Date.now()) / (30 * 24 * 3600 * 1000)
+    expect(months).toBeGreaterThan(2.5)
+    expect(months).toBeLessThan(3.2)
+    expect(screen.getByLabelText('About what?')).toHaveValue('') // ready for the next note
   })
 
-  it('prefills the form from the URL', async () => {
+  it('takes the target from a link', async () => {
     mockFetch({ 'GET /api/annotations': { body: [] }, 'GET /api/repos': { body: [] } })
 
     renderAt('/annotations?target_kind=entity&target_ref=Mira%20Okafor')
 
-    expect(await screen.findByLabelText('Target')).toHaveValue('Mira Okafor')
-    expect(screen.getByLabelText('Kind')).toHaveValue('entity')
+    const form = await screen.findByRole('form', { name: 'New note' })
+    expect(within(form).getByText('Mira Okafor')).toBeInTheDocument()
+    expect(within(form).queryByPlaceholderText(/A route, a name/)).toBeNull() // no search
+    expect(within(form).getByRole('button', { name: 'Change' })).toBeInTheDocument()
   })
 
   it('shows the API detail when verifying is refused', async () => {
@@ -270,8 +293,12 @@ describe('Annotations by role', () => {
     mockFetch(ROUTES([note(1, { author: 'me' })]))
     renderAs('viewer')
     const row = (await screen.findByText(/Logout also revokes/)).closest('tr')!
-    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['History'])
-    expect(screen.queryByText('New annotation')).toBeNull()
+    expect(
+      within(row)
+        .getAllByRole('button')
+        .map((b) => b.textContent),
+    ).toEqual(['History'])
+    expect(screen.queryByText('Add a note')).toBeNull()
     expect(screen.queryByRole('link', { name: /Graph editor/ })).toBeNull()
   })
 
@@ -285,7 +312,7 @@ describe('Annotations by role', () => {
         .map((b) => b.textContent)
     expect(buttons(own)).toEqual(['History', 'Delete'])
     expect(buttons(other)).toEqual(['History'])
-    expect(screen.getByText('New annotation')).toBeInTheDocument()
+    expect(screen.getByText('Add a note')).toBeInTheDocument()
   })
 
   it('keeps a maintainer from verifying its own agent proposal', async () => {

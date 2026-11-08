@@ -14,12 +14,14 @@ import {
   type AnnotationEvent,
   type AnnotationPatch,
   type RepoRow,
+  type Target,
   type TargetKind,
 } from '../api'
-import { Network } from 'lucide-react'
+import { ChevronRight, Network } from 'lucide-react'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
-import NewNoteForm from '@/components/NewNoteForm'
+import AddNoteForm from '@/components/AddNoteForm'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import PageHeader from '@/components/PageHeader'
 import StatusBadge from '@/components/StatusBadge'
 import { Badge } from '@/components/ui/badge'
@@ -111,6 +113,22 @@ export default function Annotations() {
   }
 
   const repoName = (id: number | null) => repos.find((r) => r.id === id)?.name ?? `repo ${id}`
+  // ?target_kind=&target_ref=&repo= (links from Trace and the Graph): the note is about that.
+  const linkedRef = params.get('target_ref')
+  const linkedKind = (params.get('target_kind') as TargetKind) || 'symbol'
+  const linkedRepo = Number(params.get('repo')) || null
+  const linked: Target | null = linkedRef
+    ? {
+        kind: linkedKind,
+        target_kind: linkedKind,
+        target_ref: linkedRef,
+        repo: linkedKind === 'symbol' ? linkedRepo : null,
+        repo_name: linkedKind === 'symbol' && linkedRepo ? repoName(linkedRepo) : null,
+        label: linkedRef.split('#').pop() ?? linkedRef,
+        detail: linkedKind === 'symbol' ? linkedRef.split('#')[0] : linkedKind,
+        summary: null,
+      }
+    : null
 
   return (
     <section>
@@ -149,17 +167,25 @@ export default function Annotations() {
         </NativeSelect>
       </div>
       {access.can('contributor') && (
-        <NewNoteForm
-          repos={repos}
-          initialKind={(params.get('target_kind') as TargetKind) || 'symbol'}
-          initialRef={params.get('target_ref') ?? ''}
-          initialRepo={Number(params.get('repo')) || null}
-          onCreated={async () => {
-            setError(null)
-            await load()
-          }}
-          onError={setError}
-        />
+        <Collapsible defaultOpen={linked !== null} className="group mb-4 rounded-md bg-card">
+          <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-left font-semibold">
+            <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
+            Add a note
+          </CollapsibleTrigger>
+          <CollapsibleContent className="px-4 pb-4">
+            <AddNoteForm
+              // A link's repository name shows once the repositories are loaded.
+              key={`${linked?.target_ref}\u0000${repos.length}`}
+              title="New note"
+              target={linked}
+              onSaved={async () => {
+                setError(null)
+                await load()
+              }}
+              onError={setError}
+            />
+          </CollapsibleContent>
+        </Collapsible>
       )}
       {error && <ErrorAlert>{error}</ErrorAlert>}
       {notes === null ? (
