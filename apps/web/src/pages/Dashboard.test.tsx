@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
@@ -142,6 +142,25 @@ describe('Dashboard', () => {
     expect(
       within(tokens).getByText('2026-11-07: 250 tokens, query 200, job:index_repo 50'),
     ).toBeInTheDocument()
+  })
+
+  it('reads the days from the keyboard with one Tab stop', async () => {
+    renderPage({ 'GET /api/stats?days=30': { body: stats() } })
+    const tokens = await screen.findByRole('region', { name: 'Token usage' })
+    const chart = within(tokens).getByRole('list', { name: /Tokens per day/ })
+    act(() => chart.focus())
+    expect(within(tokens).getByText('2026-11-30: 0 tokens')).toBeInTheDocument() // the last day
+    await userEvent.keyboard('{Home}')
+    expect(within(tokens).getByText('2026-11-01: 0 tokens')).toBeInTheDocument()
+    for (let i = 0; i < 6; i++) await userEvent.keyboard('{ArrowRight}')
+    expect(
+      within(tokens).getByText('2026-11-07: 250 tokens, query 200, job:index_repo 50'),
+    ).toBeInTheDocument()
+    expect(
+      within(tokens)
+        .queryAllByRole('listitem')
+        .filter((d) => d.tabIndex >= 0),
+    ).toEqual([])
   })
 
   it('keeps the period in the URL', async () => {

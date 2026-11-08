@@ -453,7 +453,7 @@ function Features(props: {
               byKind(list.features).map(([label, features], _, groups) => (
                 <div key={label}>
                   {groups.length > 1 && (
-                    <h4 className={cn('mt-3 mb-1 px-2 font-semibold uppercase', muted)}>{label}</h4>
+                    <h2 className={cn('mt-3 mb-1 px-2 font-semibold uppercase', muted)}>{label}</h2>
                   )}
                   <ul>
                     {features.map((f) => (
@@ -571,12 +571,12 @@ function Files(props: {
             ) : (
               byDir(shown).map(([dir, rows]) => (
                 <div key={dir}>
-                  <h4
+                  <h2
                     className={cn('mt-3 mb-1 px-2 font-mono [overflow-wrap:anywhere]', muted)}
                     title={dir}
                   >
                     {dir}
-                  </h4>
+                  </h2>
                   <ul>
                     {rows.map((f) => {
                       const open =

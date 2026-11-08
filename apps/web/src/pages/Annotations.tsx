@@ -185,6 +185,7 @@ export default function Annotations({ embedded = false }: { embedded?: boolean }
               // A link's repository name shows once the repositories are loaded.
               key={`${linked?.target_ref}\u0000${repos.length}`}
               title="New note"
+              level={2} // right under the page title
               target={linked}
               onSaved={async () => {
                 setError(null)

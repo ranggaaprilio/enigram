@@ -276,7 +276,9 @@ function Panels({ stats }: { stats: Stats }) {
                 .map(([status, n]) => `${number(n)} ${status}`)
                 .join(', ')}
           {' · '}
-          <WsLink to="/documents">Documents</WsLink>
+          <WsLink to="/documents" className="underline">
+            Documents
+          </WsLink>
         </p>
         {knowledge.repos.length === 0 ? (
           <p className="m-0 text-muted-foreground">No repository indexed.</p>
@@ -347,7 +349,8 @@ function Tile(props: { label: string; value: number | string; hint: string; to?:
   )
 }
 
-// One series per day as thin bars from the baseline; hover or focus a day to read it. A single
+// One series per day as thin bars from the baseline; hover a day, or focus the chart and use
+// the arrow keys, to read it. A single
 // series needs no legend: the label names it.
 function DayBars(props: {
   label: string
@@ -373,25 +376,36 @@ function DayBars(props: {
           {total === 0 ? `No ${props.unit} in this period` : readout}
         </span>
       </figcaption>
+      {/* One Tab stop: the arrow keys (Home, End) move between days, read out above. */}
       <div
         role="list"
-        aria-label={props.label}
-        className="flex h-24 items-end gap-[2px] border-b"
+        tabIndex={0}
+        aria-label={`${props.label}, arrow keys move between days`}
+        className="flex h-24 items-end gap-[2px] rounded-sm border-b outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         onMouseLeave={() => setShown(null)}
+        onFocus={() => setShown((now) => now ?? props.days[props.days.length - 1])}
+        onBlur={() => setShown(null)}
+        onKeyDown={(e) => {
+          const at = shown ? props.days.indexOf(shown) : props.days.length - 1
+          const to = { ArrowLeft: at - 1, ArrowRight: at + 1, Home: 0, End: props.days.length - 1 }[
+            e.key
+          ]
+          if (to === undefined) return
+          e.preventDefault()
+          setShown(props.days[Math.min(Math.max(to, 0), props.days.length - 1)])
+        }}
       >
         {props.days.map((day, i) => (
           <div
             key={day}
             role="listitem"
-            tabIndex={0}
             aria-label={`${day}: ${number(values[i])} ${props.unit}`}
-            className="group flex h-full min-w-0 flex-1 items-end outline-none"
+            className="group flex h-full min-w-0 flex-1 items-end"
             onMouseEnter={() => setShown(day)}
-            onFocus={() => setShown(day)}
           >
             <div
               className={cn(
-                'w-full rounded-t-[4px] bg-foreground/70 group-hover:bg-foreground group-focus-visible:bg-foreground',
+                'w-full rounded-t-[4px] bg-foreground/70 group-hover:bg-foreground',
                 shown === day && 'bg-foreground',
               )}
               style={{ height: values[i] ? `${Math.max((values[i] / max) * 100, 3)}%` : 0 }}
