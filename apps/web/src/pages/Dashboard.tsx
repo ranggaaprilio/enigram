@@ -623,30 +623,32 @@ function NotesTable({ notes }: { notes: Stats['review']['notes'] }) {
   const count = (t: NoteType, s: string) =>
     notes.find((n) => n.note_type === t && n.status === s)?.count ?? 0
   return (
-    <Table className="mt-4">
-      <TableHeader>
-        <TableRow>
-          <TableHead>Notes</TableHead>
-          {statuses.map((s) => (
-            <TableHead key={s} className="text-right">
-              {s.replace('_', ' ')}
-            </TableHead>
-          ))}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {types.map((t) => (
-          <TableRow key={t}>
-            <TableCell>{NOTE_TYPES[t] ?? t}</TableCell>
+    <div className="mt-4">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Notes</TableHead>
             {statuses.map((s) => (
-              <TableCell key={s} className="text-right tabular-nums">
-                {number(count(t, s))}
-              </TableCell>
+              <TableHead key={s} className="text-right">
+                {s.replace('_', ' ')}
+              </TableHead>
             ))}
           </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+        </TableHeader>
+        <TableBody>
+          {types.map((t) => (
+            <TableRow key={t}>
+              <TableCell>{NOTE_TYPES[t] ?? t}</TableCell>
+              {statuses.map((s) => (
+                <TableCell key={s} className="text-right tabular-nums">
+                  {number(count(t, s))}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 
@@ -663,29 +665,31 @@ function KeyTable({
   const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1])
   if (sorted.length === 0) return null
   return (
-    <Table className="mt-4">
-      <TableHeader>
-        <TableRow>
-          <TableHead>Key (admins only)</TableHead>
-          <TableHead className="text-right">Period</TableHead>
-          <TableHead className="text-right">Latest day</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {sorted.map(([key, total]) => {
-          const latest = rows.find((r) => r.api_key === key && r.day === latestDay)?.tokens ?? 0
-          return (
-            <TableRow key={key}>
-              <TableCell>{key || 'worker (no key)'}</TableCell>
-              <TableCell className="text-right tabular-nums">{number(total)}</TableCell>
-              <TableCell className="text-right tabular-nums">
-                {number(latest)}
-                {perKey && key ? ` / ${number(perKey)}` : ''}
-              </TableCell>
-            </TableRow>
-          )
-        })}
-      </TableBody>
-    </Table>
+    <div className="mt-4">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Key (admins only)</TableHead>
+            <TableHead className="text-right">Period</TableHead>
+            <TableHead className="text-right">Latest day</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sorted.map(([key, total]) => {
+            const latest = rows.find((r) => r.api_key === key && r.day === latestDay)?.tokens ?? 0
+            return (
+              <TableRow key={key}>
+                <TableCell>{key || 'worker (no key)'}</TableCell>
+                <TableCell className="text-right tabular-nums">{number(total)}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {number(latest)}
+                  {perKey && key ? ` / ${number(perKey)}` : ''}
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
