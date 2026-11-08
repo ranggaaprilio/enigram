@@ -7,6 +7,7 @@ import {
   listRepos,
   messageOf,
   NOTE_TYPES,
+  deleteAnnotation,
   patchAnnotation,
   type Annotation,
   type AnnotationEvent,
@@ -96,6 +97,17 @@ export default function Annotations() {
     }
   }
 
+  async function remove(id: number) {
+    try {
+      await deleteAnnotation(id)
+      setError(null)
+      setHistory(({ [id]: _gone, ...rest }) => rest)
+      await load()
+    } catch (e) {
+      setError(messageOf(e))
+    }
+  }
+
   const repoName = (id: number | null) => repos.find((r) => r.id === id)?.name ?? `repo ${id}`
 
   return (
@@ -172,6 +184,7 @@ export default function Annotations() {
                 events={history[n.id]}
                 onChange={(body) => change(n.id, body)}
                 onHistory={() => toggleHistory(n.id)}
+                onDelete={() => remove(n.id)}
               />
             ))}
           </TableBody>
@@ -187,9 +200,10 @@ function NoteRow(props: {
   events: AnnotationEvent[] | undefined
   onChange: (body: AnnotationPatch) => void
   onHistory: () => void
+  onDelete: () => void
 }) {
   const { note: n } = props
-  const [confirming, setConfirming] = useState(false)
+  const [confirming, setConfirming] = useState<'reject' | 'delete' | null>(null)
   const [relinkTo, setRelinkTo] = useState(n.candidates[0]?.id ?? '')
   const meta = 'text-[13px] text-muted-foreground'
   return (
@@ -247,37 +261,43 @@ function NoteRow(props: {
                 Verify
               </Button>
             )}
-            {n.status !== 'rejected' &&
-              (confirming ? (
-                <>
-                  <span className="text-[13px]">Reject?</span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="soft-destructive"
-                    onClick={() => props.onChange({ status: 'rejected' })}
-                  >
-                    Yes
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => setConfirming(false)}
-                  >
-                    No
-                  </Button>
-                </>
-              ) : (
+            {confirming && (
+              <>
+                <span className="text-[13px]">
+                  {confirming === 'reject' ? 'Reject?' : 'Delete for good?'}
+                </span>
                 <Button
                   type="button"
                   size="sm"
                   variant="soft-destructive"
-                  onClick={() => setConfirming(true)}
+                  onClick={() => {
+                    setConfirming(null)
+                    if (confirming === 'reject') props.onChange({ status: 'rejected' })
+                    else props.onDelete()
+                  }}
                 >
-                  Reject
+                  Yes
                 </Button>
-              ))}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setConfirming(null)}
+                >
+                  No
+                </Button>
+              </>
+            )}
+            {n.status !== 'rejected' && !confirming && (
+              <Button
+                type="button"
+                size="sm"
+                variant="soft-destructive"
+                onClick={() => setConfirming('reject')}
+              >
+                Reject
+              </Button>
+            )}
             <Button
               type="button"
               size="sm"
@@ -289,6 +309,16 @@ function NoteRow(props: {
             <Button type="button" size="sm" variant="secondary" onClick={props.onHistory}>
               History
             </Button>
+            {!confirming && (
+              <Button
+                type="button"
+                size="sm"
+                variant="soft-destructive"
+                onClick={() => setConfirming('delete')}
+              >
+                Delete
+              </Button>
+            )}
           </div>
           {n.status === 'orphaned' && n.candidates.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">

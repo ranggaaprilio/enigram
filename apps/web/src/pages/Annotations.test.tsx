@@ -183,6 +183,27 @@ describe('Annotations', () => {
     expect(bodyOf(fetch, 'PATCH /api/annotations/3')).toEqual({ status: 'verified' })
   })
 
+  it('deletes a note for good after a confirmation', async () => {
+    const routes = {
+      'GET /api/annotations': { body: [note(3), note(4, { text: 'Kept note.' })] },
+      'GET /api/repos': { body: REPOS },
+      'DELETE /api/annotations/3': { body: null },
+    }
+    const fetch = mockFetch(routes)
+
+    renderAt('/annotations')
+    const row = (await screen.findByText('Logout also revokes the refresh token.')).closest('tr')!
+    await userEvent.click(within(row).getByRole('button', { name: 'Delete' }))
+    expect(within(row).getByText('Delete for good?')).toBeInTheDocument()
+    expect(within(row).queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument()
+    routes['GET /api/annotations'] = { body: [note(4, { text: 'Kept note.' })] }
+    await userEvent.click(within(row).getByRole('button', { name: 'Yes' }))
+
+    expect(await screen.findByText('Kept note.')).toBeInTheDocument()
+    expect(screen.queryByText('Logout also revokes the refresh token.')).not.toBeInTheDocument()
+    expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true)
+  })
+
   it('relinks an orphaned note to a candidate and shows its history', async () => {
     const orphan = note(5, {
       status: 'orphaned',

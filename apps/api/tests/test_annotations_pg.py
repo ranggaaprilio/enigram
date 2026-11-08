@@ -97,6 +97,21 @@ async def test_summary_snapshot_round_trips(notes):
     assert "summary_text" not in created.new and verified.old == {"summary_kind": "flow"}
 
 
+async def test_delete_removes_the_note_and_its_events_in_its_workspace_only(notes, pool):
+    gone = await notes.create(_symbol_note(), "web")
+    kept = await notes.create(_symbol_note("src/b.ts#B"), "web")
+    elsewhere = PostgresAnnotations(pool, f"test_{uuid4().hex[:8]}")
+
+    assert await elsewhere.delete(gone.id) is False
+    assert await notes.delete(gone.id) is True
+    assert await notes.get(gone.id) is None and await notes.delete(gone.id) is False
+    assert [n.id for n in await notes.list()] == [kept.id]
+    left = await pool.fetchval(
+        "SELECT count(*) FROM annotation_events WHERE annotation_id = $1", gone.id
+    )
+    assert left == 0
+
+
 async def test_count_by_symbol_counts_every_status_but_rejected_per_repo(notes):
     await notes.create(_symbol_note(), "web")
     await notes.create(_symbol_note(status="proposed"), "web")

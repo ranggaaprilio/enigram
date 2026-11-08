@@ -854,6 +854,25 @@ def test_verifier_rule_per_api_key(notes_env):
     assert client.get("/annotations/99", headers=_bearer(WEB_KEY)).status_code == 404
 
 
+def test_delete_annotation_by_author_or_verifier(notes_env):
+    client, _, _, notes, build = notes_env
+    web, laptop = _bearer(WEB_KEY), _bearer(LAPTOP_KEY)
+    mine = client.post("/annotations", json=SYMBOL_NOTE, headers=web).json()
+    other = client.post("/annotations", json=SYMBOL_NOTE, headers=laptop).json()
+
+    refused = client.delete(f"/annotations/{other['id']}", headers=web)
+    assert refused.status_code == 403 and "ANNOTATION_VERIFIERS" in refused.json()["detail"]
+    assert client.delete(f"/annotations/{mine['id']}", headers=web).status_code == 204
+    assert client.get(f"/annotations/{mine['id']}", headers=web).status_code == 404
+    assert client.delete(f"/annotations/{mine['id']}", headers=web).status_code == 404
+    assert [n["id"] for n in client.get("/annotations", headers=web).json()] == [other["id"]]
+    assert not [e for e in notes.events_ if e.annotation_id == mine["id"]]
+
+    with build("web") as trusted:
+        assert trusted.delete(f"/annotations/{other['id']}", headers=web).status_code == 204
+        assert trusted.get("/annotations", headers=web).json() == []
+
+
 def test_repos_symbols_secret_and_delete(notes_env):
     client, store, _, _, _ = notes_env
     web = _bearer(WEB_KEY)

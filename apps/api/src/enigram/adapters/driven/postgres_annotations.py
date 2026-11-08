@@ -324,6 +324,15 @@ class PostgresAnnotations:
         )
         return [_event(r) for r in rows]
 
+    async def delete(self, annotation_id: int) -> bool:
+        # annotation_events go with it (ON DELETE CASCADE).
+        row = await self.pool.fetchrow(
+            "DELETE FROM annotations WHERE workspace = $1 AND id = $2 RETURNING id",
+            self.workspace,
+            annotation_id,
+        )
+        return row is not None
+
     async def _flag_all(
         self, where: str, args: list[Any], changes: dict[str, Any], actor: str, action: str
     ) -> list[Annotation]:

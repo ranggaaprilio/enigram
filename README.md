@@ -315,6 +315,7 @@ write the same index.
 | `POST /annotations` `{"target_kind", "target_ref", "text", "repo"?, "by"?, "owner"?, "scope"?, "verify_by"?, "note_type"?, "proposed"?}` | Create a note (201); see [Annotations](#annotations) |
 | `GET /annotations/{id}` | One note with its change history |
 | `PATCH /annotations/{id}` `{"status"?, "text"?, "owner"?, "verify_by"?, "conflict"?, "target_ref"?, "by"?}` | Verify, reject, edit, relink or flag a note (403 when the key may not verify) |
+| `DELETE /annotations/{id}` | Delete a note and its history for good (204; 403 unless the key wrote it or is in `ANNOTATION_VERIFIERS`); the deletion is logged |
 | `GET /jobs/{id}` | One indexing job: status, result (chunks, timings, report), error |
 | `POST /query` `{"question", "mode": "mix"\|"naive", "scope": "auto"\|"docs"\|"code", "repo"?}` | Answer with sources, chunks, entities and relations, plus its stored `id`; `scope` defaults to `auto` (the router picks code, documents or both; decision in `extra.route`), `"code"` asks the code agent (`mode` applies to the documents only, `repo` = a repository URL and makes `auto` a code question) |
 | `GET /queries?limit=50` | Recent queries, newest first, without their traces (`limit` 1-200) |

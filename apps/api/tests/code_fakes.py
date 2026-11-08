@@ -432,6 +432,7 @@ class FakeAnnotations:
         self.notes: dict[int, Annotation] = {}
         self.events_: list[AnnotationEvent] = []
         self.reviews_: dict[tuple[int, str], SymbolReview] = {}
+        self._last_id = 0
         self._clock = datetime(2026, 11, 1, tzinfo=UTC)
 
     def _now(self) -> datetime:
@@ -464,7 +465,9 @@ class FakeAnnotations:
         }
         values = {**defaults, **fields}
         values["candidates"] = tuple(values["candidates"])
-        note = Annotation(id=len(self.notes) + 1, created_at=now, updated_at=now, **values)
+        # Ids are never reused, as with BIGSERIAL, so a deleted note's id stays free.
+        self._last_id += 1
+        note = Annotation(id=self._last_id, created_at=now, updated_at=now, **values)
         self.notes[note.id] = note
         self._log(
             note.id, actor, "created", None, {k: v for k, v in fields.items() if k not in UNLOGGED}
@@ -577,6 +580,12 @@ class FakeAnnotations:
 
     async def events(self, annotation_id):
         return [e for e in self.events_ if e.annotation_id == annotation_id]
+
+    async def delete(self, annotation_id):
+        if self.notes.pop(annotation_id, None) is None:
+            return False
+        self.events_ = [e for e in self.events_ if e.annotation_id != annotation_id]
+        return True
 
     async def expire(self, now, actor):
         due = [
