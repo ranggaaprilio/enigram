@@ -13,9 +13,35 @@ Urutan di bawah adalah urutan yang disarankan; tiap item bisa dikerjakan sebagai
 
 Perbaikan di luar PRD yang sudah masuk hari ini: #21 (entry point Next.js dan sitasi path App
 Router), #22 (jawaban dokumen mengutip `[n]` per kalimat), #23 (pertanyaan overview selalu ke kode
-dan dokumen). Golden eval belum dijalankan ulang setelah #22 dan #23.
+dan dokumen).
+
+**Cek regresi setelah #22 dan #23 (2026-11-08).**
+- Agent kode, split `dev`: 11 jawaban identik dengan run 2026-11-05 (cache agent kena, prompt dan
+  alur tidak berubah), jadi hasil dev 10/10 dan 0,925× token (`eval-20261105-121656`) tetap berlaku.
+- Router: `golden route --split dev` target 100% (`route-20261108-065224`); `golden-docs` 29/30,
+  meleset di p07 seperti sebelumnya (`route-20261108-065235`). Aturan overview #23 tidak mengubah
+  rute golden.
+- Jawaban dokumen (#22) **belum terukur**: dokumen Kestrel untuk `eval/golden-docs.yaml` tidak lagi
+  ter-index (30/30 bukti tidak ditemukan; sumbernya hanya di `data/backup-before-phase1`).
+  Diputuskan: ditunda ke fase 7 (item 14).
 
 ## Urutan yang disarankan
+
+Nomor item tetap seperti bagian di bawah; urutan pengerjaan mengikuti gelombang (diputuskan
+2026-11-08). Item 3 sengaja dipindah ke setelah form note baru (A1), dan R3 setelah kerangka UI (U1).
+
+| Gelombang | Pekerjaan | Alasan |
+|---|---|---|
+| 0 | 11 keputusan dan keputusan item 1, 2, 4; cek regresi #22/#23; mulai 15 | **Selesai 2026-11-08**, kecuali 15 (non-kode, di tangan pemilik) |
+| 1 | 10 hapus note, 12 perbaikan kecil Code | PR kecil |
+| 2 | 1 repo private → 2 R1–R2 | Penghalang utama pemakaian nyata; sebelum RBAC, kredensial dibatasi `ANNOTATION_VERIFIERS` |
+| 3 | 4 U1 → 2 R3 → 5 A1 | Halaman baru dibangun di sidebar; form note baru siap diuji |
+| 4 | 3 sesi PM/QA | Menguji form baru sebagai `contributor`, bukan aktor `web` |
+| 5 | 5 A2–A3, 4 U2 (U3–U4 menyusul) | Inbox dibentuk dari temuan sesi |
+| 6 | 6 Dashboard, 7 Memory | D1 dan M1 (API saja) boleh mulai lebih awal |
+| 7 | 9 monorepo, 13 adapter | Saat ada repo nyata yang butuh; 9 naik sebelum gelombang 4 bila repo sesi PM/QA monorepo |
+| 8 | 2 R4 (OIDC) → 8 Chat | Sesi chat butuh pemilik per orang |
+| 9 | 14 evaluasi penuh → rilis | Paling mahal; setelah semua stabil |
 
 | # | Pekerjaan | Jenis | Biaya token |
 |---|---|---|---|
@@ -29,7 +55,7 @@ dan dokumen). Golden eval belum dijalankan ulang setelah #22 dan #23.
 | 8 | Chat interaktif multi-agent dengan fokus masing-masing | Teknis | **Sedang–tinggi** |
 | 9 | Monorepo dan `tsconfig.json` di luar root | Teknis | Rendah |
 | 10 | Endpoint hapus note | Teknis | Nol |
-| 11 | Keputusan produk yang tertunda | Keputusan | Nol |
+| 11 | Keputusan produk yang tertunda | Keputusan | Nol (**diputuskan 2026-11-08**) |
 | 12 | Perbaikan kecil halaman Code | Teknis | Nol |
 | 13 | Adapter framework lain | Teknis | Rendah |
 | 14 | Fase 7: evaluasi penuh | Eval | **Tinggi** |
@@ -49,7 +75,8 @@ bisa di-index. Untuk pemakaian sungguhan (repo kantor), ini penghalang utama.
 - Clone dan fetch (termasuk webhook dan polling) memakai kredensial itu.
 - UI Documents: kolom kredensial saat index repo.
 
-**Keputusan yang dibutuhkan.** Mekanisme autentikasi; kredensial per repo atau per workspace.
+**Diputuskan 2026-11-08.** Personal access token (fine-grained, read-only) untuk clone HTTPS,
+disimpan **per repo**.
 
 **Selesai bila.** Satu repo private ter-index dari web UI, re-sync lewat webhook berjalan, dan
 pencarian log/DB tidak menemukan token.
@@ -126,11 +153,14 @@ ditulis di PRD/plan saat dikerjakan; `ANNOTATION_VERIFIERS` digantikan oleh `mai
 - `ANNOTATION_VERIFIERS` diimpor sebagai `maintainer`.
 - Tanpa key sama sekali (mode lokal), API tetap terbuka seperti sekarang.
 
-**Keputusan yang dibutuhkan.**
-- Penyedia login untuk R4 (Google Workspace, Microsoft Entra, GitHub), atau tetap key per orang.
-- Peran default anggota baru (`viewer` atau `contributor`).
-- Workspace `default` (korpus golden eval) cukup `viewer` bagi selain admin?
-- MCP memilih workspace lewat header/path per koneksi, argumen per tool, atau keduanya.
+**Diputuskan 2026-11-08.**
+- Peran default anggota baru: `viewer`.
+- Workspace `default` (korpus golden eval) mengikuti peran biasa, tanpa aturan khusus.
+- MCP memilih workspace dengan keduanya: header/path per koneksi sebagai default, argumen
+  `workspace` per tool untuk override.
+
+**Keputusan yang masih dibutuhkan.** Penyedia login untuk R4 (Google Workspace, Microsoft Entra,
+GitHub), atau tetap key per orang; diputuskan sebelum R4, karena R1–R3 tidak bergantung padanya.
 
 **Kaitan dengan item lain.** Kredensial repo private (item 1) hanya boleh diatur `admin`; sesi
 PM/QA (item 3) lebih bermakna setelah R1–R3, karena PM/QA masuk sebagai `contributor`, bukan
@@ -212,14 +242,13 @@ kontras WCAG AA di terang dan gelap.
 | U3 | Command palette | Pindah halaman, ganti workspace dan buka symbol tanpa mouse |
 | U4 | Audit aksesibilitas dan rapikan | Kontras AA, fokus dan keyboard lulus di semua halaman |
 
-**Keputusan yang dibutuhkan.**
-- Arah desain: tetap berdasar `DESIGN.md` (Framer) dengan kepadatan aplikasi, atau acuan baru
-  bergaya alat kerja (mis. Linear, Vercel dashboard). `DESIGN.md` sebaiknya di-commit atau diganti
-  sebelum U1, supaya acuan desain ada di repo.
-- Sidebar default terbuka atau ciut.
-- Command palette (U3) ikut sekarang atau nanti.
-- Aturan lama yang tetap berlaku: terang sebagai default dengan gelap mengikuti sistem, satu kartu
-  sorotan saja. Tetap, atau dibuka lagi?
+**Diputuskan 2026-11-08.**
+- Arah desain: **acuan baru bergaya alat kerja** (Linear, Vercel dashboard), tetap Inter dan
+  shadcn/ui. `DESIGN.md` Framer tidak dipakai; acuan baru ditulis dan di-commit sebagai langkah
+  pertama U1.
+- Sidebar default terbuka; command palette (U3) nanti, setelah U1–U2.
+- Aturan lama (terang sebagai default, satu kartu sorotan) **dibuka lagi**: ditentukan ulang saat
+  menulis acuan baru. Pilihan tema terang/gelap/sistem di menu user tetap masuk lingkup.
 
 **Urutan.** U1 dikerjakan sebelum Dashboard (item 6) dan Memory (item 7), supaya halaman baru
 langsung dibangun di kerangka baru. U2–U4 bisa berjalan bersamaan dengan item lain.
@@ -552,15 +581,15 @@ atau `ANNOTATION_VERIFIERS`), event dicatat, tombol di halaman Annotations.
 
 ## 11. Keputusan produk yang tertunda
 
-Tidak butuh kode sampai diputuskan; jawabannya menentukan item lain.
+Diputuskan 2026-11-08. Hanya baris pertama yang butuh kode (perubahan prompt, ukur di split `dev`).
 
-| Pertanyaan | Usulan | Dampak |
+| Pertanyaan | Keputusan | Dampak |
 |---|---|---|
-| Bobot note per tipe di prompt agent: aturan bisnis = fakta, known issue = petunjuk? | Ya | Prompt `notes_prompt` dan hasil eval |
-| Tanda ✓ *Looks right* dikirim ke agent? | Tidak di v1 | Prompt agent |
-| Batas token global selain budget per workspace? | Belum, pantau dulu | Konfigurasi biaya |
-| Branch yang dilacak: default saja atau juga branch PR? | Default saja | Storage, webhook |
-| Daftar fitur memuat symbol ber-summary `flow` yang bukan entry point? | Hitung dulu di repo nyata | Halaman Code |
+| Bobot note per tipe di prompt agent: aturan bisnis = fakta, known issue = petunjuk? | Ya, bertingkat: `business_rule`/`expected_behavior` = fakta, `known_issue`/`technical` = petunjuk | Prompt `notes_prompt` dan hasil eval |
+| Tanda ✓ *Looks right* dikirim ke agent? | Tidak di v1 | — |
+| Batas token global selain budget per workspace? | Belum, pantau lewat Dashboard (item 6) | — |
+| Branch yang dilacak: default saja atau juga branch PR? | Default saja | — |
+| Daftar fitur memuat symbol ber-summary `flow` yang bukan entry point? | Tidak perlu: semua summary `flow` sudah entry point (nestjs-boilerplate 25/25, white-board 7/7) | — |
 
 ## 12. Perbaikan kecil halaman Code
 
@@ -586,7 +615,9 @@ sistem penuh, `agent+repo`, `mix` dan ablasi `--scope code`; judge per jawaban d
 pertanyaan `dev` dilaporkan terpisah; `reserve` hanya dibuka bila INSUFFICIENT DATA.
 
 **Sebelum mulai.** Perkirakan biaya token dari run eval sebelumnya dan setujui anggarannya. Eval
-ini juga mengukur dampak #22 dan #23 terhadap kualitas jawaban.
+ini juga mengukur dampak #22 dan #23 terhadap kualitas jawaban. Untuk `eval/golden-docs.yaml`,
+index ulang dulu keempat dokumen Kestrel (sumber di `data/backup-before-phase1`) dan pastikan
+`golden check --file eval/golden-docs.yaml` lulus.
 
 **Kenapa terakhir.** Paling mahal, dan hasilnya lebih bermakna setelah item 1–13 stabil.
 
