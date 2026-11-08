@@ -366,6 +366,8 @@ describe('Code', () => {
     )
     expect(screen.getByText(/Saved as a proposal: a maintainer reviews it/)).toBeInTheDocument()
     expect(screen.getByText(/Signed as Alice\./)).toBeInTheDocument()
+    expect(screen.getByLabelText('How answers cite it')).toHaveTextContent('note#… [proposed]')
+    expect(screen.getByText('Answers do not cite it until a maintainer verifies it.')).toBeVisible()
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => expect(bodyOf(fetch, 'POST /api/annotations')).toBeDefined())

@@ -164,3 +164,56 @@ describe('Review inbox', () => {
     expect(await screen.findByText('Nothing waits for review.')).toBeInTheDocument()
   })
 })
+
+describe('Review bulk decisions (A3)', () => {
+  it('verifies the picked proposals and rejects the rest, reporting each refusal', async () => {
+    const fetch = mockFetch({
+      'GET /api/review': {
+        body: [
+          item('proposed', note(1)),
+          item('proposed', note(5)),
+          item('conflict', note(4, { status: 'verified', conflict: true })),
+          item('needs_verification', note(2, { status: 'needs_verification' })),
+        ],
+      },
+      'PATCH /api/annotations/1': { body: note(1) },
+      'PATCH /api/annotations/5': {
+        status: 403,
+        body: { detail: 'Needs the maintainer role' },
+      },
+    })
+    render(
+      asRole(
+        'maintainer',
+        <MemoryRouter>
+          <Review />
+        </MemoryRouter>,
+      ),
+    )
+    await screen.findByText('Note 1 text.')
+    // A re-check is decided on its own, with then vs now.
+    expect(screen.queryByRole('checkbox', { name: 'Select note 2' })).toBeNull()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select note 1' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select note 5' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select note 4' }))
+    const bar = screen.getByRole('group', { name: 'Selected notes' })
+    expect(bar).toHaveTextContent('3 selected')
+    await userEvent.click(within(bar).getByRole('button', { name: 'Verify 2' }))
+
+    await waitFor(() =>
+      expect(patches(fetch)).toEqual([
+        ['/api/annotations/1', { status: 'verified' }],
+        ['/api/annotations/5', { status: 'verified' }],
+      ]),
+    )
+    expect(await screen.findByText('note#5: Needs the maintainer role')).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Selected notes' })).toBeNull()
+  })
+
+  it('offers no checkboxes to a contributor', async () => {
+    renderAs('contributor')
+    await screen.findByText('Note 1 text.')
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
+})

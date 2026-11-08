@@ -21,6 +21,7 @@ import PageHeader from '@/components/PageHeader'
 import RecheckNote from '@/components/RecheckNote'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { cn } from '@/lib/utils'
 import { WsLink } from '@/workspace'
@@ -40,6 +41,9 @@ export default function Review() {
   const [items, setItems] = useState<ReviewItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [shown, setShown] = useState<ReviewReason | 'all'>('all')
+  // Bulk decisions (A3): ids picked with the checkboxes.
+  const [picked, setPicked] = useState<Set<number>>(new Set())
+  const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -63,6 +67,41 @@ export default function Review() {
     }
     await load()
   }
+
+  // One request per note, in order; the API checks each, so a refusal names its note.
+  async function bulk(kind: 'verify' | 'reject') {
+    const chosen = (items ?? []).filter(
+      (i) => picked.has(i.note.id) && (kind === 'reject' || i.reason === 'proposed'),
+    )
+    setBusy(true)
+    const failed: string[] = []
+    for (const i of chosen) {
+      try {
+        await patchAnnotation(i.note.id, { status: kind === 'verify' ? 'verified' : 'rejected' })
+      } catch (e) {
+        failed.push(`note#${i.note.id}: ${messageOf(e)}`)
+      }
+    }
+    const done = chosen.length - failed.length
+    if (done)
+      toast.success(`${kind === 'verify' ? 'Verified' : 'Rejected'} ${done} of ${chosen.length}`)
+    setError(failed.length ? failed.join('; ') : null)
+    setPicked(new Set())
+    setBusy(false)
+    await load()
+  }
+
+  function toggle(id: number) {
+    setPicked((now) => {
+      const next = new Set(now)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const pickedItems = (items ?? []).filter((i) => picked.has(i.note.id))
+  const verifiable = pickedItems.filter((i) => i.reason === 'proposed').length
 
   const count = (key: ReviewReason) => items?.filter((i) => i.reason === key).length ?? 0
   const visible = items?.filter((i) => shown === 'all' || i.reason === shown) ?? []
@@ -95,6 +134,36 @@ export default function Review() {
         ))}
       </div>
       {error && <ErrorAlert>{error}</ErrorAlert>}
+      {picked.size > 0 && (
+        <div
+          role="group"
+          aria-label="Selected notes"
+          className="sticky top-12 z-[5] mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-sm"
+        >
+          <span className="text-sm font-medium">{picked.size} selected</span>
+          <Button
+            type="button"
+            size="sm"
+            disabled={busy || verifiable === 0}
+            title="Only proposals can be verified in bulk"
+            onClick={() => void bulk('verify')}
+          >
+            Verify {verifiable}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="soft-destructive"
+            disabled={busy}
+            onClick={() => void bulk('reject')}
+          >
+            Reject {picked.size}
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setPicked(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
       {items === null ? (
         !error && <Loading rows={4} />
       ) : visible.length === 0 ? (
@@ -102,7 +171,13 @@ export default function Review() {
       ) : (
         <ul className="m-0 flex list-none flex-col gap-3 p-0">
           {visible.map((item) => (
-            <InboxItem key={item.note.id} item={item} onAct={(body) => act(item.note.id, body)} />
+            <InboxItem
+              key={item.note.id}
+              item={item}
+              picked={picked.has(item.note.id)}
+              onPick={() => toggle(item.note.id)}
+              onAct={(body) => act(item.note.id, body)}
+            />
           ))}
         </ul>
       )}
@@ -112,9 +187,13 @@ export default function Review() {
 
 function InboxItem({
   item,
+  picked,
+  onPick,
   onAct,
 }: {
   item: ReviewItem
+  picked: boolean
+  onPick: () => void
   onAct: (body: AnnotationPatch) => Promise<void>
 }) {
   const { note, reason } = item
@@ -130,6 +209,8 @@ function InboxItem({
     : null
   const reasonLabel = REASONS.find((r) => r.key === reason)!
   const relink = reason === 'orphaned' && note.candidates.length > 0
+  // A re-check needs its own look at then vs now: not decided in bulk.
+  const bulkable = mayDecide && reason !== 'needs_verification'
 
   let context: ReactNode = null
   if (reason === 'needs_verification' && symbol) {
@@ -181,8 +262,15 @@ function InboxItem({
           : [] // a re-check decides inside RecheckNote
 
   return (
-    <li className="rounded-md border p-4">
+    <li className={cn('rounded-md border p-4', picked && 'border-foreground')}>
       <div className="flex flex-wrap items-center gap-2">
+        {bulkable && (
+          <Checkbox
+            aria-label={`Select note ${note.id}`}
+            checked={picked}
+            onCheckedChange={onPick}
+          />
+        )}
         <Badge variant="outline" title={reasonLabel.hint}>
           {reasonLabel.label}
         </Badge>
