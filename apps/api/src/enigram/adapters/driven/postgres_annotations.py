@@ -379,6 +379,7 @@ class PostgresAnnotations:
         target_ref: str | None = None,
         via: str | None = None,
         conflict: bool | None = None,
+        memory_id: int | None = None,
         limit: int = 200,
     ) -> list[Annotation]:
         where, args = ["workspace = $1"], [self.workspace]
@@ -389,6 +390,7 @@ class PostgresAnnotations:
             ("target_ref", target_ref),
             ("via", via),
             ("conflict", conflict),
+            ("memory_id", memory_id),
         ):
             if value is not None:
                 args.append(value)

@@ -141,3 +141,44 @@ async def test_get_is_scoped_to_the_key(memory):
     assert await memory.get(mine, None) is None
     assert (await memory.get(keyless, None)).text == "lunch noon"
     assert await memory.get(999_999_999, "laptop-a") is None
+
+
+async def test_list_newest_first_per_key_or_every_key_with_a_text_filter(memory):
+    a, _ = await memory.add("staging database", "laptop-a")
+    b, _ = await memory.add("Lunch at noon", "laptop-a")
+    c, _ = await memory.add("deploy friday", "laptop-b")
+
+    assert [m.id for m in await memory.list("laptop-a")] == [b, a]
+    every = await memory.list(None, every_key=True)
+    assert [(m.id, m.api_key, m.embed_model) for m in every] == [
+        (c, "laptop-b", "fake-embed"),
+        (b, "laptop-a", "fake-embed"),
+        (a, "laptop-a", "fake-embed"),
+    ]
+    assert [m.id for m in await memory.list(None, every_key=True, q="LUNCH")] == [b]
+    assert [m.id for m in await memory.list("laptop-a", q="deploy")] == []
+    assert len(await memory.list(None, every_key=True, limit=1)) == 1
+
+
+async def test_search_by_meaning_over_every_key(memory):
+    await memory.add("staging database", "laptop-a")
+    theirs, _ = await memory.add("staging", "laptop-b")
+
+    mine = await memory.search("staging", "laptop-a")
+    every = await memory.search("staging", None, every_key=True)
+
+    assert {m.api_key for m in mine.memories} == {"laptop-a"}
+    assert every.memories[0].id == theirs and every.memories[0].api_key == "laptop-b"
+    assert len(every.memories) == 2
+
+
+async def test_find_any_key_and_delete(memory):
+    kept, _ = await memory.add("staging database", "laptop-a")
+    gone, _ = await memory.add("lunch noon", "laptop-b")
+
+    found = await memory.find(gone)
+    assert (found.text, found.api_key) == ("lunch noon", "laptop-b")
+    assert await memory.delete(gone) is True
+    assert await memory.find(gone) is None
+    assert await memory.delete(gone) is False
+    assert (await memory.find(kept)).id == kept

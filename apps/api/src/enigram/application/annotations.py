@@ -57,6 +57,7 @@ class NewAnnotation:
     # Stay a proposal even when the actor could verify it: a claim about how the code behaves,
     # written on the Code page, for a developer to review.
     proposed: bool = False
+    memory_id: int | None = None  # the agent memory it was made from (the Memory page)
 
 
 @dataclass(frozen=True)
@@ -225,6 +226,8 @@ async def create_annotation(
         "verify_by": verify_by,
         "note_type": new.note_type,
     }
+    if new.memory_id is not None:
+        fields["memory_id"] = new.memory_id
     p = None
     if not new.proposed and at_least(role, "maintainer"):
         fields |= _verify_fields(actor, verify_by)
