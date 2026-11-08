@@ -789,8 +789,9 @@ export interface ChatAgent {
 
 // The events of one turn (POST /chat/sessions/{id}/messages, server-sent events).
 export type ChatEvent =
-  | { event: 'question'; data: ChatMessage & { title: string; answering: string } }
-  | { event: 'step'; data: { tool: string; label: string } }
+  // `answering`: one agent, or a panel's (C3), which answer at once.
+  | { event: 'question'; data: ChatMessage & { title: string; answering: string[] } }
+  | { event: 'step'; data: { tool: string; label: string; agent: string } }
   | { event: 'answer'; data: ChatMessage }
   | { event: 'error'; data: { detail: string } }
 
