@@ -330,3 +330,42 @@ describe('Sign-in (R4)', () => {
     expect(new Headers(init?.headers).get('X-Requested-With')).toBe('enigram')
   })
 })
+
+describe('Page patterns (U2)', () => {
+  it('shows where you are as a breadcrumb with links back', async () => {
+    mockFetch({ ...ROUTES, 'GET /api/queries/12': { status: 404, body: { detail: 'No query' } } })
+    renderAt('/w/ws-a/trace/12')
+    const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' })
+    expect(within(crumbs).getByRole('link', { name: 'ws-a' })).toHaveAttribute(
+      'href',
+      '/w/ws-a/documents',
+    )
+    expect(within(crumbs).getByRole('link', { name: 'Trace' })).toHaveAttribute(
+      'href',
+      '/w/ws-a/trace',
+    )
+    expect(within(crumbs).getByText('Query 12')).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('names the symbol of a Code link', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/code?repo=1&symbol=src%2Fa.ts%23AuthService.logout')
+    const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' })
+    expect(crumbs).toHaveTextContent('ws-a / Code / AuthService.logout')
+  })
+
+  it('confirms an action with a toast', async () => {
+    mockFetch({
+      ...ROUTES,
+      'POST /api/workspaces': {
+        status: 201,
+        body: { name: 'whiteboard', created_at: '2026-11-07T00:00:00Z' },
+      },
+    })
+    renderAt('/w/default/documents')
+    await userEvent.click(await screen.findByRole('button', { name: 'New workspace' }))
+    await userEvent.type(screen.getByLabelText('Workspace name'), 'whiteboard')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByText('Workspace whiteboard created')).toBeInTheDocument()
+  })
+})

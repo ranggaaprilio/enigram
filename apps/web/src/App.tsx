@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Toaster } from './components/ui/sonner'
 import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router'
 import { accessOf, AccessProvider } from './access'
 import {
@@ -23,6 +24,18 @@ import Graph from './pages/Graph'
 import Members from './pages/Members'
 import { TraceDetail, TraceList } from './pages/Trace'
 import { WORKSPACE_NAME } from './workspace'
+
+// The item a page shows, for the breadcrumb: a query, a symbol, a note.
+function itemOf(segment: string, pathname: string, search: string): string | null {
+  const params = new URLSearchParams(search)
+  if (segment === 'trace') {
+    const id = pathname.split('/')[4]
+    return id ? `Query ${id}` : null
+  }
+  if (segment === 'code') return params.get('symbol')?.split('#').pop() ?? null
+  if (segment === 'annotations') return params.get('id') ? `Note ${params.get('id')}` : null
+  return null
+}
 
 const PAGE_LABELS = Object.fromEntries(
   NAV.flatMap((group) => group.pages.map((p) => [p.to.slice(1), p.label])),
@@ -56,7 +69,7 @@ function ToWorkspace({ home }: { home: string | undefined }) {
 
 function WorkspaceShell({ home }: { home: string }) {
   const { workspace = '' } = useParams()
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
   // A hand-typed name off the rule would make the header throw; the process workspace may
   // predate the rule.
   const usable = WORKSPACE_NAME.test(workspace) || workspace === home
@@ -95,7 +108,9 @@ function WorkspaceShell({ home }: { home: string }) {
   if (signedOut) return <SignIn />
 
   // /w/<ws>/<page>/...: the page shown in the top bar.
-  const page = PAGE_LABELS[pathname.split('/')[3] ?? ''] ?? ''
+  const segment = pathname.split('/')[3] ?? ''
+  const page = PAGE_LABELS[segment] ?? ''
+  const item = itemOf(segment, pathname, search)
 
   return (
     <AccessProvider value={accessOf(me, workspace)}>
@@ -110,10 +125,37 @@ function WorkspaceShell({ home }: { home: string }) {
           <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b bg-background/90 px-4 backdrop-blur">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-            <span className="truncate text-sm text-muted-foreground">
-              {workspace}
-              {page && <span className="text-foreground"> / {page}</span>}
-            </span>
+            <nav aria-label="Breadcrumb" className="min-w-0 text-sm">
+              <ol className="m-0 flex min-w-0 list-none items-center gap-1.5 p-0 text-muted-foreground">
+                <li className="shrink-0">
+                  <Link to={`/w/${workspace}/documents`} className="text-muted-foreground">
+                    {workspace}
+                  </Link>
+                </li>
+                {page && (
+                  <li className="flex min-w-0 items-center gap-1.5">
+                    <span aria-hidden> / </span>
+                    {item ? (
+                      <Link to={`/w/${workspace}/${segment}`} className="text-muted-foreground">
+                        {page}
+                      </Link>
+                    ) : (
+                      <span aria-current="page" className="text-foreground">
+                        {page}
+                      </span>
+                    )}
+                  </li>
+                )}
+                {item && (
+                  <li className="flex min-w-0 items-center gap-1.5">
+                    <span aria-hidden> / </span>
+                    <span aria-current="page" className="truncate text-foreground">
+                      {item}
+                    </span>
+                  </li>
+                )}
+              </ol>
+            </nav>
           </header>
           <div className="w-full max-w-[1140px] px-4 pt-6 pb-20 md:px-8">
             {workspaces === undefined ? null : !known ? (
@@ -138,6 +180,7 @@ function WorkspaceShell({ home }: { home: string }) {
           </div>
         </SidebarInset>
       </SidebarProvider>
+      <Toaster />
     </AccessProvider>
   )
 }

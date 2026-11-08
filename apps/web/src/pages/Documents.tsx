@@ -1,4 +1,5 @@
 import { useAccess } from '../access'
+import { toast } from 'sonner'
 import {
   useCallback,
   useEffect,
@@ -21,6 +22,7 @@ import {
 } from '../api'
 import { FileUp, GitBranch, Loader2 } from 'lucide-react'
 import Empty from '@/components/Empty'
+import Loading from '@/components/Loading'
 import ErrorAlert from '@/components/ErrorAlert'
 import PageHeader from '@/components/PageHeader'
 import StatusBadge from '@/components/StatusBadge'
@@ -148,6 +150,7 @@ export default function Documents() {
         ...list,
       ])
       setRepoError(null)
+      toast.success(`Indexing ${repoLabel(url)} (job ${job.id})`)
       setRepoUrl('')
       setRepoRef('')
       setRepoToken('')
@@ -200,6 +203,7 @@ export default function Documents() {
     for (const file of files) {
       try {
         const result = await uploadDocument(file)
+        if (result.job) toast.success(`${file.name} queued for indexing`)
         update(
           file.name,
           result.job
@@ -224,6 +228,7 @@ export default function Documents() {
     try {
       await deleteDocument(book)
       setDeleteError(null)
+      toast.success(`Deleting ${book}`)
     } catch (e) {
       setDeleteError(messageOf(e))
     }
@@ -265,7 +270,7 @@ export default function Documents() {
         <div className="mb-8 grid gap-4 md:grid-cols-2">
           <label
             className={cn(
-              'flex min-h-44 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input bg-card px-5 py-8 text-center text-muted-foreground transition-colors hover:border-ring has-[input:focus-visible]:ring-[3px] has-[input:focus-visible]:ring-ring/25',
+              'flex min-h-44 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border-[1.5px] border-dashed border-input bg-card px-5 py-8 text-center text-muted-foreground transition-colors hover:border-ring has-[input:focus-visible]:ring-[3px] has-[input:focus-visible]:ring-ring/25',
               dragging && 'border-ring bg-info-bg',
             )}
             onDragOver={(e) => {
@@ -384,7 +389,7 @@ export default function Documents() {
 
       {loadError && <ErrorAlert>{loadError}</ErrorAlert>}
       {deleteError && <ErrorAlert>{deleteError}</ErrorAlert>}
-      {docs === null && !loadError && <p className="text-muted-foreground">Loading…</p>}
+      {docs === null && !loadError && <Loading />}
       {docs && docs.length === 0 && (
         <Empty>No documents yet. Drop a PDF or Markdown file above.</Empty>
       )}

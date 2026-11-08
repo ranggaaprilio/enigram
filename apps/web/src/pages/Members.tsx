@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { toast } from 'sonner'
 import { KeyRound, UserPlus } from 'lucide-react'
 import { useParams } from 'react-router'
 import { useAccess } from '../access'
@@ -82,11 +83,12 @@ export default function Members() {
   }, [admin, load])
 
   // True when the API took it; its refusal is shown above the table.
-  async function act(run: () => Promise<unknown>): Promise<boolean> {
+  async function act(run: () => Promise<unknown>, message?: string): Promise<boolean> {
     let done = false
     try {
       await run()
       setError(null)
+      if (message) toast.success(message)
       done = true
     } catch (e) {
       setError(messageOf(e))
@@ -152,7 +154,9 @@ export default function Members() {
                   <RoleSelect
                     label={`Role of ${m.name}`}
                     value={m.role}
-                    onChange={(role) => void act(() => setMember(m.name, role))}
+                    onChange={(role) =>
+                      void act(() => setMember(m.name, role), `${m.name} is now ${role}`)
+                    }
                   />
                 </TableCell>
                 <TableCell>
@@ -163,10 +167,14 @@ export default function Members() {
                         size="sm"
                         variant="soft-destructive"
                         onClick={() =>
-                          void act(() =>
+                          void act(
+                            () =>
+                              confirming.action === 'remove'
+                                ? removeMember(m.name)
+                                : revokeKey(m.name),
                             confirming.action === 'remove'
-                              ? removeMember(m.name)
-                              : revokeKey(m.name),
+                              ? `${m.name} removed`
+                              : `${m.name}'s key revoked`,
                           )
                         }
                       >
@@ -215,7 +223,7 @@ export default function Members() {
           icon={<UserPlus className="size-4" aria-hidden />}
           hint="A key that already works in another workspace."
           submit="Add"
-          onSubmit={(name, role) => act(() => setMember(name, role))}
+          onSubmit={(name, role) => act(() => setMember(name, role), `${name} added as ${role}`)}
         />
         <KeyForm
           title="Make a new key"

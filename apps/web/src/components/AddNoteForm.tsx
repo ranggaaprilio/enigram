@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { toast } from 'sonner'
 import { ChevronRight, Search } from 'lucide-react'
 import { useAccess } from '../access'
 import {
@@ -150,6 +151,7 @@ export default function AddNoteForm(props: {
         ...(proposed ? { proposed: true } : {}),
       })
       setText('')
+      toast.success(review ? 'Proposal saved for review' : 'Note saved')
       if (!props.fixedTarget) {
         setTarget(props.target ?? null)
         setQuery('') // ready for the next note

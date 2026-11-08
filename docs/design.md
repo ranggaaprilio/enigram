@@ -28,6 +28,18 @@ Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spe
 - Content is left-aligned next to the sidebar, at most 1140px wide, with 16px gutters on a phone.
 - Routes stay `/w/<workspace>/<page>`.
 
+## Page patterns (U2)
+
+- **Where you are**: the top bar's breadcrumb, `workspace / page / item` (a query, a symbol, a
+  note), each part a link back.
+- **Page header** (`PageHeader`): title, one sentence on what the page is for, the main action on
+  the right.
+- **Loading** (`Loading`): skeleton rows where the content will come, never a bare "Loading…".
+- **Empty** (`Empty`): what is missing and, when there is one, the next step as a button.
+- **Errors** (`ErrorAlert`) stay where they happened, next to what failed.
+- **Outcome of an action**: a toast at the bottom right (saved, deleted, queued); work that runs
+  on (jobs) also keeps its row on the page.
+
 ## Type
 
 Inter Variable (bundled), with the character variants `cv01 cv05 cv09 cv11 ss03` and tabular

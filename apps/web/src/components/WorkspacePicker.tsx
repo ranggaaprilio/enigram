@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { toast } from 'sonner'
 import { useLocation, useNavigate } from 'react-router'
 import { Plus } from 'lucide-react'
 import ErrorAlert from '@/components/ErrorAlert'
@@ -36,6 +37,7 @@ export default function WorkspacePicker(props: {
       const created = await createWorkspace(wanted)
       // Listed before navigating, so the shell knows the new name.
       props.onCreated(created)
+      toast.success(`Workspace ${created.name} created`)
       setOpen(false)
       setName('')
       setError(null)
@@ -83,7 +85,7 @@ export default function WorkspacePicker(props: {
         <form
           aria-label="New workspace"
           onSubmit={submit}
-          className="flex flex-col gap-2 rounded-lg border bg-background p-3"
+          className="flex flex-col gap-2 rounded-md border bg-background p-3"
         >
           <Label htmlFor="workspace-name">Workspace name</Label>
           <Input

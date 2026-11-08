@@ -47,6 +47,13 @@ const record: QueryRecord = {
 }
 
 describe('Trace', () => {
+  it('says what to do when there are no queries yet', async () => {
+    mockFetch({ 'GET /api/queries?limit=50': { body: [] } })
+    renderAt('/trace')
+    expect(await screen.findByText(/No queries yet/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Ask a question' })).toHaveAttribute('href', '/ask')
+  })
+
   it('lists queries with their outcome', async () => {
     mockFetch({
       'GET /api/queries?limit=50': {

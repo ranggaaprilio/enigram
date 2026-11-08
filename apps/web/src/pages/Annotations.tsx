@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { patchMessage } from '../toasts'
+import { toast } from 'sonner'
 import { useSearchParams } from 'react-router'
 import { WsLink } from '@/workspace'
 import { useAccess } from '../access'
@@ -19,6 +21,7 @@ import {
 } from '../api'
 import { ChevronRight, Network } from 'lucide-react'
 import Empty from '@/components/Empty'
+import Loading from '@/components/Loading'
 import ErrorAlert from '@/components/ErrorAlert'
 import AddNoteForm from '@/components/AddNoteForm'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -95,6 +98,7 @@ export default function Annotations() {
     try {
       await patchAnnotation(id, body)
       setError(null)
+      toast.success(patchMessage(body))
       await load()
     } catch (e) {
       setError(messageOf(e))
@@ -105,6 +109,7 @@ export default function Annotations() {
     try {
       await deleteAnnotation(id)
       setError(null)
+      toast.success('Note deleted')
       setHistory(({ [id]: _gone, ...rest }) => rest)
       await load()
     } catch (e) {
@@ -189,7 +194,7 @@ export default function Annotations() {
       )}
       {error && <ErrorAlert>{error}</ErrorAlert>}
       {notes === null ? (
-        <p className="text-muted-foreground">Loading…</p>
+        <Loading />
       ) : notes.length === 0 ? (
         <Empty>No annotations.</Empty>
       ) : (
