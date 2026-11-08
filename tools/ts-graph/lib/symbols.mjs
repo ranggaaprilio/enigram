@@ -1,9 +1,11 @@
-import { Node } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 import { bodyHash } from "./hash.mjs";
 import { relPath } from "./project.mjs";
 
 const MAX_SIGNATURE_CHARS = 300;
 const MAX_DECORATOR_CHARS = 200;
+// Express route registrations whose handler is written inline get a symbol of their own.
+export const HTTP_VERBS = ["get", "post", "put", "patch", "delete", "options", "head", "all"];
 
 /** Map key of a declaration node: its file and start offset. */
 export function declKey(node) {
@@ -45,10 +47,14 @@ function signature(node, name) {
 /**
  * Declarations of one file as symbol rows: classes and their methods, constructors and accessors,
  * interfaces and their method signatures, enums, type aliases, functions, top-level variables and
- * `export default` expressions.
+ * `export default` expressions. A class property whose value is a function (`getUsers = async
+ * (req, res) => {...}`) is a method. With `express`, an inline handler of a top-level route
+ * registration (`router.get("/articles", auth, async (req, res) => {...})`) is a function named
+ * `GET /articles`, so the route has a flow (the express adapter makes it the entry point).
+ * @param {{express?: boolean}} options
  * @returns {{row: object, node: import("ts-morph").Node}[]}
  */
-export function fileSymbols(root, sf) {
+export function fileSymbols(root, sf, { express = false } = {}) {
   const file = relPath(root, sf.getFilePath());
   const out = [];
   const seen = new Set();
@@ -98,6 +104,12 @@ export function fileSymbols(root, sf) {
     for (const accessor of [...cls.getGetAccessors(), ...cls.getSetAccessors()]) {
       add(accessor, `${name}.${accessor.getName()}`, "accessor", exported, name);
     }
+    for (const prop of cls.getProperties()) {
+      const init = prop.getInitializer();
+      if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
+        add(prop, `${name}.${prop.getName()}`, "method", exported, name);
+      }
+    }
   }
   for (const iface of sf.getInterfaces()) {
     const name = iface.getName();
@@ -123,6 +135,42 @@ export function fileSymbols(root, sf) {
   for (const assignment of sf.getExportAssignments()) {
     if (assignment.isExportEquals()) continue;
     add(assignment, "default", "variable", true);
+  }
+  if (express) {
+    for (const { handler, verb, path } of inlineRouteHandlers(sf)) {
+      add(handler, `${verb.toUpperCase()} ${path}`, "function", false);
+    }
+  }
+  return out;
+}
+
+/** A string literal's value, or null. */
+function pathLiteral(node) {
+  return node && (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node))
+    ? node.getLiteralValue()
+    : null;
+}
+
+/**
+ * Route registrations at the top level of a file (`x.get("/p", ..., (req, res) => {...})`, also
+ * inside a `.use(...).get(...)` chain) whose last argument is a function written inline.
+ * @returns {{handler: import("ts-morph").Node, verb: string, path: string, call: import("ts-morph").CallExpression}[]}
+ */
+export function inlineRouteHandlers(sf) {
+  const out = [];
+  for (const statement of sf.getStatements()) {
+    if (!Node.isExpressionStatement(statement) && !Node.isExportAssignment(statement)) continue;
+    const calls = [statement.getExpression(), ...statement.getExpression().getDescendantsOfKind(SyntaxKind.CallExpression)];
+    for (const call of calls) {
+      if (!Node.isCallExpression(call)) continue;
+      const callee = call.getExpression();
+      if (!Node.isPropertyAccessExpression(callee) || !HTTP_VERBS.includes(callee.getName())) continue;
+      const args = call.getArguments();
+      const path = pathLiteral(args[0]);
+      const handler = args.at(-1);
+      if (path === null || args.length < 2 || !(Node.isArrowFunction(handler) || Node.isFunctionExpression(handler))) continue;
+      out.push({ handler, verb: callee.getName(), path, call });
+    }
   }
   return out;
 }

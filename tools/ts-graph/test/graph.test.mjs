@@ -301,3 +301,35 @@ test("monorepo: --tsconfig still parses only the project asked for", () => {
   assert.deepEqual(one.report.projects.map((p) => p.tsconfig), ["packages/lib/tsconfig.json"]);
   assert.equal(one.report.files, 2);
 });
+
+const EXPRESS = buildGraph(path.join(HERE, "fixture-express"), { diagnostics: false });
+
+test("Express: routes with their mount paths, across files, chains and default exports", () => {
+  const rows = (symbol, route) => ({ symbol, kind: "http_route", route, framework: "express", version: "" });
+  assert.deepEqual(EXPRESS.entrypoints, [
+    rows("src/articles.ts#DELETE /articles/:slug", "DELETE /api/articles/:slug"),
+    rows("src/main.ts#GET /", "GET /"),
+    rows("src/articles.ts#GET /articles", "GET /api/articles"), // Router().use("/api", api), api = Router().use(articles)
+    rows("src/users/userController.ts#UserController.getUser", "GET /users/:id"),
+    rows("src/users/userController.ts#UserController.create", "POST /users"),
+  ]);
+  assert.deepEqual(EXPRESS.report.adapters, { express: 5 });
+  assert.equal(EXPRESS.report.fallback, null);
+});
+
+test("Express: an inline handler is a symbol, so the route has a flow", () => {
+  const handler = EXPRESS.symbols.find((s) => s.id === "src/articles.ts#GET /articles");
+  assert.equal(handler.kind, "function");
+  assert.equal(handler.exported, false);
+  const calls = (src) => EXPRESS.edges.filter((e) => e.kind === "calls" && e.src === src).map((e) => e.dst);
+  assert.deepEqual(calls("src/articles.ts#GET /articles"), ["src/service.ts#list"]);
+  // A class property holding a function is a method, and a named handler resolves to it.
+  const getUser = EXPRESS.symbols.find((s) => s.id === "src/users/userController.ts#UserController.getUser");
+  assert.equal(getUser.kind, "method");
+  assert.deepEqual(calls(getUser.id), ["src/service.ts#list"]);
+});
+
+test("Express: the adapter stays off, and inline handlers are no symbols, without express", () => {
+  assert.ok(!graph.entrypoints.some((e) => e.framework === "express"));
+  assert.ok(!nextGraph.symbols.some((s) => /^[A-Z]+ \//.test(s.qualified_name)));
+});
