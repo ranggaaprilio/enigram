@@ -504,6 +504,7 @@ def test_mcp_over_http_lists_the_tools(keyed_env):
         "list_documents",
         "add_memory",
         "search_memory",
+        "delete_memory",
         "what_changed_since",
         "get_annotations",
         "propose_annotation",

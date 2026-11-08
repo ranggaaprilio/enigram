@@ -128,7 +128,7 @@ CLI (`enigram principals ...`) bekerja langsung ke DB dan setara `owner`.
 |---|---|---|
 | `GET /stats` (item 6) | `viewer` | Panel token per key hanya untuk `admin`; lintas workspace untuk `owner` |
 | `GET /memories`, `GET /memories/{id}` (item 7) | `contributor` (memory sendiri) / `maintainer` (semua key) | Keputusan A, 2026-11-07 |
-| `DELETE /memories/{id}` (item 7) | `contributor` (memory sendiri) / `maintainer` (key lain: belum diputuskan) | |
+| `DELETE /memories/{id}` (item 7) | `contributor` (memory sendiri) / `maintainer` (key lain) | Diputuskan 2026-11-08; tanpa retensi otomatis |
 | `POST /memories/{id}/note` (item 7) | `contributor` | Menjadi proposal |
 | Chat (item 8) | `viewer` | Siapa boleh melihat sesi orang lain: belum diputuskan |
 
@@ -147,7 +147,7 @@ keduanya dicek terhadap keanggotaan yang sama dengan API.
 | `get_conflicts` | `viewer` | |
 | `search_memory` | `contributor` | Memory key sendiri saja, seperti sekarang |
 | `add_memory` | `contributor` | |
-| `delete_memory` (item 7) | `contributor` | Memory key sendiri |
+| `delete_memory` (item 7) | `contributor` | Memory key sendiri; `maintainer` juga key lain, seperti HTTP |
 | `propose_annotation` | `contributor` | Selalu `proposed` |
 
 ## Migrasi (R1)

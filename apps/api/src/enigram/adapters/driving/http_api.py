@@ -60,6 +60,12 @@ from enigram.application.login import (
     sign_in,
     start_session,
 )
+from enigram.application.memory import (
+    delete_memory,
+    list_memories,
+    memory_detail,
+    memory_note,
+)
 from enigram.application.ports import Deps
 from enigram.application.querying import answer_question
 from enigram.application.repo_auth import check_token, save_token
@@ -166,6 +172,20 @@ class AnnotationCreate(BaseModel):
         "technical"
     )
     proposed: bool = False  # stay a proposal even for the owner (Code page claims about the code)
+
+
+class MemoryNoteCreate(BaseModel):
+    """A note made from an agent memory: always a proposal; its text defaults to the memory's."""
+
+    target_kind: Literal["symbol", "entity", "document"]
+    target_ref: Name
+    repo: int | None = None
+    text: str = ""
+    by: str = ""
+    scope: Literal["deps", "body"] = "deps"
+    note_type: Literal["business_rule", "expected_behavior", "known_issue", "technical"] = (
+        "technical"
+    )
 
 
 class ReviewCreate(BaseModel):
@@ -1048,6 +1068,86 @@ def create_app(
         """Notes waiting for a person (proposed, flagged for a re-check, orphaned, verified but
         conflicting), each with the summary it was written against and the summary now."""
         return jsonable_encoder(await review_queue(ws.cfg, ws.code_graph, ws.notes))
+
+    # Plan item 7, M1: agent memories for people. A maintainer sees every key's (docs/rbac.md);
+    # anyone else only their own, and another key's memory looks missing.
+    @app.get("/memories")
+    async def memories(
+        ws: Contributor,
+        request: Request,
+        key: Annotated[str | None, Query(max_length=64)] = None,
+        q: Annotated[str, Query(max_length=500)] = "",
+        mode: Literal["text", "semantic"] = "text",
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> list[dict[str, Any]]:
+        """Newest first, filtered by the words in `q`; with `mode=semantic`, nearest in
+        meaning to `q` with a score, as search_memory finds them. `key` narrows a
+        maintainer's list to one key."""
+        try:
+            found = await list_memories(
+                ws.cfg,
+                ws.memory,
+                _key_name(request),
+                _role(request),
+                owner=key,
+                q=q,
+                mode=mode,
+                limit=limit,
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return jsonable_encoder(found)
+
+    @app.get("/memories/{memory_id}")
+    async def memory(ws: Contributor, request: Request, memory_id: int) -> dict[str, Any]:
+        """One memory, whether its vector is of an older model, and the notes made from it."""
+        try:
+            found = await memory_detail(
+                ws.cfg, ws.memory, ws.notes, memory_id, _key_name(request), _role(request)
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return jsonable_encoder(found)
+
+    @app.delete("/memories/{memory_id}", status_code=204)
+    async def remove_memory(ws: Contributor, request: Request, memory_id: int) -> Response:
+        """Your own memory, or any key's for a maintainer; notes made from it stay."""
+        try:
+            await delete_memory(ws.memory, memory_id, _key_name(request), _role(request))
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return Response(status_code=204)
+
+    @app.post("/memories/{memory_id}/note", status_code=201)
+    async def note_from_memory(
+        ws: Contributor, request: Request, memory_id: int, body: MemoryNoteCreate
+    ) -> Any:
+        """A proposal made from the memory, for a maintainer to verify."""
+        new = NewAnnotation(
+            target_kind=body.target_kind,
+            target_ref=body.target_ref,
+            text=body.text,
+            repo_id=body.repo,
+            by=_by(request, body.by) or "",
+            scope=body.scope,
+            note_type=body.note_type,
+        )
+        try:
+            note = await memory_note(
+                ws.cfg,
+                ws.code_graph,
+                ws.notes,
+                ws.memory,
+                memory_id,
+                new,
+                _actor(request),
+                _key_name(request),
+                _role(request),
+                ws.decider,
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return _note_json(note)
 
     @app.post("/annotations", status_code=201)
     async def create_annotation_route(

@@ -21,6 +21,7 @@ from enigram.application.changes_feed import changes_since
 from enigram.application.code_agent import answer_with_agent, repo_name
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
+from enigram.application.memory import delete_memory as forget_memory
 from enigram.application.ports import (
     AnnotationRepository,
     CodeEmbedder,
@@ -483,6 +484,32 @@ def create_server(
             embed_secs=found.embed_secs,
             search_secs=found.search_secs,
         )
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=True,
+            idempotent_hint=True,
+            open_world_hint=False,
+        )
+    )
+    async def delete_memory(
+        memory_id: Annotated[int, Field(description="The id add_memory or search_memory gave.")],
+        ctx: Context[AppContext],
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
+    ) -> str:
+        """Delete one of your saved notes, for good (a wrong one, or one with something that
+        should not be kept). A note proposed from it stays."""
+        app = await _open(ctx, workspace, "contributor")
+        role = _caller(ctx).role_in(app.cfg.workspace) or "contributor"
+        try:
+            await forget_memory(memory_of(app), memory_id, _api_key(ctx), role)
+        except EnigramError as e:
+            raise ToolError(str(e)) from e
+        return f"Deleted memory {memory_id}"
 
     async def _repos(app: AppContext, repo: str | None) -> list[dict[str, Any]]:
         """The indexed repositories, or those with URL `repo` (every ref)."""

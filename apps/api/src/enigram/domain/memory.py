@@ -13,6 +13,10 @@ class Memory:
     text: str
     score: float  # cosine similarity: 1 = same direction
     created_at: datetime
+    # The key name that added it (None without keys) and the model of its vector; read for the
+    # Memory page (plan item 7), not shown to agents.
+    api_key: str | None = None
+    embed_model: str | None = None
 
 
 @dataclass(frozen=True)

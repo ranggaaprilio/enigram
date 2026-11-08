@@ -36,6 +36,12 @@ ALTER TABLE enigram_memories ADD COLUMN IF NOT EXISTS embed_model TEXT;
 """
 
 
+def _memory(row: asyncpg.Record, score: float = 0.0) -> Memory:
+    return Memory(
+        row["id"], row["text"], score, row["created_at"], row["api_key"], row["embed_model"]
+    )
+
+
 def _vector(values: Sequence[float]) -> str:
     """pgvector's text form, cast with ::vector, so no Python codec is needed."""
     return "[" + ",".join(f"{float(v):.7g}" for v in values) + "]"
@@ -108,8 +114,11 @@ class PostgresMemoryStore:
         log.info("[memory] added %d for %s", row["id"], api_key or "-")
         return row["id"], row["created_at"]
 
-    async def search(self, query: str, api_key: str | None, limit: int = 5) -> MemorySearch:
-        """The key's memories nearest to `query` by cosine distance, best first."""
+    async def search(
+        self, query: str, api_key: str | None, limit: int = 5, *, every_key: bool = False
+    ) -> MemorySearch:
+        """The key's memories (or with `every_key` every key's) nearest to `query` by cosine
+        distance, best first."""
         query = query.strip()
         if not query:
             raise EnigramError("Search for something")
@@ -121,13 +130,16 @@ class PostgresMemoryStore:
         embedded = time.perf_counter()
         # IS NOT DISTINCT FROM: without keys the name is NULL, and `= NULL` matches nothing.
         rows = await self.pool.fetch(
-            "SELECT id, text, created_at, 1 - (embedding <=> $3::vector) AS score "
-            "FROM enigram_memories WHERE workspace = $1 AND api_key IS NOT DISTINCT FROM $2 "
+            "SELECT id, text, created_at, api_key, embed_model, "
+            "1 - (embedding <=> $3::vector) AS score "
+            "FROM enigram_memories WHERE workspace = $1 "
+            "AND ($5 OR api_key IS NOT DISTINCT FROM $2) "
             "ORDER BY embedding <=> $3::vector, id LIMIT $4",
             self.workspace,
             api_key,
             vector,
             limit,
+            every_key,
         )
         done = time.perf_counter()
         log.info(
@@ -138,7 +150,7 @@ class PostgresMemoryStore:
             done - embedded,
         )
         return MemorySearch(
-            memories=[Memory(r["id"], r["text"], float(r["score"]), r["created_at"]) for r in rows],
+            memories=[_memory(r, float(r["score"])) for r in rows],
             embed_secs=round(embedded - start, 4),
             search_secs=round(done - embedded, 4),
         )
@@ -153,3 +165,41 @@ class PostgresMemoryStore:
             api_key,
         )
         return Memory(row["id"], row["text"], 0.0, row["created_at"]) if row else None
+
+    async def list(
+        self, api_key: str | None, *, every_key: bool = False, q: str = "", limit: int = 50
+    ) -> list[Memory]:
+        # No model guard: listing and text search read no vector.
+        rows = await self.pool.fetch(
+            "SELECT id, text, created_at, api_key, embed_model FROM enigram_memories "
+            "WHERE workspace = $1 AND ($2 OR api_key IS NOT DISTINCT FROM $3) "
+            "AND ($4 = '' OR strpos(lower(text), lower($4)) > 0) "
+            "ORDER BY id DESC LIMIT $5",
+            self.workspace,
+            every_key,
+            api_key,
+            q.strip(),
+            limit,
+        )
+        return [_memory(r) for r in rows]
+
+    async def find(self, memory_id: int) -> Memory | None:
+        row = await self.pool.fetchrow(
+            "SELECT id, text, created_at, api_key, embed_model FROM enigram_memories "
+            "WHERE workspace = $1 AND id = $2",
+            self.workspace,
+            memory_id,
+        )
+        return _memory(row) if row else None
+
+    async def delete(self, memory_id: int) -> bool:
+        status = await self.pool.execute(
+            "DELETE FROM enigram_memories WHERE workspace = $1 AND id = $2",
+            self.workspace,
+            memory_id,
+        )
+        if deleted := status.endswith(" 1"):
+            log.info("[memory] deleted %d", memory_id)
+            # The last memory of an old model may be gone: search may work again.
+            await self.ensure_schema()
+        return deleted

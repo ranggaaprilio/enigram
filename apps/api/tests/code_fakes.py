@@ -522,6 +522,7 @@ class FakeAnnotations:
         target_ref=None,
         via=None,
         conflict=None,
+        memory_id=None,
         limit=200,
     ):
         out = [
@@ -533,6 +534,7 @@ class FakeAnnotations:
             and (target_ref is None or n.target_ref == target_ref)
             and (via is None or n.via == via)
             and (conflict is None or n.conflict == conflict)
+            and (memory_id is None or n.memory_id == memory_id)
         ]
         return out[:limit]
 

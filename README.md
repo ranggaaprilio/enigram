@@ -229,17 +229,20 @@ Over stdio there is one workspace, `WORKSPACE`, and no roles.
 
 ### Agent memory
 
-Over HTTP two more tools let an agent keep its own notes between sessions:
+Over HTTP three more tools let an agent keep its own notes between sessions:
 
 - `add_memory(text)` saves one note (at most 8000 characters).
 - `search_memory(query, limit=5)` returns the notes closest in meaning, best first, each with
   a similarity `score` (1 = same meaning), plus `embed_secs` and `search_secs`.
+- `delete_memory(memory_id)` deletes one of its own notes for good; a note proposed from it stays.
 
-Notes belong to the API key that added them: another key never sees them (without
-`ENIGRAM_API_KEYS` everyone shares one set). They are stored in the table `enigram_memories`
-with the index's embedding model, not in the knowledge base: `query_knowledge_base` never
-answers from them and indexing never touches them. Over stdio the memory tools return an
-error, and there is no delete yet.
+Notes belong to the API key that added them: another agent key never sees them (without
+`ENIGRAM_API_KEYS` everyone shares one set). People do: over HTTP (`/memories`) a `maintainer`
+or `admin` of the workspace reads, searches and deletes every key's memories, so what agents
+remember can be audited; a `contributor` sees and deletes only its own. They are stored in the
+table `enigram_memories` with the index's embedding model, not in the knowledge base:
+`query_knowledge_base` never answers from them and indexing never touches them. Memories have
+no expiry; delete them by hand. Over stdio the memory tools return an error.
 
 Measure the latency against your Postgres and embedding model (scratch rows, removed after):
 
@@ -316,6 +319,10 @@ write the same index.
 | `POST /repos` `{"url", "ref"?, "token"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL or token; 409 already queued). `token`: a private repository's access token, see [Private repositories](#private-repositories) (needs `admin`) |
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set, whether it is `private` (has an access token) |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50) |
+| `GET /memories?q=&mode=text\|semantic&key=&limit=50` | Agent memories, newest first: the caller's own, or every key's for a `maintainer` (`key` narrows to one); `q` filters by words, or with `mode=semantic` ranks by meaning with a `score` as `search_memory` does. Each row has its key, embedding model and `stale_model` (an older model: never found by meaning) |
+| `GET /memories/{id}` | One memory and the notes made from it; another key's is 404 below `maintainer` |
+| `DELETE /memories/{id}` | Your own memory, or any key's for a `maintainer` (204); notes made from it stay, with its `memory_id` |
+| `POST /memories/{id}/note` `{target_kind, target_ref, repo?, text?, note_type?}` | A note made from the memory: always a proposal, its text the memory's unless given |
 | `GET /review` | The inbox: notes waiting for a person (proposed, flagged for a re-check, orphaned, verified but conflicting), each with the summary it was written against and the summary now |
 | `GET /stats?days=30` | The Dashboard's numbers for the last 1-90 UTC days: tokens per day and source against `DAILY_TOKEN_BUDGET` (per key for an `admin` only), questions per day with unanswered, errors and p50/p95 latency, answer routes and sentence origins, documents per status, repositories with size and last index, entry point ✓ coverage, notes per type and status, and what needs attention (inbox counts, doc-code conflicts, jobs failed or over budget in 7 days) |
 | `GET /stats/workspaces?days=30` | Owners only (403 otherwise): every workspace in one table with tokens today against `DAILY_TOKEN_BUDGET` (which each workspace has), tokens and questions over the period, notes waiting and jobs failed in 7 days, and the totals |

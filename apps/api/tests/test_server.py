@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -16,9 +17,10 @@ from enigram.domain.memory import Memory, MemorySearch
 class FakeMemoryStore:
     """In-memory MemoryRepository: a note scores 1 when it contains the query, else 0."""
 
-    def __init__(self, pool=None, workspace="default", embed=None, dim=1024):
+    def __init__(self, pool=None, workspace="default", embed=None, dim=1024, model="fake-embed"):
         self.notes: list[tuple[str | None, Memory]] = []  # (key name, memory)
         self.error: str | None = None
+        self.model = model  # the embed_model add() records
 
     async def ensure_schema(self):
         pass
@@ -26,21 +28,44 @@ class FakeMemoryStore:
     async def add(self, text, api_key):
         if self.error:
             raise EnigramError(self.error)
-        memory = Memory(len(self.notes) + 1, text, 0.0, datetime(2026, 10, 31, tzinfo=UTC))
+        memory = Memory(
+            len(self.notes) + 1,
+            text,
+            0.0,
+            datetime(2026, 10, 31, tzinfo=UTC),
+            api_key,
+            self.model,
+        )
         self.notes.append((api_key, memory))
         return memory.id, memory.created_at
 
-    async def search(self, query, api_key, limit=5):
+    async def search(self, query, api_key, limit=5, *, every_key=False):
         hits = [
-            Memory(m.id, m.text, 1.0 if query in m.text else 0.0, m.created_at)
+            dataclasses.replace(m, score=1.0 if query in m.text else 0.0)
             for key, m in self.notes
-            if key == api_key
+            if every_key or key == api_key
         ]
         hits.sort(key=lambda m: -m.score)
         return MemorySearch(hits[:limit], embed_secs=0.01, search_secs=0.002)
 
     async def get(self, memory_id, api_key):
         return next((m for key, m in self.notes if m.id == memory_id and key == api_key), None)
+
+    async def list(self, api_key, *, every_key=False, q="", limit=50):
+        rows = [
+            m
+            for key, m in reversed(self.notes)
+            if (every_key or key == api_key) and q.strip().lower() in m.text.lower()
+        ]
+        return rows[:limit]
+
+    async def find(self, memory_id):
+        return next((m for _, m in self.notes if m.id == memory_id), None)
+
+    async def delete(self, memory_id):
+        before = len(self.notes)
+        self.notes = [(k, m) for k, m in self.notes if m.id != memory_id]
+        return len(self.notes) < before
 
 
 @pytest.fixture
@@ -72,6 +97,7 @@ async def test_lists_tools_without_ctx_in_schema(cfg, fake_rag):
         "list_documents",
         "add_memory",
         "search_memory",
+        "delete_memory",
         "what_changed_since",
         "get_annotations",
         "propose_annotation",

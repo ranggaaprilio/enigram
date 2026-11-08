@@ -483,8 +483,8 @@ adalah melihat apa yang diingat agent. Sebelum RBAC ada, halaman hanya aktif unt
 | M2 | Halaman Memory | Daftar, filter, dua jenis pencarian, detail, hapus dan jadikan note bekerja; status kosong jelas; lebar 390px |
 | M3 | Ikut RBAC (item 2): siapa melihat memory siapa sesuai peran | Test tabel peran × aksi untuk memory |
 
-**Keputusan yang masih dibutuhkan.** Siapa boleh menghapus memory key lain; perlu batas umur
-memory (retensi) atau tidak.
+**Diputuskan 2026-11-08.** Memory key lain boleh dihapus oleh `maintainer` ke atas (sama dengan
+yang boleh membacanya); belum ada batas umur (retensi), hapus manual.
 
 ## 8. Chat interaktif multi-agent dengan fokus masing-masing
 

@@ -153,10 +153,30 @@ class MemoryRepository(Protocol):
 
     async def add(self, text: str, api_key: str | None) -> tuple[int, datetime]: ...
 
-    async def search(self, query: str, api_key: str | None, limit: int = 5) -> "MemorySearch": ...
+    async def search(
+        self, query: str, api_key: str | None, limit: int = 5, *, every_key: bool = False
+    ) -> "MemorySearch":
+        """Nearest in meaning to `query`: this key's memories, or with `every_key` every key's
+        in the workspace (a maintainer on the Memory page)."""
+        ...
 
     async def get(self, memory_id: int, api_key: str | None) -> "Memory | None":
         """One memory of this key (score 0); None when missing or another key's."""
+        ...
+
+    async def list(
+        self, api_key: str | None, *, every_key: bool = False, q: str = "", limit: int = 50
+    ) -> list["Memory"]:
+        """Newest first, with their key and model: this key's, or with `every_key` every key's;
+        `q` keeps those whose text contains it (any case)."""
+        ...
+
+    async def find(self, memory_id: int) -> "Memory | None":
+        """One memory of any key in the workspace; the caller checks who may see it."""
+        ...
+
+    async def delete(self, memory_id: int) -> bool:
+        """False when there was none. Notes made from it keep their memory_id."""
         ...
 
 
@@ -226,6 +246,7 @@ class AnnotationRepository(Protocol):
         target_ref: str | None = None,
         via: str | None = None,
         conflict: bool | None = None,
+        memory_id: int | None = None,
         limit: int = 200,
     ) -> list["Annotation"]:
         """Newest first; `rejected` only when asked for by status."""
