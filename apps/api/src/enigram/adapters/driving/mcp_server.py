@@ -1,9 +1,9 @@
 """MCP server exposing the knowledge base to agents over stdio, or over HTTP when mounted by the
 API (`http_api.py`), which supplies its own knowledge engine and job store."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -13,6 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from enigram.adapters.driving.workspaces import WORKSPACE_HEADER
 from enigram.application.annotations import Proposal, resolve_symbol
 from enigram.application.annotations import propose_annotation as propose_note
 from enigram.application.budget import query_allowance
@@ -35,7 +36,7 @@ from enigram.application.querying import answer_question
 from enigram.application.routing import answer_routed, resolve_scope, scope_mode
 from enigram.bootstrap import build_deps
 from enigram.config import Config
-from enigram.domain.access import OPEN, at_least
+from enigram.domain.access import OPEN, Caller, at_least
 from enigram.domain.annotation import (
     ANNOTATION_MAX_CHARS,
     QUESTION_MAX_CHARS,
@@ -58,6 +59,12 @@ class AppContext:
     decider: DecisionProvider | None = None  # the abstain guard and the route; None skips them
     code_embedder: CodeEmbedder | None = None  # search_code's semantic channel; None = full text
     conflicts: ConflictRepository | None = None  # docs-vs-code results; needs postgres
+    cfg: Config | None = None  # this workspace's; None = the server's
+    deps: Deps | None = None
+    # Over HTTP: the adapters of another workspace, and the names of all. None on stdio, which
+    # serves only WORKSPACE.
+    open_workspace: Callable[[str], Awaitable["AppContext"]] | None = None
+    workspace_names: Callable[[], Awaitable[list[str]]] | None = None
 
 
 @dataclass
@@ -67,6 +74,13 @@ class AgentAnswer:
     found: bool  # false: the indexed documents do not answer the question
     # Retrieved chunks, only with include_context: the full graph context is ~20k tokens.
     context: list[ContextChunk] = field(default_factory=list)
+
+
+@dataclass
+class WorkspaceInfo:
+    name: str
+    role: str  # viewer | contributor | maintainer | admin
+    current: bool  # the one tools use without a `workspace` argument
 
 
 @dataclass
@@ -227,15 +241,17 @@ def _api_key(ctx: Context[AppContext]) -> str | None:
     return getattr(getattr(ctx.request_context.request, "state", None), "api_key", None)
 
 
-def _require(ctx: Context[AppContext], workspace: str, minimum: str) -> None:
-    """The role check of docs/rbac.md for a tool: the caller the API's auth middleware put on the
-    HTTP request; on stdio (no request) and without keys everyone acts as admin."""
-    caller = getattr(getattr(ctx.request_context.request, "state", None), "caller", OPEN)
-    role = caller.role_in(workspace)
-    if role is None:
-        raise ToolError(f"404: not a member of workspace {workspace}")
-    if not at_least(role, minimum):
-        raise ToolError(f"403: needs the {minimum} role in workspace {workspace} (yours: {role})")
+def _caller(ctx: Context[AppContext]) -> Caller:
+    """The caller the API's auth middleware put on the HTTP request; OPEN (everyone acts as
+    admin) on stdio and without keys."""
+    return getattr(getattr(ctx.request_context.request, "state", None), "caller", OPEN)
+
+
+def _connection_workspace(ctx: Context[AppContext]) -> str | None:
+    """The workspace of the connection: /mcp/w/<ws> or the X-Enigram-Workspace header."""
+    request = ctx.request_context.request
+    headers = getattr(request, "headers", None)
+    return (headers.get(WORKSPACE_HEADER, "").strip() or None) if headers else None
 
 
 def create_server(
@@ -268,6 +284,42 @@ def create_server(
 
     mcp = MCPServer("enigram", lifespan=lifespan or open_index)
 
+    async def _open(ctx: Context[AppContext], workspace: str | None, minimum: str) -> AppContext:
+        """The adapters of the workspace a tool call uses (its argument, else the connection's,
+        else the key's default, else the server's), after the role check of docs/rbac.md: 404
+        for a workspace the caller is no member of, as for one that does not exist."""
+        app = ctx.request_context.lifespan_context
+        caller = _caller(ctx)
+        name = caller.workspace_for(workspace or _connection_workspace(ctx), cfg.workspace)
+        role = caller.role_in(name)
+        if role is None:
+            raise ToolError(f"404: No workspace {name!r}")
+        if not at_least(role, minimum):
+            raise ToolError(f"403: needs the {minimum} role in workspace {name} (yours: {role})")
+        if app.open_workspace is None:
+            if name != cfg.workspace:
+                raise ToolError(f"404: No workspace {name!r}; this server serves {cfg.workspace}")
+        else:
+            try:
+                app = await app.open_workspace(name)
+            except NotFound as e:
+                raise ToolError(f"404: {e}") from e
+        return replace(app, cfg=app.cfg or cfg, deps=app.deps or deps)
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+    async def list_workspaces(ctx: Context[AppContext]) -> list[WorkspaceInfo]:
+        """The workspaces you can use, with your role in each. Every other tool takes a
+        `workspace` argument; without it, `current` is used (the connection's: /mcp/w/<ws> or
+        the X-Enigram-Workspace header, else your key's default)."""
+        app = ctx.request_context.lifespan_context
+        caller = _caller(ctx)
+        names = await app.workspace_names() if app.workspace_names else [cfg.workspace]
+        current = caller.workspace_for(_connection_workspace(ctx), cfg.workspace)
+        return [
+            WorkspaceInfo(name, caller.role_in(name) or "", name == current)
+            for name in caller.workspaces(names)
+        ]
+
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
     async def query_knowledge_base(
         question: Annotated[str, Field(description="A full natural-language question in English.")],
@@ -286,6 +338,10 @@ def create_server(
             str | None,
             Field(description="The repository URL to ask about (makes auto a code question)."),
         ] = None,
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
     ) -> AgentAnswer:
         """Answer a question from the indexed documents (GraphRAG: knowledge graph + vector
         search), citing sources as [n] (`sources` maps each n to title, section and pages), or
@@ -293,13 +349,12 @@ def create_server(
         source), citing `path:start-end@sha` inline. By default (scope="auto") a router picks
         the source, or answers from both under two headings when unsure; pass scope="docs" or
         "code" to force one. Ask one specific question per call."""
-        _require(ctx, cfg.workspace, "viewer")
-        app = ctx.request_context.lifespan_context
+        app = await _open(ctx, workspace, "viewer")
         key = _api_key(ctx)
         cap = None
         if app.store:  # over HTTP: the daily and per-key caps; stdio is the owner's own run
             try:
-                cap = await query_allowance(app.store, cfg, key)
+                cap = await query_allowance(app.store, app.cfg, key)
             except BudgetExceeded as e:
                 raise ToolError(f"429: {e}") from e
         with metered(cap, "this query") as meter:
@@ -312,7 +367,7 @@ def create_server(
 
                 async def repo_names() -> list[str]:
                     repos = await graph.list_repos() if graph else []
-                    return [repo_name(r, cfg.repo_hosts) for r in repos]
+                    return [repo_name(r, app.cfg.repo_hosts) for r in repos]
 
                 result = await answer_routed(
                     question,
@@ -321,12 +376,12 @@ def create_server(
                     decider=app.decider,
                     repo_names=repo_names,
                     ask_code=lambda: answer_with_agent(
-                        cfg,
-                        deps.generator(),
+                        app.cfg,
+                        app.deps.generator(),
                         graph,
                         question,
                         repo_url=repo,
-                        model=cfg.llm_model,
+                        model=app.cfg.llm_model,
                         notes=app.notes,
                         decider=app.decider,
                         embedder=app.code_embedder,
@@ -354,15 +409,21 @@ def create_server(
         )
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
-    async def list_documents(ctx: Context[AppContext]) -> list[DocumentInfo]:
+    async def list_documents(
+        ctx: Context[AppContext],
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
+    ) -> list[DocumentInfo]:
         """List the documents in the knowledge base with their indexing status (indexed,
         queued, running, failed). Use it to see what can be asked about."""
-        _require(ctx, cfg.workspace, "viewer")
-        docs = await documents_overview(cfg, ctx.request_context.lifespan_context.store)
+        app = await _open(ctx, workspace, "viewer")
+        docs = await documents_overview(app.cfg, app.store)
         return [DocumentInfo(d["book"], d["title"], d["status"], d["pages"]) for d in docs]
 
-    def memory_of(ctx: Context[AppContext]) -> MemoryRepository:
-        memory = ctx.request_context.lifespan_context.memory
+    def memory_of(app: AppContext) -> MemoryRepository:
+        memory = app.memory
         if memory is None:
             raise ToolError("Memory needs the HTTP server (enigram api); stdio has no store")
         return memory
@@ -381,12 +442,16 @@ def create_server(
             Field(description=f"One self-contained note, at most {MEMORY_MAX_CHARS} characters."),
         ],
         ctx: Context[AppContext],
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
     ) -> MemoryAdded:
         """Save a note to recall later with search_memory. Notes are private to your API key
         and are not part of the knowledge base that query_knowledge_base answers from."""
-        _require(ctx, cfg.workspace, "contributor")
+        app = await _open(ctx, workspace, "contributor")
         try:
-            memory_id, created_at = await memory_of(ctx).add(text, _api_key(ctx))
+            memory_id, created_at = await memory_of(app).add(text, _api_key(ctx))
         except EnigramError as e:
             raise ToolError(str(e)) from e
         return MemoryAdded(memory_id, created_at.isoformat())
@@ -398,12 +463,16 @@ def create_server(
         limit: Annotated[
             int, Field(ge=1, le=MEMORY_SEARCH_MAX, description="Most notes to return.")
         ] = 5,
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
     ) -> MemoryResults:
         """Find your saved notes closest in meaning to `query`, best first, each with a
         similarity score (1 = same meaning). Only notes added with your API key are searched."""
-        _require(ctx, cfg.workspace, "contributor")
+        app = await _open(ctx, workspace, "contributor")
         try:
-            found = await memory_of(ctx).search(query, _api_key(ctx), limit)
+            found = await memory_of(app).search(query, _api_key(ctx), limit)
         except EnigramError as e:
             raise ToolError(str(e)) from e
         return MemoryResults(
@@ -443,14 +512,17 @@ def create_server(
         repo: Annotated[
             str | None, Field(description="Only this repository URL (default: all).")
         ] = None,
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
     ) -> ChangesSince:
         """What changed in the indexed code since a date or commit: the symbols added, removed
         or changed per repository (oldest first, at most 200), and the team notes flagged,
         orphaned, verified or marked as conflicting since then. Call it at the start of a task
         to know which earlier knowledge (yours or the answers you got) may be stale. A commit
         works only if it was indexed; otherwise pass a date."""
-        _require(ctx, cfg.workspace, "viewer")
-        app = ctx.request_context.lifespan_context
+        app = await _open(ctx, workspace, "viewer")
         repos = await _repos(app, repo)
         try:
             result = await changes_since(app.code_graph, app.notes, repos, since)
@@ -497,14 +569,17 @@ def create_server(
         repo: Annotated[
             str | None, Field(description="Only this repository URL (default: all).")
         ] = None,
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
     ) -> list[NoteInfo]:
         """The team notes on one code symbol with their trust state: status (verified,
         needs_verification when the code changed since, orphaned, proposed), the conflict flag
         when the note contradicts the code, who verified it and when it expires. Read them
         before relying on or changing the symbol; a note that is not plainly verified is a lead,
         not a fact."""
-        _require(ctx, cfg.workspace, "viewer")
-        app = ctx.request_context.lifespan_context
+        app = await _open(ctx, workspace, "viewer")
         notes = notes_of(app)
         out: list[NoteInfo] = []
         resolved = False
@@ -575,14 +650,17 @@ def create_server(
                 "changes; body: only the symbol's own body."
             ),
         ] = "deps",
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
     ) -> Proposed:
         """Propose a team note on a code symbol, an entity or a document: something you
         learned that the code or the documents do not say (behaviour in production, a pitfall,
         a reason). It is stored as `proposed` and is only cited in answers after a human
         verifier approves it; your own key can never approve it. Pass `question` with the
         question it answers, and `memory_id` to promote one of your saved memories."""
-        _require(ctx, cfg.workspace, "contributor")
-        app = ctx.request_context.lifespan_context
+        app = await _open(ctx, workspace, "contributor")
         notes = notes_of(app)
         repo_id, url = None, None
         if target_kind == "symbol":
@@ -608,7 +686,7 @@ def create_server(
         )
         try:
             note = await propose_note(
-                cfg,
+                app.cfg,
                 app.code_graph,
                 notes,
                 proposal,
@@ -626,6 +704,10 @@ def create_server(
         repo: Annotated[
             str | None, Field(description="Only this repository URL (default: all).")
         ] = None,
+        workspace: Annotated[
+            str | None,
+            Field(description="The workspace (see list_workspaces); default: the connection's."),
+        ] = None,
     ) -> Conflicts:
         """Possible contradictions: team notes marked as conflicting with the code, and passages
         of the indexed documents that may contradict the code (excerpt, then the symbols with
@@ -634,8 +716,7 @@ def create_server(
         contradicts the document, trust the code and say so. `runs` tells when detection last
         ran per repository; an empty `runs` means it never ran (ask the owner to run
         `enigram conflicts detect`)."""
-        _require(ctx, cfg.workspace, "viewer")
-        app = ctx.request_context.lifespan_context
+        app = await _open(ctx, workspace, "viewer")
         repos = await _repos(app, repo)
         view = await conflicts_view(
             app.code_graph, app.notes, app.conflicts, repos, all_notes=repo is None

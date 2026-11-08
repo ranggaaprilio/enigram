@@ -213,6 +213,20 @@ Over HTTP every call is stored like a `POST /query`: `GET /queries` shows it wit
 uploads. A missing or wrong key is a 401, which Claude Code reports as an authentication
 (OAuth) failure: check the key, not OAuth.
 
+One connection can use every workspace the key is a member of. A tool call works on the
+workspace in its `workspace` argument, else the connection's (`/mcp/w/<workspace>`, or the
+`X-Enigram-Workspace` header), else the key's default workspace. `list_workspaces` shows the
+key's workspaces, its role in each and which one is current. Queries, budget, memories and notes
+all belong to the workspace used; one the key is no member of answers like one that does not
+exist. To pin a connection to one workspace:
+
+```bash
+claude mcp add --transport http enigram-wb http://<host>:8080/mcp/w/whiteboard \
+  --header "Authorization: Bearer <key>"
+```
+
+Over stdio there is one workspace, `WORKSPACE`, and no roles.
+
 ### Agent memory
 
 Over HTTP two more tools let an agent keep its own notes between sessions:
@@ -319,7 +333,7 @@ write the same index.
 | `POST /query` `{"question", "mode": "mix"\|"naive", "scope": "auto"\|"docs"\|"code", "repo"?}` | Answer with sources, chunks, entities and relations, plus its stored `id`; `scope` defaults to `auto` (the router picks code, documents or both; decision in `extra.route`), `"code"` asks the code agent (`mode` applies to the documents only, `repo` = a repository URL and makes `auto` a code question) |
 | `GET /queries?limit=50` | Recent queries, newest first, without their traces (`limit` 1-200) |
 | `GET /queries/{id}` | The stored trace of an earlier query |
-| `POST /mcp` | MCP over streamable HTTP (see [Over HTTP](#over-http-another-machine)) |
+| `POST /mcp`, `POST /mcp/w/<workspace>` | MCP over streamable HTTP; the second pins the connection to a workspace (see [Over HTTP](#over-http-another-machine)) |
 | `GET /graph/search?q=&limit=50` | Entities and relations whose name or description contains `q` |
 | `POST /graph/entity/edit` `{"name", "description"?, "entity_type"?}` | Queue an entity edit (202 + job) |
 | `POST /graph/relation/edit` `{"source", "target", "description"?, "keywords"?}` | Queue a relation edit |
@@ -334,7 +348,8 @@ write the same index.
 A request works on the workspace named in its `X-Enigram-Workspace` header (404 for an unknown
 name), and on the process `WORKSPACE` without one. Each workspace has its own documents, graph,
 repositories, notes, query log and daily budget; the files of a workspace other than the process
-one live in `data/workspaces/<name>/`. `/health` and `/mcp` stay on the process workspace; the
+one live in `data/workspaces/<name>/`. `/health` stays on the process workspace, `/mcp` picks one
+per tool call (see [Over HTTP](#over-http-another-machine)); the
 webhook finds its repository in any workspace. One worker runs the jobs of every registered
 workspace, oldest first, each with that workspace's files and index.
 
@@ -418,12 +433,15 @@ rotated key; roles set since then are kept. Keys and roles are managed without a
 uv run enigram principals list
 uv run enigram principals add-key qa-team --workspace whiteboard --role contributor  # prints the key once
 uv run enigram principals role laptop-b default viewer      # or `none` to remove the membership
+uv run enigram principals default laptop-b whiteboard        # used when a request names none
 uv run enigram principals owner laptop-b [--off]
 uv run enigram principals revoke qa-team                     # 401 from the next request on
 ```
 
-Keys are stored as SHA-256 hashes (table `principals`, roles in `workspace_members`). MCP over
-HTTP checks the same roles in the process workspace; MCP over stdio has none. Everyone in the web
+Keys are stored as SHA-256 hashes (table `principals`, roles in `workspace_members`). A key can
+be a member of several workspaces (`role` once per workspace); its default workspace is the one
+of `add-key` until `default` changes it, and must be one of its workspaces. MCP over HTTP checks
+the same roles in the workspace each tool call uses; MCP over stdio has none. Everyone in the web
 UI still shares the `web` key and its role until per-person login (roadmap item 2, R4).
 
 ### Web UI

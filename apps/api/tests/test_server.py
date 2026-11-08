@@ -67,6 +67,7 @@ async def test_lists_tools_without_ctx_in_schema(cfg, fake_rag):
         tools = (await client.list_tools()).tools
 
     assert [t.name for t in tools] == [
+        "list_workspaces",
         "query_knowledge_base",
         "list_documents",
         "add_memory",
@@ -76,15 +77,19 @@ async def test_lists_tools_without_ctx_in_schema(cfg, fake_rag):
         "propose_annotation",
         "get_conflicts",
     ]
+    assert tools[0].input_schema.get("properties", {}) == {}
+    tools = tools[1:]
     assert set(tools[0].input_schema["properties"]) == {
         "question",
         "include_context",
         "scope",
         "repo",
+        "workspace",
     }
-    assert tools[1].input_schema.get("properties", {}) == {}
-    assert set(tools[2].input_schema["properties"]) == {"text"}
-    assert set(tools[3].input_schema["properties"]) == {"query", "limit"}
+    assert all("workspace" in t.input_schema["properties"] for t in tools)
+    assert set(tools[1].input_schema["properties"]) == {"workspace"}
+    assert set(tools[2].input_schema["properties"]) == {"text", "workspace"}
+    assert set(tools[3].input_schema["properties"]) == {"query", "limit", "workspace"}
     assert tools[3].annotations.read_only_hint and not tools[2].annotations.read_only_hint
 
 
@@ -500,3 +505,16 @@ async def test_agent_tools_need_the_code_graph(cfg):
         ]:
             result = await client.call_tool(name, args)
             assert result.is_error and "STORAGE_BACKEND=postgres" in result.content[0].text
+
+
+async def test_stdio_serves_only_its_workspace(cfg, fake_rag):
+    async with Client(create_server(cfg)) as client:
+        listed = await client.call_tool("list_workspaces", {})
+        other = await client.call_tool("list_documents", {"workspace": "ws-a"})
+        own = await client.call_tool("list_documents", {"workspace": cfg.workspace})
+
+    assert listed.structured_content == {
+        "result": [{"name": cfg.workspace, "role": "admin", "current": True}]
+    }
+    assert other.is_error and "this server serves" in other.content[0].text
+    assert not own.is_error

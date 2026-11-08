@@ -121,6 +121,11 @@ def _build_parser() -> argparse.ArgumentParser:
     role.add_argument("name")
     role.add_argument("workspace")
     role.add_argument("role", help="viewer, contributor, maintainer, admin or none")
+    default = psub.add_parser(
+        "default", help="the workspace a key uses when a request or MCP connection names none"
+    )
+    default.add_argument("name")
+    default.add_argument("workspace")
     owner = psub.add_parser("owner", help="make a principal owner (admin everywhere)")
     owner.add_argument("name")
     owner.add_argument("--off", action="store_true", help="take the owner flag away")
@@ -480,14 +485,14 @@ async def _principals(cfg: Config, args: argparse.Namespace) -> int:
         known = {w["name"] for w in await store.list_workspaces()}
         command = args.principals_command
         workspace = getattr(args, "workspace", None) or cfg.workspace
-        if command in ("add-key", "role") and workspace not in known:
+        if command in ("add-key", "role", "default") and workspace not in known:
             raise EnigramError(f"No workspace {workspace!r}")
         if command == "list":
             for p, revoked, roles in await principals.list():
                 flags = [f for f, on in (("owner", p.owner), ("revoked", revoked)) if on]
                 shown = ", ".join(f"{w}={r}" for w, r in sorted(roles.items())) or "no workspace"
                 extra = f" [{', '.join(flags)}]" if flags else ""
-                print(f"{p.name} ({p.kind}){extra}: {shown}")
+                print(f"{p.name} ({p.kind}){extra}: {shown}; default {p.default_workspace}")
         elif command == "add-key":
             key = await access.add_key(principals, args.name, workspace, args.role)
             print(f"{args.name}: {args.role} in {workspace}. The key, shown only now:")
@@ -496,6 +501,9 @@ async def _principals(cfg: Config, args: argparse.Namespace) -> int:
             role = None if args.role == "none" else args.role
             await access.set_role(principals, args.name, workspace, role)
             print(f"{args.name}: {args.role} in {workspace}")
+        elif command == "default":
+            await access.set_default_workspace(principals, args.name, workspace)
+            print(f"{args.name}: default workspace {workspace}")
         elif command == "owner":
             await access.set_owner(principals, args.name, not args.off)
             print(f"{args.name}: {'no longer ' if args.off else ''}owner")

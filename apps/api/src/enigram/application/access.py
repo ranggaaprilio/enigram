@@ -80,6 +80,14 @@ async def set_role(
     await principals.set_role(workspace, principal.id, role)
 
 
+async def set_default_workspace(principals: PrincipalRepository, name: str, workspace: str) -> None:
+    """The workspace a key uses when a request names none; it must be a member there."""
+    principal = await _named(principals, name)
+    if not principal.owner and workspace not in await principals.roles(principal.id):
+        raise EnigramError(f"{name} is no member of {workspace}; give it a role there first")
+    await principals.set_default_workspace(principal.id, workspace)
+
+
 async def set_owner(principals: PrincipalRepository, name: str, owner: bool) -> None:
     await principals.set_owner((await _named(principals, name)).id, owner)
 
