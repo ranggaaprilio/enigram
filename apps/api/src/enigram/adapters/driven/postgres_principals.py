@@ -2,6 +2,7 @@
 one principal can be a member of several workspaces. Keys are stored as SHA-256 hashes."""
 
 import json
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -27,11 +28,26 @@ CREATE TABLE IF NOT EXISTS workspace_members (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (workspace, principal_id)
 );
+ALTER TABLE principals ADD COLUMN IF NOT EXISTS display_name TEXT;
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    principal_id BIGINT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sessions_expires ON sessions (expires_at);
 """
 
 
 def _principal(row: Any) -> Principal:
-    return Principal(row["id"], row["name"], row["kind"], row["is_owner"], row["default_workspace"])
+    return Principal(
+        row["id"],
+        row["name"],
+        row["kind"],
+        row["is_owner"],
+        row["default_workspace"],
+        row["display_name"],
+    )
 
 
 class PostgresPrincipals:
@@ -128,3 +144,38 @@ class PostgresPrincipals:
         return [
             (_principal(r), r["revoked_at"] is not None, dict(json.loads(r["roles"]))) for r in rows
         ]
+
+    async def is_revoked(self, principal_id: int) -> bool:
+        return bool(
+            await self.pool.fetchval(
+                "SELECT revoked_at IS NOT NULL FROM principals WHERE id = $1", principal_id
+            )
+        )
+
+    async def set_display_name(self, principal_id: int, display_name: str | None) -> None:
+        await self.pool.execute(
+            "UPDATE principals SET display_name = $2 WHERE id = $1", principal_id, display_name
+        )
+
+    async def create_session(
+        self, principal_id: int, token_hash: str, expires_at: datetime
+    ) -> None:
+        # Expired sessions go here, so the table holds only live ones and those of today.
+        await self.pool.execute("DELETE FROM sessions WHERE expires_at < now()")
+        await self.pool.execute(
+            "INSERT INTO sessions (token_hash, principal_id, expires_at) VALUES ($1, $2, $3)",
+            token_hash,
+            principal_id,
+            expires_at,
+        )
+
+    async def by_session(self, token_hash: str) -> Principal | None:
+        row = await self.pool.fetchrow(
+            "SELECT p.* FROM sessions s JOIN principals p ON p.id = s.principal_id "
+            "WHERE s.token_hash = $1 AND s.expires_at > now() AND p.revoked_at IS NULL",
+            token_hash,
+        )
+        return _principal(row) if row else None
+
+    async def delete_session(self, token_hash: str) -> None:
+        await self.pool.execute("DELETE FROM sessions WHERE token_hash = $1", token_hash)

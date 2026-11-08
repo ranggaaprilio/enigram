@@ -151,6 +151,7 @@ def test_me_lists_the_roles_and_a_revoked_key_stops_at_once(notes_env):
         "kind": "key",
         "owner": False,
         "default_workspace": "default",
+        "display_name": None,
     }
     assert me["roles"] == {"default": "contributor"}
     pid = next(r["id"] for r in store.principals.rows.values() if r["name"] == "laptop-a")

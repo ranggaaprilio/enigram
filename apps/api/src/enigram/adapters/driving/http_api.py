@@ -1,6 +1,8 @@
 """HTTP API: upload documents for the index worker, ask questions, read stored query traces."""
 
+import base64
 import hashlib
+import json
 import logging
 import os
 import re
@@ -11,11 +13,12 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field, SecretStr, StringConstraints, model_validator
@@ -44,6 +47,13 @@ from enigram.application.code_browse import (
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
+from enigram.application.login import (
+    end_session,
+    new_login,
+    session_caller,
+    sign_in,
+    start_session,
+)
 from enigram.application.ports import Deps
 from enigram.application.querying import answer_question
 from enigram.application.repo_auth import check_token, save_token
@@ -63,7 +73,15 @@ log = logging.getLogger(__name__)
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 
-OPEN_PATHS = frozenset({"/health"})
+# /auth/config tells the UI whether it can sign in; login and callback run before a session.
+OPEN_PATHS = frozenset({"/health", "/auth/config", "/auth/login", "/auth/callback"})
+SESSION_COOKIE = "enigram_session"
+LOGIN_COOKIE = "enigram_login"  # state, nonce and PKCE verifier between login and callback
+LOGIN_COOKIE_SECS = 600
+# Sent by the web UI on every call: a cross-site form cannot set it, so a write that rides on the
+# session cookie must carry it (SameSite=Lax already keeps the cookie off cross-site posts).
+CSRF_HEADER = "x-requested-with"
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # Outside Bearer auth: the push webhook carries its own signature (per-repository secret).
 OPEN_PATH_PATTERNS = (re.compile(r"^/repos/\d+/webhook$"),)
 SYMBOL_LOOKUP_MAX = 50
@@ -208,7 +226,8 @@ async def _save_upload(upload: UploadFile, path: Path) -> str:
 
 class ApiKeyMiddleware:
     """Every request but OPEN_PATHS needs `Authorization: Bearer <key>` of a principal that is
-    not revoked (ENIGRAM_API_KEYS, imported at start, or a key made with `enigram principals`).
+    not revoked (ENIGRAM_API_KEYS, imported at start, or a key made with `enigram principals` or
+    on the Members page), or the session cookie of a signed-in user (OIDC, R4).
 
     The principal's name goes to `scope["state"]["api_key"]` (`request.state.api_key`), so
     routes and MCP tools can log who asked without ever seeing the key, and its roles to
@@ -223,6 +242,14 @@ class ApiKeyMiddleware:
         scheme, _, token = header.partition(" ")
         return token.strip() if scheme.lower() == "bearer" else ""
 
+    @staticmethod
+    async def _refuse(scope: Scope, receive: Receive, send: Send, status: int, detail: str):
+        log.warning("[api] %s %s %s", status, scope["method"], scope["path"])
+        headers = {"WWW-Authenticate": "Bearer"} if status == 401 else None
+        await JSONResponse({"detail": detail}, status_code=status, headers=headers)(
+            scope, receive, send
+        )
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
         if (
@@ -232,17 +259,22 @@ class ApiKeyMiddleware:
         ):
             await self.app(scope, receive, send)
             return
-        headers = dict(scope["headers"])
-        key = self._bearer(headers.get(b"authorization", b"").decode("latin-1"))
-        caller = await resolve_key(scope["app"].state.principals, key) if key else None
+        request = Request(scope)
+        principals = scope["app"].state.principals
+        key = self._bearer(request.headers.get("authorization", ""))
+        if key:
+            caller = await resolve_key(principals, key)
+        else:
+            caller = await session_caller(principals, request.cookies.get(SESSION_COOKIE, ""))
+            if (
+                caller is not None
+                and scope["method"] not in SAFE_METHODS
+                and not request.headers.get(CSRF_HEADER)
+            ):
+                await self._refuse(scope, receive, send, 403, "Missing X-Requested-With header")
+                return
         if caller is None or caller.principal is None:
-            log.warning("[api] 401 %s %s", scope["method"], scope["path"])
-            response = JSONResponse(
-                {"detail": "Missing or invalid API key"},
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-            await response(scope, receive, send)
+            await self._refuse(scope, receive, send, 401, "Missing or invalid API key")
             return
         state = scope.setdefault("state", {})
         state["api_key"], state["caller"] = caller.principal.name, caller
@@ -268,6 +300,15 @@ def _mcp_workspace_path(app: ASGIApp) -> ASGIApp:
 
 def _key_name(request: Request) -> str | None:
     return getattr(request.state, "api_key", None)
+
+
+def _by(request: Request, given: str | None) -> str | None:
+    """The display name on a note or review: a signed-in user's own (it cannot be typed in for
+    someone else), else what the caller sent."""
+    p = _caller(request).principal
+    if p is not None and p.kind == "user":
+        return p.display_name or p.name
+    return given
 
 
 def _actor(request: Request) -> str:
@@ -400,7 +441,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if not cfg.api_keys:
+        if not cfg.api_keys and cfg.oidc is None:
             log.warning("[api] ENIGRAM_API_KEYS is not set: every route is open")
         store = await deps.open_store()
         try:
@@ -411,6 +452,7 @@ def create_app(
                 # Only the registry: every route reads its workspace's adapters from it.
                 app.state.workspaces = workspaces
                 app.state.principals = await deps.new_principals(store)
+                app.state.identity = deps.identity_provider()
                 if cfg.api_keys:
                     names = [w["name"] for w in await workspaces.list()]
                     await import_env_keys(app.state.principals, cfg, names)
@@ -421,13 +463,101 @@ def create_app(
             await store.close()
 
     app = FastAPI(title="enigram", lifespan=lifespan)
-    if cfg.api_keys:
+    if cfg.api_keys or cfg.oidc is not None:
         app.add_middleware(ApiKeyMiddleware)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
         # The process workspace: an open path must not tell which workspace names exist.
         return {"status": "ok", "workspace": cfg.workspace}
+
+    # Per-person login (docs/rbac.md, R4). Behind nginx these are /api/auth/...; the redirects
+    # go to paths of the web UI.
+
+    def _secure() -> bool:
+        return cfg.oidc is not None and cfg.oidc.redirect_url.startswith("https://")
+
+    def _back(to: str) -> str:
+        """A path of this site only: never `//host` or a full URL (no open redirect)."""
+        return to if to.startswith("/") and not to.startswith("//") and "\\" not in to else "/"
+
+    def _failed(message: str) -> RedirectResponse:
+        log.warning("[api] sign-in failed: %s", message)
+        response = RedirectResponse(f"/?{urlencode({'login_error': message})}", status_code=303)
+        response.delete_cookie(LOGIN_COOKIE, path="/")
+        return response
+
+    @app.get("/auth/config")
+    async def auth_config() -> dict[str, bool]:
+        """Whether the UI can sign people in (OIDC is set)."""
+        return {"login": cfg.oidc is not None}
+
+    @app.get("/auth/login")
+    async def login(request: Request, next: str = "/") -> RedirectResponse:
+        provider = request.app.state.identity
+        if provider is None:
+            raise HTTPException(404, "Sign-in is not set up (OIDC_ISSUER)")
+        start = new_login()
+        try:
+            url = await provider.authorize_url(start.state, start.nonce, start.verifier)
+        except EnigramError as e:
+            raise HTTPException(502, str(e)) from e
+        response = RedirectResponse(url, status_code=303)
+        kept = {**asdict(start), "next": _back(next)}
+        response.set_cookie(
+            LOGIN_COOKIE,
+            base64.urlsafe_b64encode(json.dumps(kept).encode()).decode(),
+            max_age=LOGIN_COOKIE_SECS,
+            path="/",
+            httponly=True,
+            secure=_secure(),
+            samesite="lax",  # sent on the provider's redirect back, a top-level GET
+        )
+        return response
+
+    @app.get("/auth/callback")
+    async def callback(
+        request: Request, code: str = "", state: str = "", error: str = ""
+    ) -> RedirectResponse:
+        provider = request.app.state.identity
+        if provider is None:
+            raise HTTPException(404, "Sign-in is not set up (OIDC_ISSUER)")
+        if error:
+            return _failed(f"The provider refused the sign-in ({error})")
+        try:
+            kept = json.loads(base64.urlsafe_b64decode(request.cookies.get(LOGIN_COOKIE, "")))
+            expected, nonce, verifier = kept["state"], kept["nonce"], kept["verifier"]
+        except (ValueError, KeyError, TypeError):
+            return _failed("The sign-in expired; try again")
+        if not code or not secrets.compare_digest(state, expected):
+            return _failed("The sign-in does not match this browser; try again")
+        try:
+            who = await provider.identity(code, verifier, nonce)
+            principal = await sign_in(request.app.state.principals, cfg, who)
+        except EnigramError as e:
+            return _failed(str(e))
+        assert cfg.oidc is not None
+        token = await start_session(request.app.state.principals, principal, cfg.oidc.session_days)
+        log.info("[api] %s signed in", principal.name)
+        response = RedirectResponse(_back(kept.get("next", "/")), status_code=303)
+        response.delete_cookie(LOGIN_COOKIE, path="/")
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            max_age=cfg.oidc.session_days * 86400,
+            path="/",
+            httponly=True,
+            secure=_secure(),
+            samesite="lax",
+        )
+        return response
+
+    @app.post("/auth/logout", status_code=204)
+    async def logout(request: Request) -> Response:
+        await end_session(request.app.state.principals, request.cookies.get(SESSION_COOKIE, ""))
+        response = Response(status_code=204)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
 
     @app.get("/workspaces")
     async def list_workspaces(request: Request) -> list[dict[str, Any]]:
@@ -449,6 +579,7 @@ def create_app(
                     "kind": p.kind,
                     "owner": p.owner,
                     "default_workspace": p.default_workspace,
+                    "display_name": p.display_name,
                 }
                 if p
                 else None
@@ -691,7 +822,7 @@ def create_app(
                 repo,
                 symbol_id,
                 _actor(request),
-                body.by if body else "",
+                _by(request, body.by if body else "") or "",
             )
         except EnigramError as e:
             raise _raise_http(e) from e
@@ -858,7 +989,7 @@ def create_app(
             target_ref=body.target_ref,
             text=body.text,
             repo_id=body.repo,
-            by=body.by,
+            by=_by(request, body.by) or "",
             owner=body.owner,
             scope=body.scope,
             verify_by=body.verify_by,
@@ -893,6 +1024,8 @@ def create_app(
         ws: Contributor, request: Request, annotation_id: int, body: AnnotationPatch
     ) -> dict[str, Any]:
         changes = body.model_dump(exclude_unset=True)
+        if "by" in changes:
+            changes["by"] = _by(request, changes["by"])
         try:
             note = await change_annotation(
                 ws.cfg,

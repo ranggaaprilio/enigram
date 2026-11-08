@@ -12,6 +12,7 @@ import {
   Network,
   StickyNote,
   Sun,
+  LogOut,
   Users,
   type LucideIcon,
 } from 'lucide-react'
@@ -39,7 +40,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { useAccess } from '../access'
-import type { Me, Role, Workspace } from '../api'
+import { logout, type Me, type Role, type Workspace } from '../api'
 import { useTheme, type Theme } from '../theme'
 import { useWorkspacePath } from '../workspace'
 
@@ -162,12 +163,15 @@ function UserMenu({ me, workspace }: { me: Me | null | undefined; workspace: str
   const [theme, setTheme] = useTheme()
 
   // Without keys the API is open and everyone acts as admin (docs/rbac.md).
-  const name = me?.principal?.name ?? (me ? 'Local' : 'Account')
+  const p = me?.principal
+  const name = p ? p.display_name || p.name : me ? 'Local' : 'Account'
   const role = me ? (me.principal ? me.roles[workspace] : 'admin') : undefined
-  const detail = me?.principal
-    ? me.principal.owner
-      ? 'Owner of every workspace'
-      : `API key, ${role ?? 'no role'} in ${workspace}`
+  const detail = p
+    ? p.kind === 'user'
+      ? `${p.name}${p.owner ? ', owner of every workspace' : ''}`
+      : p.owner
+        ? 'Owner of every workspace'
+        : `API key, ${role ?? 'no role'} in ${workspace}`
     : me
       ? 'No API keys set: open access'
       : null
@@ -208,6 +212,21 @@ function UserMenu({ me, workspace }: { me: Me | null | undefined; workspace: str
                 {theme === value && <Check className="ml-auto" aria-label="selected" />}
               </DropdownMenuItem>
             ))}
+            {p?.kind === 'user' && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() =>
+                    void logout()
+                      .catch(() => undefined) // signed out either way: the cookie is gone
+                      .finally(() => window.location.assign('/'))
+                  }
+                >
+                  <LogOut aria-hidden />
+                  Sign out
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     import networkx as nx
 
-    from enigram.domain.access import Principal
+    from enigram.domain.access import Identity, Principal
     from enigram.domain.annotation import Annotation, AnnotationEvent, SymbolReview
     from enigram.domain.answer import QueryResult
     from enigram.domain.chunk import ParsedBook
@@ -614,6 +614,34 @@ class PrincipalRepository(Protocol):
         """Every principal with whether it is revoked and its roles, by name."""
         ...
 
+    async def is_revoked(self, principal_id: int) -> bool: ...
+
+    async def set_display_name(self, principal_id: int, display_name: str | None) -> None: ...
+
+    # Web sessions of signed-in users (R4); the token itself is never stored, only its hash.
+    async def create_session(
+        self, principal_id: int, token_hash: str, expires_at: datetime
+    ) -> None: ...
+
+    async def by_session(self, token_hash: str) -> "Principal | None":
+        """The principal of a session not expired, unless revoked."""
+        ...
+
+    async def delete_session(self, token_hash: str) -> None: ...
+
+
+class IdentityProvider(Protocol):
+    """The login provider (OpenID Connect) the web UI's users sign in with."""
+
+    async def authorize_url(self, state: str, nonce: str, verifier: str) -> str:
+        """Where to send the browser; `verifier` is the PKCE secret, sent as its S256 hash."""
+        ...
+
+    async def identity(self, code: str, verifier: str, nonce: str) -> "Identity":
+        """Redeems the callback's code and checks the ID token (signature, issuer, audience,
+        expiry, nonce); EnigramError when anything does not hold."""
+        ...
+
 
 @dataclass
 class Deps:
@@ -645,3 +673,5 @@ class Deps:
     # the code embedder (CODE_EMBED_MODEL): index-time vectors and search_code queries
     code_embedder: Callable[[], CodeEmbedder]
     query_budget: dict[str, int]  # the engine's retrieval token caps, recorded in eval reports
+    # The OIDC login provider (R4); None without OIDC_ISSUER.
+    identity_provider: Callable[[], "IdentityProvider | None"] = lambda: None

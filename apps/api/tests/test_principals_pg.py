@@ -51,3 +51,26 @@ async def test_keys_roles_owner_and_revocation(principals):
     assert await repo.by_key_hash(f"new-{tag}") is None
     (row,) = [r for r in await repo.list() if r[0].name == name]
     assert (row[1], row[2]) == (True, {"default": "contributor"})
+
+
+async def test_user_sessions_expire_and_end_with_revocation(principals):
+    from datetime import UTC, datetime, timedelta
+
+    repo, tag = principals
+    user = await repo.create(f"ann@example.com-{tag}", "user", None, "default")
+    await repo.set_display_name(user.id, "Ann Lee")
+    soon, gone = datetime.now(UTC) + timedelta(days=1), datetime.now(UTC) - timedelta(seconds=1)
+    await repo.create_session(user.id, f"live-{tag}", soon)
+    await repo.create_session(user.id, f"old-{tag}", gone)
+
+    found = await repo.by_session(f"live-{tag}")
+    assert (found.name, found.kind, found.display_name) == (user.name, "user", "Ann Lee")
+    assert await repo.by_session(f"old-{tag}") is None
+    await repo.delete_session(f"live-{tag}")
+    assert await repo.by_session(f"live-{tag}") is None
+
+    await repo.create_session(user.id, f"again-{tag}", soon)
+    assert await repo.is_revoked(user.id) is False
+    await repo.revoke(user.id)
+    assert await repo.is_revoked(user.id) is True
+    assert await repo.by_session(f"again-{tag}") is None

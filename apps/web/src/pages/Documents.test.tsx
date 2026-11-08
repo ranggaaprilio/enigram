@@ -146,7 +146,10 @@ describe('Documents', () => {
     await user.click(await screen.findByRole('button', { name: 'Delete paper' }))
     await user.click(screen.getByRole('button', { name: 'Yes' }))
 
-    expect(fetch).toHaveBeenCalledWith('/api/documents/paper', { method: 'DELETE' })
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/documents/paper',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
     expect(await screen.findByText('deleting')).toHaveClass('status-deleting')
     expect(screen.queryByRole('button', { name: 'Delete paper' })).not.toBeInTheDocument()
 

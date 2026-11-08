@@ -1,9 +1,18 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router'
 import { accessOf, AccessProvider } from './access'
-import { getHealth, getMe, listWorkspaces, setWorkspace, type Me, type Workspace } from './api'
+import {
+  ApiError,
+  getHealth,
+  getMe,
+  listWorkspaces,
+  setWorkspace,
+  type Me,
+  type Workspace,
+} from './api'
 import AppSidebar, { NAV } from './components/AppSidebar'
 import Empty from './components/Empty'
+import SignIn from './components/SignIn'
 import { Separator } from './components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar'
 import Annotations from './pages/Annotations'
@@ -59,6 +68,7 @@ function WorkspaceShell({ home }: { home: string }) {
 
   // undefined while loading, null when /me could not be read (then the API alone decides)
   const [me, setMe] = useState<Me | null | undefined>(undefined)
+  const [signedOut, setSignedOut] = useState(false) // /me said 401: no session and no key
 
   useEffect(() => {
     listWorkspaces()
@@ -66,7 +76,10 @@ function WorkspaceShell({ home }: { home: string }) {
       .catch(() => setWorkspaces(null))
     getMe()
       .then(setMe)
-      .catch(() => setMe(null))
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 401) setSignedOut(true)
+        setMe(null)
+      })
   }, [])
 
   useEffect(() => {
@@ -78,6 +91,8 @@ function WorkspaceShell({ home }: { home: string }) {
 
   // When the list could not be loaded, let the pages show their own errors.
   const known = usable && (workspaces === null || !!workspaces?.some((w) => w.name === workspace))
+
+  if (signedOut) return <SignIn />
 
   // /w/<ws>/<page>/...: the page shown in the top bar.
   const page = PAGE_LABELS[pathname.split('/')[3] ?? ''] ?? ''

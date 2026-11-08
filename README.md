@@ -446,13 +446,36 @@ uv run enigram principals revoke qa-team                     # 401 from the next
 Keys are stored as SHA-256 hashes (table `principals`, roles in `workspace_members`). A key can
 be a member of several workspaces (`role` once per workspace); its default workspace is the one
 of `add-key` until `default` changes it, and must be one of its workspaces. MCP over HTTP checks
-the same roles in the workspace each tool call uses; MCP over stdio has none. Everyone in the web
-UI still shares the `web` key and its role until per-person login (roadmap item 2, R4).
+the same roles in the workspace each tool call uses; MCP over stdio has none. Without sign-in
+(below) everyone in the web UI shares the `web` key and its role.
 
 The web UI follows the role from `GET /me`: actions the role may not take are hidden (the API still
 checks each one), *New workspace* shows only for an owner, and an admin gets **Settings → Members**
 to change roles, add an existing key, make a new key (shown once) and revoke keys, the same as
 `enigram principals` but per workspace.
+
+#### Sign-in
+
+With an OpenID Connect provider set (`OIDC_*` in `.env.example`), each person signs in to the
+web UI with their work account instead of sharing the `web` key:
+
+1. Register a web application at the provider (Google Cloud console, Microsoft Entra *App
+   registrations*, Keycloak, ...) with the redirect URL `https://<web host>/api/auth/callback`,
+   and put its issuer, client id and secret in `.env`. For Entra use the tenant's issuer
+   (`https://login.microsoftonline.com/<tenant id>/v2.0`), not `common`.
+2. `OIDC_ALLOWED_DOMAINS` lists the email domains that may sign in (`*` for every account of a
+   provider that is already one organisation's). It is required: with Google, any Google
+   account could otherwise sign in.
+3. Leave `ENIGRAM_WEB_KEY` empty and set `WEB_HOST`, `WEB_ORIGIN` (and `WEB_BIND=0.0.0.0` to
+   publish the port, ideally behind TLS: the session cookie is `Secure` when the redirect URL is
+   https).
+
+The first sign-in makes the person a principal of kind `user` named by their email, a `viewer` of
+`WORKSPACE`; an admin raises the role on Members (an email works in *Add an existing key*). Make
+the first owner after their first sign-in with `uv run enigram principals owner <email>`. A
+session lasts `SESSION_DAYS` (7) and ends at *Sign out* in the account menu or when the person is
+revoked. Notes and ✓ reviews then carry the person's name from the provider, not a typed one.
+API keys keep working beside sign-in, for agents and scripts.
 
 ### Web UI
 
@@ -494,8 +517,8 @@ Pages live under `/w/<workspace>/…` (old links such as `/code?repo=1` open the
 The sidebar picks a workspace (or creates one, for an owner); every request then carries
 `X-Enigram-Workspace`.
 
-The UI has no login: nginx adds `ENIGRAM_WEB_KEY` to every `/api` call, so the browser never
-sees a key, and the port stays bound to localhost. Open it as `http://localhost:3000` or `http://127.0.0.1:3000`: nginx
+Without [sign-in](#sign-in), nginx adds `ENIGRAM_WEB_KEY` to every `/api` call, so the browser
+never sees a key, and the port stays bound to localhost. Open it as `http://localhost:3000` or `http://127.0.0.1:3000`: nginx
 drops any other host name and refuses `/api` calls from other origins, so a web page cannot
 borrow that key (DNS rebinding, cross-site form posts). To work on the UI, run the API on port 8080
 and (with `ENIGRAM_WEB_KEY` exported when the API has keys):

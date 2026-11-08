@@ -168,3 +168,15 @@ Pemilik mengikuti semua usulan:
 3. **Trace:** `viewer` melihat trace semua key di workspace-nya.
 4. **`status: needs_verification`** boleh oleh `contributor`.
 5. **Upload dokumen:** minimal `maintainer`.
+
+## Login per orang (R4, 2026-11-08)
+
+- OIDC generik (authorization code + PKCE): `GET /auth/login`, `GET /auth/callback`,
+  `POST /auth/logout`, `GET /auth/config` (terbuka). ID token dicek penuh (tanda tangan JWKS,
+  issuer, audience, kedaluwarsa, nonce); email harus dari `OIDC_ALLOWED_DOMAINS`.
+- Login pertama: principal jenis `user` bernama email, `viewer` di workspace proses. Nama yang
+  sama dengan key ditolak; user yang dicabut ditolak.
+- Sesi: cookie `enigram_session` (HttpOnly, SameSite=Lax, Secure bila redirect https), hash-nya di
+  tabel `sessions`, `SESSION_DAYS` hari. Tulis lewat cookie wajib header `X-Requested-With`.
+- `by` pada note dan review: nama tampilan user dari penyedia, tidak bisa diisi orang lain.
+- Key API tetap berlaku di samping login (agent, skrip).

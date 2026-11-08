@@ -819,13 +819,19 @@ class FakePrincipals:
         self._Principal = Principal
         self.rows: dict[int, dict] = {}  # id -> fields
         self.members: dict[tuple[str, int], str] = {}  # (workspace, id) -> role
+        self.sessions: dict[str, tuple[int, object]] = {}  # token hash -> (id, expires_at)
 
     async def ensure_schema(self):
         pass
 
     def _out(self, row):
         return self._Principal(
-            row["id"], row["name"], row["kind"], row["owner"], row["default_workspace"]
+            row["id"],
+            row["name"],
+            row["kind"],
+            row["owner"],
+            row["default_workspace"],
+            row.get("display_name"),
         )
 
     async def by_key_hash(self, key_hash):
@@ -883,3 +889,24 @@ class FakePrincipals:
     async def list(self):
         rows = sorted(self.rows.values(), key=lambda r: r["name"])
         return [(self._out(r), r["revoked"], await self.roles(r["id"])) for r in rows]
+
+    async def is_revoked(self, principal_id):
+        return self.rows[principal_id]["revoked"]
+
+    async def set_display_name(self, principal_id, display_name):
+        self.rows[principal_id]["display_name"] = display_name
+
+    async def create_session(self, principal_id, token_hash, expires_at):
+        self.sessions[token_hash] = (principal_id, expires_at)
+
+    async def by_session(self, token_hash):
+        from datetime import UTC, datetime
+
+        found = self.sessions.get(token_hash)
+        if found is None or found[1] <= datetime.now(UTC):
+            return None
+        row = self.rows[found[0]]
+        return None if row["revoked"] else self._out(row)
+
+    async def delete_session(self, token_hash):
+        self.sessions.pop(token_hash, None)

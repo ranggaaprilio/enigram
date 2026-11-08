@@ -51,6 +51,15 @@ class Principal:
     kind: str
     owner: bool
     default_workspace: str | None
+    display_name: str | None = None  # a signed-in user's name from the provider
+
+
+@dataclass(frozen=True)
+class Identity:
+    """A person the login provider vouched for (an ID token's checked claims)."""
+
+    email: str  # lowercase; a user principal's name
+    name: str | None
 
 
 @dataclass(frozen=True)
