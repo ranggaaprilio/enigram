@@ -174,6 +174,7 @@ describe('App frame', () => {
     expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
       ['Dashboard', '/w/ws-a/dashboard'],
       ['Ask', '/w/ws-a/ask'],
+      ['Chat', '/w/ws-a/chat'],
       ['Trace', '/w/ws-a/trace'],
       ['Documents', '/w/ws-a/documents'],
       ['Knowledge', '/w/ws-a/knowledge'],

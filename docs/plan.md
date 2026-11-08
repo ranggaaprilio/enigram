@@ -16,7 +16,7 @@ Per 2026-11-08 malam.
 | 5 Note A1–A3 (form baru, Knowledge + Inbox, duplikat dan bulk) | Selesai | #38, #40, #42 |
 | 6 Dashboard D1–D3; Dashboard jadi halaman awal | Selesai | #44–#47, #52, #53 |
 | 7 Memory M1–M2 (M3 tercakup test M1) | Selesai | #49, #50 |
-| 8 Chat multi-agent | C1a (API) dikerjakan; C1b halaman Chat berikutnya, lalu C2–C4 | #55 |
+| 8 Chat multi-agent | C1 selesai (API #55, halaman Chat #56); berikutnya C2 (empat agent, `@mention`) | #55, #56 |
 | 9 Monorepo | Belum (bisa diuji pada `apps/web` repo ini) | — |
 | 10 Hapus note | Selesai | #29 |
 | 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |

@@ -527,7 +527,7 @@ URL on port 5173 instead. The passwords and client secret are fixed: never publi
 
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
 API. Its sidebar (a drawer on a phone, see [`docs/design.md`](docs/design.md)) groups the pages
-into *Overview* (Dashboard, the home page), *Answers* (Ask, Trace), *Library* (Documents, Knowledge, Graph, and Memory for contributors), *Review* (Inbox, with the
+into *Overview* (Dashboard, the home page), *Answers* (Ask, Chat, Trace), *Library* (Documents, Knowledge, Graph, and Memory for contributors), *Review* (Inbox, with the
 number of waiting notes for maintainers) and, for admins, *Settings* (Members); the account menu at its foot shows the key's role and picks the light, dark
 or system theme. **⌘K / Ctrl+K** (or *Search* in the top bar) opens a palette that goes to any
 page, switches workspace on the same page, or finds a feature, symbol, entity or document and
@@ -572,6 +572,12 @@ opens it, all from the keyboard:
   what `search_memory` would find and its score; a memory embedded with an older model is
   marked (a search by meaning never finds it). *Open* shows its full text and the notes made
   from it; *Make a note* turns it into a proposal; *Delete* removes it after a confirmation.
+- **Answers → Chat** (`/chat`, `/chat/<id>`, plan item 8): a conversation with the Technical
+  agent. The first question starts a session and names it; a follow-up sees the answers before
+  it. While an answer is on its way the page shows the agent's steps ("Reading a file…"); each
+  answer has its sources, its tokens and a link to its trace. The owner renames, shares (every
+  member may then read it, not write in it) or deletes a chat; Enter sends, Shift+Enter is a new
+  line.
 - **Overview → Dashboard** (`/dashboard`, `GET /stats`), the page `/` and a workspace open: one workspace over the last 7, 30 or 90
   days, in this order: what needs a person (proposals, re-checks, orphaned or conflicting notes,
   failed jobs; each opens its page), questions (asked, not answered, typical and slowest answer

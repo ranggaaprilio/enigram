@@ -9,6 +9,7 @@ import {
   FileText,
   History,
   MessageSquareText,
+  MessagesSquare,
   Monitor,
   Moon,
   Network,
@@ -65,6 +66,7 @@ export const NAV: { label: string; pages: Page[] }[] = [
     label: 'Answers',
     pages: [
       { to: '/ask', label: 'Ask', icon: MessageSquareText },
+      { to: '/chat', label: 'Chat', icon: MessagesSquare },
       { to: '/trace', label: 'Trace', icon: History },
     ],
   },
