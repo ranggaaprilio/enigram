@@ -440,8 +440,13 @@ export const deleteRelation = (source: string, target: string) =>
     { method: 'DELETE' },
   )
 
-export const indexRepo = (url: string, ref?: string) =>
-  sendJson<{ repo: string; job: Job }>('/repos', ref ? { url, ref } : { url })
+// `token`: a private repository's access token; the API stores it encrypted, never in the job.
+export const indexRepo = (url: string, ref?: string, token?: string) =>
+  sendJson<{ repo: string; job: Job }>('/repos', {
+    url,
+    ...(ref ? { ref } : {}),
+    ...(token ? { token } : {}),
+  })
 
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)

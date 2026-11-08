@@ -1,9 +1,11 @@
 """Bare partial clones the answering agent reads from: one per (url, ref), filled by index_repo and
 read at the indexed commit with `git show`, so the agent sees exactly the tree the graph was built
-from. Blobs are fetched on first read (--filter=blob:none); nothing from the repository is run."""
+from. Blobs are fetched on first read (--filter=blob:none); nothing from the repository is run.
+A private repository gets a full clone instead, so reading never needs its access token."""
 
 import fnmatch
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -17,11 +19,13 @@ from enigram.application.agent_loop import (
     READ_MAX_LINES,
     SKIP_DIRS,
 )
+from enigram.application.repo_auth import scrub
 from enigram.application.repo_sync import (
     REPO_CLONE_TIMEOUT_SECS,
     check_ref,
     check_repo_url,
     git_env,
+    git_failure,
 )
 from enigram.config import Config
 from enigram.domain.errors import EnigramError
@@ -46,7 +50,12 @@ def store_path(cfg: Config, url: str, ref: str | None) -> Path:
 
 
 def _run(
-    args: list[str], *, home: Path, check: bool = True, timeout: int = GIT_READ_TIMEOUT_SECS
+    args: list[str],
+    *,
+    home: Path,
+    check: bool = True,
+    timeout: int = GIT_READ_TIMEOUT_SECS,
+    token: str | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     command = args[2] if args[0] == "-C" else args[0]
     # A store may be owned by another user than the one running git (created by the CLI on the
@@ -58,33 +67,54 @@ def _run(
             [*_GIT, *trust, *args],
             capture_output=True,
             timeout=timeout,
-            env=git_env(home),
+            env=git_env(home, token),
             check=False,
         )
     except subprocess.TimeoutExpired as e:
         raise EnigramError(f"git {command} took longer than {timeout} s") from e
     if check and done.returncode != 0:
-        lines = done.stderr.decode(errors="replace").strip().splitlines()
+        stderr = done.stderr.decode(errors="replace")
+        if token:
+            raise git_failure(command, stderr, "the repository", token)
+        lines = scrub(stderr, token).strip().splitlines()
         raise EnigramError(f"git {command} failed: {lines[-1] if lines else done.returncode}")
     return done
 
 
+def _is_partial(dest: Path) -> bool:
+    args = ["-C", str(dest), "config", "remote.origin.promisor"]
+    done = _run(args, home=dest.parent, check=False)
+    return done.stdout.strip() == b"true"
+
+
 def ensure_store(
-    cfg: Config, url: str, ref: str | None, sha: str, *, source: str | None = None
+    cfg: Config,
+    url: str,
+    ref: str | None,
+    sha: str,
+    *,
+    source: str | None = None,
+    token: str | None = None,
 ) -> Path:
-    """Clone (bare, partial, single branch) or fetch, then check that `sha` is there. `source`
-    is where to clone from when it differs from `url` (tests: a file:// path)."""
+    """Clone (bare, single branch; partial unless `token` is given) or fetch, then check that
+    `sha` is there. With a token the store holds every blob, so the agent reads it without the
+    token; a partial store of a repository that became private is cloned again in full.
+    `source` is where to clone from when it differs from `url` (tests: a file:// path)."""
     dest = store_path(cfg, url, ref)
     home = dest.parent
     home.mkdir(parents=True, exist_ok=True)
+    timeout = REPO_CLONE_TIMEOUT_SECS
+    lazy = [] if token else [f"--filter={CLONE_FILTER}"]
+    if token and (dest / "HEAD").exists() and _is_partial(dest):
+        shutil.rmtree(dest)
     if not (dest / "HEAD").exists():
-        command = ["clone", "--bare", f"--filter={CLONE_FILTER}", "--single-branch", "--no-tags"]
+        command = ["clone", "--bare", *lazy, "--single-branch", "--no-tags"]
         if ref:
             command += ["--branch", ref]
-        _run([*command, "--", source or url, str(dest)], home=home, timeout=REPO_CLONE_TIMEOUT_SECS)
+        _run([*command, "--", source or url, str(dest)], home=home, timeout=timeout, token=token)
     else:
-        fetch = ["fetch", "--no-tags", f"--filter={CLONE_FILTER}", "origin", ref or "HEAD"]
-        _run(["-C", str(dest), *fetch], home=home, timeout=REPO_CLONE_TIMEOUT_SECS)
+        fetch = ["fetch", "--no-tags", *lazy, "origin", ref or "HEAD"]
+        _run(["-C", str(dest), *fetch], home=home, timeout=timeout, token=token)
     present = _run(["-C", str(dest), "cat-file", "-e", f"{sha}^{{commit}}"], home=home, check=False)
     if present.returncode != 0:
         raise EnigramError(f"{url} ({ref or 'default'}) has no commit {sha[:12]} after fetch")

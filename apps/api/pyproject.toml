@@ -10,6 +10,7 @@ authors = [
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "asyncpg>=0.30",
+    "cryptography>=50",
     "docling>=2.140.0,<3",
     "fastapi>=0.162.0",
     "httpx>=0.28.1",

@@ -155,7 +155,7 @@ def fake_sync(cfg, deps, monkeypatch):
         fake.code.append((graph, url, ref, limit, (root / "tsconfig.json").exists()))
         return {"symbols": 3, "summaries": {"flows": 1}, "commit_sha": "a" * 40}
 
-    def fake_clone(url, ref, dest):
+    def fake_clone(url, ref, dest, token=None):
         _tree(dest, fake.tree)
 
     async def fake_run_index(cfg, deps, folder, pages=None, only=None):
@@ -192,7 +192,9 @@ def fake_sync(cfg, deps, monkeypatch):
     monkeypatch.setattr(repos, "run_index", fake_run_index)
     monkeypatch.setattr(repos, "index_code", fake_index_code)
     monkeypatch.setattr(
-        repo_store, "ensure_store", lambda cfg, url, ref, sha: cfg.repo_store / f"{sha[:4]}.git"
+        repo_store,
+        "ensure_store",
+        lambda cfg, url, ref, sha, **kw: cfg.repo_store / f"{sha[:4]}.git",
     )
     deps.open_engine = fake_open_engine
     monkeypatch.setattr(repos, "delete_document", fake_delete)
@@ -336,6 +338,7 @@ async def test_delete_repo_job_orphans_notes_and_removes_store(cfg):
     )
     store = repo_store.store_path(cfg, graph.repos[1]["url"], None)
     store.mkdir(parents=True)
+    graph.tokens[graph.repos[1]["url"]] = "sealed"
 
     result = await repos.delete_repo_job(cfg, graph, notes, 1)
 
@@ -345,7 +348,7 @@ async def test_delete_repo_job_orphans_notes_and_removes_store(cfg):
         "annotations_orphaned": 1,
         "store_removed": True,
     }
-    assert not store.exists() and graph.repos == {}
+    assert not store.exists() and graph.repos == {} and graph.tokens == {}
     assert (await notes.get(note.id)).status == "orphaned"
     with pytest.raises(EnigramError, match="No repository 1"):
         await repos.delete_repo_job(cfg, graph, notes, 1)

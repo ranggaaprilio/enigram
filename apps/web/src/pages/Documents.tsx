@@ -76,6 +76,7 @@ export default function Documents() {
   const [confirming, setConfirming] = useState<string | null>(null)
   const [repoUrl, setRepoUrl] = useState('')
   const [repoRef, setRepoRef] = useState('')
+  const [repoToken, setRepoToken] = useState('')
   const [repoJobs, setRepoJobs] = useState<RepoJob[]>([])
   const [repoError, setRepoError] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -133,7 +134,11 @@ export default function Documents() {
     event.preventDefault()
     const url = repoUrl.trim()
     try {
-      const { job } = await indexRepo(url, repoRef.trim() || undefined)
+      const { job } = await indexRepo(
+        url,
+        repoRef.trim() || undefined,
+        repoToken.trim() || undefined,
+      )
       setRepoJobs((list) => [
         { jobId: job.id, url, status: job.status, error: job.error, result: null },
         ...list,
@@ -141,6 +146,7 @@ export default function Documents() {
       setRepoError(null)
       setRepoUrl('')
       setRepoRef('')
+      setRepoToken('')
     } catch (e) {
       setRepoError(messageOf(e))
     }
@@ -282,7 +288,8 @@ export default function Documents() {
               <GitBranch className="size-4" /> Index a Git repository
             </Label>
             <CardDescription>
-              Markdown files on the branch are indexed and kept in sync.
+              Markdown files on the branch are indexed and kept in sync. A private repository
+              needs a read-only access token; it is stored encrypted.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -293,6 +300,19 @@ export default function Documents() {
                 onChange={(e) => setRepoUrl(e.target.value)}
                 placeholder="https://github.com/org/handbook"
               />
+              <div className="flex items-center gap-3">
+                <Label htmlFor="repo-token" className="shrink-0 text-muted-foreground">
+                  Access token
+                </Label>
+                <Input
+                  id="repo-token"
+                  type="password"
+                  autoComplete="off"
+                  value={repoToken}
+                  onChange={(e) => setRepoToken(e.target.value)}
+                  placeholder="only for a private repository"
+                />
+              </div>
               <div className="flex items-center gap-3">
                 <Label htmlFor="repo-ref" className="shrink-0 text-muted-foreground">
                   Branch or tag

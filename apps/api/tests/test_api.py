@@ -873,6 +873,33 @@ def test_delete_annotation_by_author_or_verifier(notes_env):
         assert trusted.get("/annotations", headers=web).json() == []
 
 
+def test_private_repo_token_is_stored_sealed_and_never_queued(notes_env, monkeypatch):
+    from enigram.application.repo_auth import new_key
+
+    client, store, graph, _, build = notes_env
+    web = _bearer(WEB_KEY)
+    url, token = "https://github.com/org/app", "github_pat_11SECRETsecret0123"
+    body = {"url": url, "token": token}
+
+    refused = client.post("/repos", json=body, headers=web)
+    assert refused.status_code == 403 and "ANNOTATION_VERIFIERS" in refused.json()["detail"]
+    with build("web") as trusted:
+        no_key = trusted.post("/repos", json=body, headers=web)
+        assert no_key.status_code == 422 and "REPO_CREDENTIALS_KEY" in no_key.json()["detail"]
+    monkeypatch.setenv("REPO_CREDENTIALS_KEY", new_key())
+    with build("web") as trusted:
+        bad = trusted.post("/repos", json={"url": url, "token": "abc\r\nX: y"}, headers=web)
+        assert bad.status_code == 422 and "X: y" not in bad.text
+        assert graph.tokens == {} and store.jobs == []
+
+        assert trusted.post("/repos", json=body, headers=web).status_code == 202
+        (repo,) = trusted.get("/repos", headers=web).json()
+    assert repo["private"] is True
+    assert token not in graph.tokens[url]
+    (job,) = store.jobs
+    assert job.payload == {"url": url, "api_key": "web"} and token not in str(job.payload)
+
+
 def test_repos_symbols_secret_and_delete(notes_env):
     client, store, _, _, _ = notes_env
     web = _bearer(WEB_KEY)

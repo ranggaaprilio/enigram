@@ -300,8 +300,8 @@ write the same index.
 | `POST /documents` (multipart `file`) | Save a PDF/Markdown file and queue it (202). 200 if already indexed unchanged; 409 if a different version is indexed or queued |
 | `GET /documents` | Indexed and queued documents with status |
 | `DELETE /documents/{book}` | Queue deleting a document: its index entries, parsed files and uploaded file (202; 404 unknown; 409 while it has a job) |
-| `POST /repos` `{"url", "ref"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL; 409 already queued) |
-| `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set |
+| `POST /repos` `{"url", "ref"?, "token"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL or token; 409 already queued). `token`: a private repository's access token, see [Private repositories](#private-repositories) (403 unless the key is in `ANNOTATION_VERIFIERS`) |
+| `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set, whether it is `private` (has an access token) |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50), for the annotation form |
 | `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each and whether their summary has a current ✓ (`reviewed`), the first 500 whose route or symbol name contains `q`, plus `total` |
 | `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |
@@ -448,7 +448,7 @@ The UI needs Node 22.22 or newer (`.node-version`).
 
 ### Index a Git repository
 
-The Documents page (or `POST /repos`) indexes the Markdown files (`.md`, `.markdown`) of a public
+The Documents page (or `POST /repos`) indexes the Markdown files (`.md`, `.markdown`) of a
 Git repository and, when it has a root `tsconfig.json`, its code graph (below): the worker makes a shallow clone of the default branch or the given branch or tag
 (names only, not commit SHAs), copies each file to `data/books` as `<repo>--<path>.md` (e.g.
 `org-handbook--docs--onboarding`) and indexes them like uploads. Documents from a repository say
@@ -460,7 +460,7 @@ document](#replacing-a-document), manual graph edits on entities they share may 
 uploaded document is never overwritten: a name clash fails the job.
 
 Only `https://` URLs on the hosts in `REPO_HOSTS` are cloned (default `github.com, gitlab.com,
-bitbucket.org, codeberg.org`), without credentials, so private repositories are not supported.
+bitbucket.org, codeberg.org`). A private repository needs an access token, see below.
 Symlinks, files over 1 MB and anything in `.git` are skipped; a repository with more than 500
 Markdown files is refused. The image installs `git`; without Docker, `git` must be on the `PATH`.
 
@@ -527,6 +527,26 @@ sent to DeepSeek and Voyage does not change.
 `DELETE /repos/{id}` removes the code graph and the clone; the repository's annotations become
 `orphaned`, never deleted. Its Markdown documents stay (delete them with `DELETE
 /documents/{book}`).
+
+### Private repositories
+
+Give a read-only personal access token in the Documents page ("Access token") or as `token` in
+`POST /repos`: a GitHub fine-grained token with *Contents: read* on that repository, or a GitLab
+token with `read_repository`. It needs `REPO_CREDENTIALS_KEY` (make one with
+`uv run enigram repo-key`, put it in `.env`) and, when `ENIGRAM_API_KEYS` is set, a key in
+`ANNOTATION_VERIFIERS`.
+
+- The token is kept per repository URL and workspace (table `repo_credentials`), encrypted with
+  `REPO_CREDENTIALS_KEY` (Fernet). It is never in the job payload, a log line, an API response
+  or a git config file: git receives it as an HTTP header through environment variables, and git
+  errors are scrubbed of it.
+- Clone, re-sync, webhook re-index and polling all use it. Index the URL again without a token to
+  keep the stored one, or with a new token to replace it; deleting the repository's last ref
+  deletes it.
+- The agent's store of a private repository is a full clone (not a partial one), so answering
+  never needs the token.
+- Changing or losing `REPO_CREDENTIALS_KEY` makes the stored tokens unreadable: re-sync jobs fail
+  with a message to add the repository again with its token.
 
 ### Annotations
 

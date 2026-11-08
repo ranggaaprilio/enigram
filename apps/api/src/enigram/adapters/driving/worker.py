@@ -20,6 +20,7 @@ from enigram.application.ports import (
     Deps,
     JobRepository,
 )
+from enigram.application.repo_auth import token_for
 from enigram.application.repo_sync import delete_repo_job, index_repo, remote_head
 from enigram.application.staleness import expire_verify_by
 from enigram.bootstrap import build_deps
@@ -80,7 +81,14 @@ async def _run_repo_job(
     log.info("[worker] job %d: indexing repository %s (%s)", job.id, url, trigger)
     try:
         result = await index_repo(
-            cfg, deps, url, job.payload.get("ref"), graph=graph, notes=notes, decider=decider
+            cfg,
+            deps,
+            url,
+            job.payload.get("ref"),
+            graph=graph,
+            notes=notes,
+            decider=decider,
+            token=await token_for(cfg, graph, url),
         )
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
@@ -160,7 +168,8 @@ async def poll_repos(cfg: Config, store: JobRepository, graph: CodeGraphReposito
         if repo["url"] in active_urls:
             continue
         try:
-            head = await asyncio.to_thread(remote_head, repo["url"], repo["ref"])
+            token = await token_for(cfg, graph, repo["url"])
+            head = await asyncio.to_thread(remote_head, repo["url"], repo["ref"], token)
         except EnigramError as e:
             log.warning("[worker] poll %s: %s", repo["url"], e)
             continue

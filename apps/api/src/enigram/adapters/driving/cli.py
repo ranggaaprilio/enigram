@@ -109,6 +109,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("mcp", help="run the MCP server on stdio (for Claude Code)")
+    sub.add_parser(
+        "repo-key", help="print a new REPO_CREDENTIALS_KEY (encrypts private repository tokens)"
+    )
 
     api = sub.add_parser("api", help="run the HTTP API (upload, query, query traces)")
     api.add_argument("--host", default="127.0.0.1", help="bind address (0.0.0.0 in a container)")
@@ -694,6 +697,11 @@ async def _eval(cfg: Config, args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if args.command == "repo-key":  # needs no configuration
+        from enigram.application.repo_auth import new_key
+
+        print(new_key())
+        return 0
     try:
         cfg = Config.from_env()
         _setup_logging(cfg.log_level)
