@@ -4,12 +4,16 @@ import { ChevronRight, Search } from 'lucide-react'
 import { useAccess } from '../access'
 import {
   createAnnotation,
+  listAnnotations,
   messageOf,
   NOTE_TYPES,
   searchTargets,
+  type Annotation,
   type NoteType,
   type Target,
 } from '../api'
+import { citeLine, SIMILAR, similarity } from '../notes'
+import StatusBadge from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
@@ -96,6 +100,8 @@ export default function AddNoteForm(props: {
   const [recheck, setRecheck] = useState(0)
   const [scope, setScope] = useState<'deps' | 'body'>('deps')
   const [saving, setSaving] = useState(false)
+  // Notes already on the target (A3): shown before saving, the similar ones flagged.
+  const [existing, setExisting] = useState<Annotation[]>([])
   const box = useRef<HTMLTextAreaElement>(null)
   // The page passes a new function each render; the search effect must not rerun for that.
   const onError = useRef(props.onError)
@@ -114,6 +120,22 @@ export default function AddNoteForm(props: {
       box.current?.focus({ preventScroll: true })
     }
   }, [mode, props.fixedTarget])
+
+  useEffect(() => {
+    setExisting([])
+    if (!target) return
+    let current = true
+    listAnnotations({
+      target_kind: target.target_kind,
+      target_ref: target.target_ref,
+      repo: target.repo ?? undefined,
+    })
+      .then((notes) => current && setExisting(notes))
+      .catch(() => undefined) // only a hint: the save itself still reports errors
+    return () => {
+      current = false
+    }
+  }, [target])
 
   useEffect(() => {
     const q = query.trim()
@@ -308,6 +330,46 @@ export default function AddNoteForm(props: {
           onKeyDown={onKeyDown}
         />
       </div>
+
+      {existing.length > 0 && (
+        <div className="flex flex-col gap-1.5" aria-label="Notes already here">
+          <p className={cn(label, 'm-0')}>
+            Already noted here ({existing.length}): check yours is new
+          </p>
+          <ul className="m-0 flex list-none flex-col gap-1 p-0">
+            {existing.slice(0, 5).map((n) => {
+              const close = text.trim() !== '' && similarity(text, n.text) >= SIMILAR
+              return (
+                <li
+                  key={n.id}
+                  className={cn(
+                    'rounded-md bg-card px-3 py-1.5 text-[13px]',
+                    close && 'bg-warning-bg text-warning',
+                  )}
+                >
+                  {close && <strong className="mr-1.5">Looks the same:</strong>}
+                  note#{n.id} {n.text} <StatusBadge status={n.status} />
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
+
+      {text.trim() && (
+        <div className="flex flex-col gap-1" aria-label="How answers cite it">
+          <p className={cn(label, 'm-0')}>How answers will cite it</p>
+          <p className="m-0 rounded-md bg-card px-3 py-2 font-mono text-[12px] [overflow-wrap:anywhere]">
+            <span className="badge badge-human mr-1.5 ml-0 font-sans">human</span>
+            {citeLine(text, review ? null : access.name || 'you', new Date())}
+          </p>
+          {review && (
+            <p className="m-0 text-[13px] text-muted-foreground">
+              Answers do not cite it until a maintainer verifies it.
+            </p>
+          )}
+        </div>
+      )}
 
       {!access.user && props.by === undefined && (
         <div className="flex flex-col gap-1.5">
