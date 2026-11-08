@@ -414,6 +414,35 @@ export interface Me {
 
 export const getMe = () => request<Me>('/me')
 
+// Members and keys of the current workspace (docs/rbac.md): its admins only.
+export type Role = 'viewer' | 'contributor' | 'maintainer' | 'admin'
+
+export interface Member {
+  name: string
+  kind: string
+  role: Role
+  owner: boolean
+}
+
+export const listMembers = () => request<Member[]>('/members')
+
+export const setMember = (name: string, role: Role) =>
+  request<{ name: string; role: Role }>(`/members/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ role }),
+  })
+
+export const removeMember = (name: string) =>
+  request<null>(`/members/${encodeURIComponent(name)}`, { method: 'DELETE' })
+
+// The key is in this answer only: the API keeps its hash.
+export const createKey = (name: string, role: Role) =>
+  sendJson<{ name: string; role: Role; key: string }>('/keys', { name, role })
+
+export const revokeKey = (name: string) =>
+  request<null>(`/keys/${encodeURIComponent(name)}`, { method: 'DELETE' })
+
 export const createWorkspace = (name: string) => sendJson<Workspace>('/workspaces', { name })
 
 export const ask= (question: string, mode: Mode, scope: Scope = 'auto') =>

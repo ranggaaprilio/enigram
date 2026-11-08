@@ -3,6 +3,7 @@ role per workspace; roles are ordered, each with every right of the ones below. 
 global and acts as `admin` in every workspace."""
 
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass, field
 
@@ -12,12 +13,22 @@ ROLES = ("viewer", "contributor", "maintainer", "admin")
 PRINCIPAL_KINDS = ("key", "user")
 # Bytes of randomness in a new API key (token_urlsafe: about 43 characters).
 KEY_BYTES = 32
+# A new key's name: shown in logs, notes and budgets (keys from ENIGRAM_API_KEYS keep theirs).
+PRINCIPAL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def check_role(role: str) -> str:
     if role not in ROLES:
         raise EnigramError(f"role must be one of {', '.join(ROLES)}; got {role!r}")
     return role
+
+
+def check_principal_name(name: str) -> str:
+    if not PRINCIPAL_NAME.match(name):
+        raise EnigramError(
+            "a key name is 1-64 letters, digits, '.', '_' or '-', starting with a letter or digit"
+        )
+    return name
 
 
 def at_least(role: str | None, minimum: str) -> bool:

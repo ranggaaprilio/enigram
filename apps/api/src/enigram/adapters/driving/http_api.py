@@ -23,6 +23,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from enigram.adapters.driving.mcp_server import AppContext, create_server
 from enigram.adapters.driving.workspaces import WORKSPACE_HEADER, Workspace, Workspaces
+from enigram.application import access
 from enigram.application.access import import_env_keys, resolve_key
 from enigram.application.annotations import (
     NewAnnotation,
@@ -172,6 +173,15 @@ class RepoRequest(BaseModel):
     # A private repository's personal access token: stored encrypted (repo_auth), never in the
     # job payload; SecretStr keeps it out of validation errors. Omit it to keep a stored one.
     token: SecretStr | None = None
+
+
+class MemberRole(BaseModel):
+    role: Literal["viewer", "contributor", "maintainer", "admin"]
+
+
+class KeyCreate(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+    role: Literal["viewer", "contributor", "maintainer", "admin"] = "viewer"
 
 
 class WorkspaceCreate(BaseModel):
@@ -445,6 +455,55 @@ def create_app(
             ),
             "roles": {w: caller.role_in(w) for w in caller.workspaces(names)},
         }
+
+    # Members and keys of a workspace (docs/rbac.md, R3): its admins manage them.
+
+    @app.get("/members")
+    async def list_members(request: Request, ws: Admin) -> list[dict[str, Any]]:
+        return await access.members(request.app.state.principals, ws.cfg.workspace)
+
+    @app.put("/members/{name}")
+    async def put_member(request: Request, ws: Admin, name: str, body: MemberRole) -> Any:
+        try:
+            await access.change_member(
+                request.app.state.principals, ws.cfg.workspace, name, body.role
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        log.info(
+            "[api] %s: %s is %s, set by %s", ws.cfg.workspace, name, body.role, _actor(request)
+        )
+        return {"name": name, "role": body.role}
+
+    @app.delete("/members/{name}", status_code=204)
+    async def delete_member(request: Request, ws: Admin, name: str) -> None:
+        try:
+            await access.change_member(request.app.state.principals, ws.cfg.workspace, name, None)
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        log.info("[api] %s: %s removed by %s", ws.cfg.workspace, name, _actor(request))
+
+    @app.post("/keys", status_code=201)
+    async def create_key(request: Request, ws: Admin, body: KeyCreate) -> Any:
+        """A new key, member of this workspace; the key is in this answer only."""
+        try:
+            key = await access.add_key(
+                request.app.state.principals, body.name, ws.cfg.workspace, body.role
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        log.info("[api] %s: key %s made by %s", ws.cfg.workspace, body.name, _actor(request))
+        return {"name": body.name, "role": body.role, "key": key}
+
+    @app.delete("/keys/{name}", status_code=204)
+    async def revoke_key(request: Request, ws: Admin, name: str) -> None:
+        try:
+            await access.revoke_key(
+                request.app.state.principals, _caller(request), ws.cfg.workspace, name
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        log.info("[api] %s: key %s revoked by %s", ws.cfg.workspace, name, _actor(request))
 
     @app.post("/workspaces", status_code=201)
     async def create_workspace(request: Request, body: WorkspaceCreate) -> Any:

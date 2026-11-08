@@ -175,6 +175,7 @@ describe('App frame', () => {
       ['Code', '/w/ws-a/code'],
       ['Annotations', '/w/ws-a/annotations'],
       ['Graph', '/w/ws-a/graph'],
+      ['Members', '/w/ws-a/members'], // no /me here: the API alone decides
     ])
     expect(within(nav).getByRole('link', { name: 'Code' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('banner')).toHaveTextContent('ws-a / Code')
@@ -220,5 +221,43 @@ describe('App frame', () => {
     const bar = await screen.findByRole('banner')
     await userEvent.click(within(bar).getByRole('button', { name: 'Toggle Sidebar' }))
     expect(localStorage.getItem('enigram-sidebar')).toBe('closed')
+  })
+})
+
+describe('App by role', () => {
+  const as = (role: string, owner = false) => ({
+    ...ROUTES,
+    'GET /api/me': {
+      body: {
+        principal: { name: 'k', kind: 'key', owner, default_workspace: 'default' },
+        roles: { default: role },
+      },
+    },
+  })
+
+  it('hides Members and New workspace from a viewer', async () => {
+    mockFetch(as('viewer'))
+    renderAt('/w/default/documents')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Account and theme' })).toHaveTextContent(
+        'viewer · default',
+      ),
+    )
+    expect(screen.queryByRole('link', { name: 'Members' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
+  })
+
+  it('shows an admin Members, and an owner New workspace', async () => {
+    mockFetch(as('admin'))
+    renderAt('/w/default/documents')
+    expect(await screen.findByRole('link', { name: 'Members' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
+  })
+
+  it('shows an owner New workspace', async () => {
+    mockFetch(as('viewer', true))
+    renderAt('/w/default/documents')
+    expect(await screen.findByRole('button', { name: 'New workspace' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Members' })).toBeInTheDocument()
   })
 })

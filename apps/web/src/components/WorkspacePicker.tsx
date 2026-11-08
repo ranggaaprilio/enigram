@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { createWorkspace, messageOf, type Workspace } from '../api'
+import { useAccess } from '../access'
 import { WORKSPACE_NAME, WORKSPACE_RULE } from '../workspace'
 
 export default function WorkspacePicker(props: {
@@ -20,6 +21,7 @@ export default function WorkspacePicker(props: {
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const owner = useAccess().owner // docs/rbac.md: only an owner creates workspaces
   // /w/<ws>/<page>/...: a switch opens the same page; ids and queries belong to the old workspace.
   const page = pathname.split('/')[3] || 'documents'
   const names = props.workspaces.map((w) => w.name)
@@ -65,16 +67,18 @@ export default function WorkspacePicker(props: {
           </NativeSelectOption>
         ))}
       </NativeSelect>
-      <Button
-        size="sm"
-        variant="ghost"
-        className="justify-start text-muted-foreground"
-        aria-expanded={open}
-        onClick={() => (open ? close() : setOpen(true))}
-      >
-        <Plus />
-        New workspace
-      </Button>
+      {owner && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="justify-start text-muted-foreground"
+          aria-expanded={open}
+          onClick={() => (open ? close() : setOpen(true))}
+        >
+          <Plus />
+          New workspace
+        </Button>
+      )}
       {open && (
         <form
           aria-label="New workspace"

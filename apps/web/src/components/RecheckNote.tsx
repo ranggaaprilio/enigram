@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Annotation, AnnotationPatch, SymbolView } from '../api'
 import { Button } from '@/components/ui/button'
+import { useAccess } from '../access'
 
 const REASONS: Record<string, string> = {
   hash: 'The code of this symbol changed.',
@@ -37,6 +38,8 @@ export default function RecheckNote(props: {
 }) {
   const { note, summary } = props
   const [busy, setBusy] = useState(false)
+  // docs/rbac.md: the three outcomes verify or reject the note, which needs a maintainer.
+  const maintainer = useAccess().can('maintainer')
   const then = note.summary_text ?? null
   // As the page and the server: the flow, else the symbol's own. "Still right" keeps this one.
   const nowKind = summary.flow ? 'flow' : 'symbol'
@@ -56,9 +59,7 @@ export default function RecheckNote(props: {
       <p className="text-[13px]">
         Re-check: {(note.reason && REASONS[note.reason]) ?? 'Flagged for a re-check.'}
       </p>
-      <p className={label}>
-        Summary when written{note.summary_kind && ` (${note.summary_kind})`}
-      </p>
+      <p className={label}>Summary when written{note.summary_kind && ` (${note.summary_kind})`}</p>
       {then ? (
         <div className="markdown text-[13px]">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{then}</ReactMarkdown>
@@ -76,20 +77,24 @@ export default function RecheckNote(props: {
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{now}</ReactMarkdown>
         </div>
       )}
-      <div className="mt-2 flex flex-wrap gap-2">
-        {ACTIONS.map((a) => (
-          <Button
-            key={a.label}
-            type="button"
-            size="sm"
-            variant={a.variant}
-            disabled={busy}
-            onClick={() => act(a.body)}
-          >
-            {a.label}
-          </Button>
-        ))}
-      </div>
+      {!maintainer ? (
+        <p className={muted}>A maintainer re-checks this note.</p>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {ACTIONS.map((a) => (
+            <Button
+              key={a.label}
+              type="button"
+              size="sm"
+              variant={a.variant}
+              disabled={busy}
+              onClick={() => act(a.body)}
+            >
+              {a.label}
+            </Button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

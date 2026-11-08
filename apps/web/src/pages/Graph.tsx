@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
+import { useAccess } from '../access'
 import {
   deleteEntity,
   deleteRelation,
@@ -61,6 +62,7 @@ export default function Graph() {
   const [confirming, setConfirming] = useState<string | null>(null)
   const [selected, setSelected] = useState<string[]>([])
   const [mergeTarget, setMergeTarget] = useState('')
+  const canEdit = useAccess().can('maintainer') // docs/rbac.md: graph edits
 
   const search = useCallback(async () => {
     if (!q) {
@@ -212,11 +214,13 @@ export default function Graph() {
                   return (
                     <TableRow key={key} data-state={isSelected ? 'selected' : undefined}>
                       <TableCell>
-                        <Checkbox
-                          aria-label={`Select ${e.name}`}
-                          checked={isSelected}
-                          onCheckedChange={() => toggle(e.name)}
-                        />
+                        {canEdit && (
+                          <Checkbox
+                            aria-label={`Select ${e.name}`}
+                            checked={isSelected}
+                            onCheckedChange={() => toggle(e.name)}
+                          />
+                        )}
                       </TableCell>
                       <TableCell className="font-medium">{e.name}</TableCell>
                       <TableCell className="text-muted-foreground">{e.type}</TableCell>
@@ -354,7 +358,8 @@ function RowActions(props: {
   onCancelDelete: () => void
   onConfirmDelete: () => void
 }) {
-  if (props.hidden) return null
+  const canEdit = useAccess().can('maintainer')
+  if (props.hidden || !canEdit) return null
   if (props.confirming) {
     return (
       <div className="flex flex-wrap items-center gap-1.5 text-[13px]">

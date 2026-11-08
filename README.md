@@ -343,6 +343,11 @@ write the same index.
 | `GET /workspaces` | The caller's workspaces, by name (every one for an owner or without keys) |
 | `POST /workspaces` `{"name"}` | Create a workspace (201; 403 unless `owner`; 422 unless 1-32 of `a-z`, `0-9`, `-`, starting with a letter or digit; 409 exists) |
 | `GET /me` | The caller (name, kind, owner, default workspace) and its role per workspace; `principal: null` without keys |
+| `GET /members` | The workspace's members and their roles (`admin`) |
+| `PUT /members/{name}` `{"role"}` | Add a key to the workspace or change its role (`admin`; 422 for the last admin, 404 for an unknown name) |
+| `DELETE /members/{name}` | Remove a key from the workspace (`admin`; 422 for the last admin) |
+| `POST /keys` `{"name", "role"?}` | A new key, member of this workspace (`viewer` unless set); the key is in this answer only (201, `admin`) |
+| `DELETE /keys/{name}` | Revoke a key at once (`admin` of every workspace it is in; an owner's key only by an owner) |
 | `GET /health` | Liveness; with `POST /repos/{id}/webhook` the only routes without a key |
 
 A request works on the workspace named in its `X-Enigram-Workspace` header (404 for an unknown
@@ -444,10 +449,18 @@ of `add-key` until `default` changes it, and must be one of its workspaces. MCP 
 the same roles in the workspace each tool call uses; MCP over stdio has none. Everyone in the web
 UI still shares the `web` key and its role until per-person login (roadmap item 2, R4).
 
+The web UI follows the role from `GET /me`: actions the role may not take are hidden (the API still
+checks each one), *New workspace* shows only for an owner, and an admin gets **Settings → Members**
+to change roles, add an existing key, make a new key (shown once) and revoke keys, the same as
+`enigram principals` but per workspace.
+
 ### Web UI
 
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
-API. It has five pages in its menu:
+API. Its sidebar (a drawer on a phone, see [`docs/design.md`](docs/design.md)) groups the pages
+into *Answers* (Ask, Trace), *Knowledge* (Documents, Code, Annotations, Graph) and, for admins,
+*Settings* (Members); the account menu at its foot shows the key's role and picks the light, dark
+or system theme:
 
 - **Documents**: drop PDF or Markdown files to upload them; the table follows each job until it
   is indexed or failed.
@@ -460,8 +473,7 @@ API. It has five pages in its menu:
   already set, for people who know the feature but not the symbol. Under each summary: **Looks
   right** (a ✓ that counts as reviewed until the summary changes), **Not right** and **Add
   context** (a note with a question per type). Not right, expected behaviour and known issues are
-  saved as proposals to review on Annotations (the UI has one key, so anyone using it may
-  verify them). A note flagged for re-check shows the summary it was written against (kept on
+  saved as proposals to review on Annotations. A note flagged for re-check shows the summary it was written against (kept on
   the note, refreshed when it is verified) next to the summary now, with **Still right**, **Code
   is wrong now** (verified, marked as conflicting) and **Note is outdated** (rejected). Views
   are linkable (`/code?repo=1&symbol=…`). **Files** switches the list to every indexed file by
@@ -474,12 +486,13 @@ API. It has five pages in its menu:
 - **Annotations**: team notes by status, with verify, reject, relink and history (see
   [Annotations](#annotations)).
 
-The **Graph** page (`/graph`, linked from Annotations, no menu entry) finds entities and relations
+The **Graph** page (`/graph`) finds entities and relations
 whose name or description contains a phrase, then edits, merges or deletes them (see [Correcting
 the graph](#correcting-the-graph)).
 
 Pages live under `/w/<workspace>/…` (old links such as `/code?repo=1` open the process workspace).
-The header picks a workspace or creates one; every request then carries `X-Enigram-Workspace`.
+The sidebar picks a workspace (or creates one, for an owner); every request then carries
+`X-Enigram-Workspace`.
 
 The UI has no login: nginx adds `ENIGRAM_WEB_KEY` to every `/api` call, so the browser never
 sees a key, and the port stays bound to localhost. Open it as `http://localhost:3000` or `http://127.0.0.1:3000`: nginx

@@ -112,10 +112,10 @@ peran `maintainer`.
 | Route | Minimal | Catatan |
 |---|---|---|
 | `GET /members` | `admin` | Anggota workspace dan perannya |
-| `PUT /members/{principal}` `{role}` | `admin` | Admin tidak bisa menurunkan admin terakhir |
-| `DELETE /members/{principal}` | `admin` | |
+| `PUT /members/{name}` `{role}` | `admin` | Menambah key yang sudah ada atau mengubah perannya; admin terakhir tidak bisa diturunkan |
+| `DELETE /members/{name}` | `admin` | Admin terakhir tidak bisa dikeluarkan |
 | `POST /keys` | `admin` | Key baru, langsung anggota workspace ini; key ditampilkan sekali |
-| `DELETE /keys/{id}` | `admin` (key di workspace-nya) / `owner` | Mencabut tanpa restart |
+| `DELETE /keys/{name}` | `admin` di semua workspace key itu / `owner` | Mencabut tanpa restart; key `owner` hanya oleh `owner` |
 
 CLI (`enigram principals ...`) bekerja langsung ke DB dan setara `owner`.
 

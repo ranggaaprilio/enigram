@@ -1,3 +1,4 @@
+import { useAccess } from '../access'
 import {
   useCallback,
   useEffect,
@@ -73,6 +74,9 @@ export default function Documents() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uploads, setUploads] = useState<Upload[]>([])
   const [dragging, setDragging] = useState(false)
+  // docs/rbac.md: maintainers upload, index and delete; a private repository's token: admins.
+  const access = useAccess()
+  const canEdit = access.can('maintainer')
   const [confirming, setConfirming] = useState<string | null>(null)
   const [repoUrl, setRepoUrl] = useState('')
   const [repoRef, setRepoRef] = useState('')
@@ -243,7 +247,11 @@ export default function Documents() {
     <section>
       <PageHeader
         title="Documents"
-        description="Upload files or index a Git repository. Everything here becomes searchable on the Ask page once it is indexed."
+        description={
+          canEdit
+            ? 'Upload files or index a Git repository. Everything here becomes searchable on the Ask page once it is indexed.'
+            : `The documents and repositories indexed in this workspace. Uploading and indexing need the maintainer role (yours: ${access.role}).`
+        }
         action={
           busy && (
             <span role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -253,84 +261,88 @@ export default function Documents() {
         }
       />
 
-      <div className="mb-8 grid gap-4 md:grid-cols-2">
-        <label
-          className={cn(
-            'flex min-h-44 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input bg-card px-5 py-8 text-center text-muted-foreground transition-colors hover:border-ring has-[input:focus-visible]:ring-[3px] has-[input:focus-visible]:ring-ring/25',
-            dragging && 'border-ring bg-info-bg',
-          )}
-          onDragOver={(e) => {
-            e.preventDefault()
-            setDragging(true)
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-        >
-          <input
-            type="file"
-            multiple
-            accept=".pdf,.md,.markdown"
-            className="sr-only"
-            onChange={onPick}
-          />
-          <FileUp className="mb-1 size-6" />
-          <strong className="text-base font-medium text-foreground">
-            Drop PDF or Markdown files here
-          </strong>
-          <span>
-            or <span className="text-link">browse</span> your computer
-          </span>
-        </label>
+      {canEdit && (
+        <div className="mb-8 grid gap-4 md:grid-cols-2">
+          <label
+            className={cn(
+              'flex min-h-44 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input bg-card px-5 py-8 text-center text-muted-foreground transition-colors hover:border-ring has-[input:focus-visible]:ring-[3px] has-[input:focus-visible]:ring-ring/25',
+              dragging && 'border-ring bg-info-bg',
+            )}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragging(true)
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+          >
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.md,.markdown"
+              className="sr-only"
+              onChange={onPick}
+            />
+            <FileUp className="mb-1 size-6" />
+            <strong className="text-base font-medium text-foreground">
+              Drop PDF or Markdown files here
+            </strong>
+            <span>
+              or <span className="text-link">browse</span> your computer
+            </span>
+          </label>
 
-        <Card>
-          <CardHeader>
-            <Label htmlFor="repo-url" className="text-[15px] font-semibold">
-              <GitBranch className="size-4" /> Index a Git repository
-            </Label>
-            <CardDescription>
-              Markdown files on the branch are indexed and kept in sync. A private repository
-              needs a read-only access token; it is stored encrypted.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-3" onSubmit={submitRepo}>
-              <Input
-                id="repo-url"
-                value={repoUrl}
-                onChange={(e) => setRepoUrl(e.target.value)}
-                placeholder="https://github.com/org/handbook"
-              />
-              <div className="flex items-center gap-3">
-                <Label htmlFor="repo-token" className="shrink-0 text-muted-foreground">
-                  Access token
-                </Label>
+          <Card>
+            <CardHeader>
+              <Label htmlFor="repo-url" className="text-[15px] font-semibold">
+                <GitBranch className="size-4" /> Index a Git repository
+              </Label>
+              <CardDescription>
+                Markdown files on the branch are indexed and kept in sync. A private repository
+                needs a read-only access token; it is stored encrypted.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-3" onSubmit={submitRepo}>
                 <Input
-                  id="repo-token"
-                  type="password"
-                  autoComplete="off"
-                  value={repoToken}
-                  onChange={(e) => setRepoToken(e.target.value)}
-                  placeholder="only for a private repository"
+                  id="repo-url"
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  placeholder="https://github.com/org/handbook"
                 />
-              </div>
-              <div className="flex items-center gap-3">
-                <Label htmlFor="repo-ref" className="shrink-0 text-muted-foreground">
-                  Branch or tag
-                </Label>
-                <Input
-                  id="repo-ref"
-                  value={repoRef}
-                  onChange={(e) => setRepoRef(e.target.value)}
-                  placeholder="default branch"
-                />
-                <Button type="submit" disabled={!repoUrl.trim()}>
-                  Index
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
+                {access.can('admin') && (
+                  <div className="flex items-center gap-3">
+                    <Label htmlFor="repo-token" className="shrink-0 text-muted-foreground">
+                      Access token
+                    </Label>
+                    <Input
+                      id="repo-token"
+                      type="password"
+                      autoComplete="off"
+                      value={repoToken}
+                      onChange={(e) => setRepoToken(e.target.value)}
+                      placeholder="only for a private repository"
+                    />
+                  </div>
+                )}
+                <div className="flex items-center gap-3">
+                  <Label htmlFor="repo-ref" className="shrink-0 text-muted-foreground">
+                    Branch or tag
+                  </Label>
+                  <Input
+                    id="repo-ref"
+                    value={repoRef}
+                    onChange={(e) => setRepoRef(e.target.value)}
+                    placeholder="default branch"
+                  />
+                  <Button type="submit" disabled={!repoUrl.trim()}>
+                    Index
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {repoError && <ErrorAlert>{repoError}</ErrorAlert>}
       {repoJobs.length > 0 && (
@@ -441,6 +453,7 @@ export default function Documents() {
                       </div>
                     </div>
                   ) : (
+                    canEdit &&
                     !ACTIVE.includes(d.status) && (
                       <Button
                         type="button"
