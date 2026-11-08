@@ -121,10 +121,11 @@ TOOLS = [
 ]
 
 
-def system_prompt(repo_lines: list[str]) -> str:
+def system_prompt(repo_lines: list[str], focus: str | None = None) -> str:
     """The system message; `repo_lines` ("name sha12" per indexed repository) replace a
-    list_repos tool: the model learns what to pass as `repo` without a turn."""
-    return (
+    list_repos tool: the model learns what to pass as `repo` without a turn. A chat agent's
+    `focus` comes last and may replace the 1-6 sentence form."""
+    prompt = (
         "You answer questions about indexed TypeScript repos (name sha): "
         f"{'; '.join(repo_lines)}. Pass the name as `repo`.\n"
         "Graph first: one search_code or entrypoint_flow (find_symbol for a named symbol or its "
@@ -139,6 +140,7 @@ def system_prompt(repo_lines: list[str]) -> str:
         "the code does not contradict, take the note's yes or no as the answer and add that the "
         "code does not implement it. " + NOTE_WEIGHT_RULE
     )
+    return f"{prompt}\n{focus}" if focus else prompt
 
 
 class _CountingChat:
@@ -556,13 +558,14 @@ async def answer_with_agent(
     history: list[dict[str, str]] | None = None,
     on_tool: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     guard_question: str | None = None,
+    focus: str | None = None,
 ) -> QueryResult:
     """With `decider`, the abstain guard runs on the answer (part of the system: the guarded
     answer is what gets cached); with `embedder`, search_code also ranks by code embeddings.
     `history` (chat, plan item 8) is the conversation before `question` as user and assistant
     messages; `on_tool` hears each tool call before it runs (the chat's progress events);
     `guard_question` is what the abstain guard reads instead of `question` (a follow-up
-    rewritten to stand alone)."""
+    rewritten to stand alone); `focus` (a chat agent's) is added to the system prompt."""
     repos = await graph_repo.list_repos()
     if not repos:
         raise EnigramError("No repository indexed; run `enigram repo <url>`")
@@ -584,6 +587,8 @@ async def answer_with_agent(
         )
         if history:  # appended only then: the keys of answers without one stay valid
             cache_key += "\n" + json.dumps(history, sort_keys=True)
+        if focus:
+            cache_key += "\nfocus: " + focus
         key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
         if path.exists():
@@ -599,7 +604,7 @@ async def answer_with_agent(
         embedder=embedder,
     )
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt(tools.repo_lines())},
+        {"role": "system", "content": system_prompt(tools.repo_lines(), focus)},
         *(history or []),
         {"role": "user", "content": question},
     ]

@@ -957,7 +957,7 @@ class FakeChatStore:
     async def session(self, session_id):
         return self.rows.get(session_id)
 
-    async def update_session(self, session_id, *, title=None, shared=None):
+    async def update_session(self, session_id, *, title=None, shared=None, agent=None):
         if session_id not in self.rows:
             return None
         s = self.rows[session_id]
@@ -965,6 +965,8 @@ class FakeChatStore:
             s = dataclasses.replace(s, title=title)
         if shared is not None:
             s = dataclasses.replace(s, shared=shared)
+        if agent is not None:
+            s = dataclasses.replace(s, agent=agent)
         self.rows[session_id] = s
         return s
 

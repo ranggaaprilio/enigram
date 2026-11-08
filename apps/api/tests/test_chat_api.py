@@ -16,7 +16,7 @@ from test_api import (  # noqa: F401 - fake_memory and notes_env are fixtures
     notes_env,
 )
 
-from enigram.adapters.driving import http_api as api
+from enigram.application import chat as chat_app
 from enigram.domain.answer import QueryResult, Source
 from enigram.domain.budget import record_usage
 from enigram.domain.errors import EnigramError
@@ -48,8 +48,12 @@ def chat_env(notes_env, monkeypatch):
     async def standalone(model, history, question):
         return f"{question} (about /users)" if history else question
 
-    async def fake_agent(cfg, chat, graph, question, *, history, on_tool, guard_question, **kw):
-        asked.append({"question": question, "history": history, "guard": guard_question})
+    async def fake_agent(
+        cfg, chat, graph, question, *, history, on_tool, guard_question, focus, **kw
+    ):
+        asked.append(
+            {"question": question, "history": history, "guard": guard_question, "focus": focus}
+        )
         await on_tool("find_symbol", {"name": "UsersController"})
         record_usage(900, 100)
         if question == "break":
@@ -58,8 +62,20 @@ def chat_env(notes_env, monkeypatch):
         source = Source(1, cite, "code", "", cite, origin="code")
         return QueryResult(question, ANSWER, [source], [], mode="enigram-agent")
 
-    monkeypatch.setattr(api, "answer_with_agent", fake_agent)
-    monkeypatch.setattr(api, "standalone_question", standalone)
+    async def fake_routed(question, *, ask_code, ask_docs, **kw):
+        # The router's choice is tested in test_routing; here: the documents, then the code.
+        asked.append({"routed": question})
+        return await (ask_docs() if "rule" in question else ask_code())
+
+    async def fake_docs(engine, question, *, user_prompt, notes, decider):
+        asked.append({"docs": question, "prompt": user_prompt})
+        record_usage(500, 50)
+        return QueryResult(question, "Only admins may manage users [1] [document].", [], [], [])
+
+    monkeypatch.setattr(chat_app, "answer_with_agent", fake_agent)
+    monkeypatch.setattr(chat_app, "standalone_question", standalone)
+    monkeypatch.setattr(chat_app, "answer_routed", fake_routed)
+    monkeypatch.setattr(chat_app, "answer_question", fake_docs)
     return client, store, asked
 
 
@@ -166,7 +182,7 @@ def test_the_owner_or_an_admin_deletes(chat_env):
 
 def test_bad_input_is_refused_before_the_stream(chat_env):
     client, _, asked = chat_env
-    assert client.post("/chat/sessions", json={"agent": "qa"}, headers=LAPTOP).status_code == 422
+    assert client.post("/chat/sessions", json={"agent": "sales"}, headers=LAPTOP).status_code == 422
     sid = _start(client)["id"]
     url = f"/chat/sessions/{sid}/messages"
     assert client.post(url, json={"text": "   "}, headers=LAPTOP).status_code == 422
@@ -177,7 +193,8 @@ def test_bad_input_is_refused_before_the_stream(chat_env):
     )
     assert asked == []
     agents = client.get("/chat/agents", headers=LAPTOP).json()
-    assert [a["name"] for a in agents] == ["technical"]
+    assert [a["name"] for a in agents] == ["technical", "business", "qa", "overview"]
+    assert {"label", "description"} <= set(agents[1]) and "focus" not in agents[1]
 
 
 def test_a_used_up_budget_is_an_answer_with_an_error(chat_env):
@@ -192,3 +209,35 @@ def test_a_used_up_budget_is_an_answer_with_an_error(chat_env):
     assert [e for e, _ in events] == ["question", "answer"]
     assert "budget" in events[1][1]["error"].lower() and events[1][1]["query_id"] is None
     assert asked == []
+
+
+def test_an_agent_answers_with_its_focus_and_a_mention_asks_another(chat_env):
+    client, store, asked = chat_env
+    sid = _start(client, agent="business")["id"]
+    url = f"/chat/sessions/{sid}/messages"
+
+    # Business rules routes (here: to the documents) with its focus in the prompt.
+    events = _events(client.post(url, json={"text": "Which rule covers /users?"}, headers=LAPTOP))
+    assert events[0][1]["answering"] == "business"
+    assert ("step", {"tool": "documents", "label": "Searching the documents"}) in events
+    assert events[-1][1]["agent"] == "business"
+    docs = next(a for a in asked if "docs" in a)
+    assert docs["docs"] == "Which rule covers /users?"
+    assert "Answer for a product manager" in docs["prompt"]
+
+    # @qa asks QA for this message only: the code agent with QA's focus, the mention dropped.
+    events = _events(client.post(url, json={"text": "@qa scenarios for that?"}, headers=LAPTOP))
+    assert events[0][1]["text"] == "@qa scenarios for that?"  # stored as typed
+    assert events[0][1]["answering"] == "qa" and events[-1][1]["agent"] == "qa"
+    qa = asked[-1]
+    assert qa["question"] == "scenarios for that?" and qa["focus"].startswith("Answer for a tester")
+    # The history carries the other agent's answer.
+    assert qa["history"][-1]["content"].startswith("Only admins may manage users")
+
+    # Technical keeps the code agent's own prompt; the session's agent can change.
+    changed = client.patch(f"/chat/sessions/{sid}", json={"agent": "tech"}, headers=LAPTOP)
+    assert changed.json()["agent"] == "technical"
+    client.post(url, json={"text": "Who may call /users?"}, headers=LAPTOP)
+    assert asked[-1]["focus"] is None
+    bad = client.patch(f"/chat/sessions/{sid}", json={"agent": "sales"}, headers=LAPTOP)
+    assert bad.status_code == 422

@@ -51,6 +51,12 @@ const ANSWER = message(2, {
   found: true,
 })
 const QUESTION = message(1, { text: 'Who may call /users?' })
+const AGENTS = [
+  { name: 'technical', label: 'Technical', description: 'Code flows', aliases: ['tech'] },
+  { name: 'business', label: 'Business rules', description: 'Plain rules', aliases: [] },
+  { name: 'qa', label: 'QA', description: 'Test scenarios', aliases: [] },
+  { name: 'overview', label: 'Overview', description: 'A summary', aliases: [] },
+]
 
 function Where() {
   return <span data-testid="where">{useLocation().pathname}</span>
@@ -138,7 +144,7 @@ describe('Chat', () => {
       ],
     )
     renderAt('/chat')
-    expect(await screen.findByText(/Ask the Technical agent/)).toBeInTheDocument()
+    expect(await screen.findByText(/Pick an agent and ask/)).toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Message'), 'Who may call /users?{Enter}')
 
     expect(await screen.findByRole('link', { name: 'View trace' })).toBeInTheDocument()
@@ -210,5 +216,53 @@ describe('Chat', () => {
     renderAt('/chat/9')
     expect(await screen.findByText('No chat session 9')).toBeInTheDocument()
     vi.unstubAllGlobals()
+  })
+})
+
+describe('Chat agents', () => {
+  it('starts a chat with the picked agent and labels each answer by its agent', async () => {
+    const fetch = withStream(
+      {
+        'GET /api/chat/agents': { body: AGENTS },
+        'GET /api/chat/sessions': { body: [] },
+        'POST /api/chat/sessions': { status: 201, body: session(8, { agent: 'qa' }) },
+      },
+      '/api/chat/sessions/8/messages',
+      [
+        ['question', { ...QUESTION, session_id: 8, title: 'Q', answering: 'qa' }],
+        ['answer', { ...ANSWER, session_id: 8, agent: 'qa' }],
+      ],
+    )
+    renderAt('/chat')
+    const group = await screen.findByRole('radiogroup', { name: 'Agent' })
+    await userEvent.click(await within(group).findByRole('radio', { name: 'QA' }))
+    expect(within(group).getByRole('radio', { name: 'QA' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText('Test scenarios')).toBeInTheDocument()
+    expect(screen.getByText(/@technical, @business, @qa, @overview/)).toBeInTheDocument()
+
+    await userEvent.type(screen.getByRole('textbox', { name: 'Message' }), 'Scenarios?{Enter}')
+    const conversation = await screen.findByRole('list', { name: 'Conversation' })
+    expect(await within(conversation).findByText('QA')).toBeInTheDocument()
+    const create = fetch.mock.calls.find(([u, i]) => u === '/api/chat/sessions' && i?.method)!
+    expect(JSON.parse(String(create[1]?.body))).toEqual({ agent: 'qa' })
+    expect(screen.getByRole('combobox', { name: 'Agent' })).toHaveValue('qa')
+  })
+
+  it("changes the session's agent", async () => {
+    const fetch = mockFetch({
+      'GET /api/chat/agents': { body: AGENTS },
+      'GET /api/chat/sessions': { body: [session(1)] },
+      'GET /api/chat/sessions/1': { body: { ...session(1), messages: [QUESTION, ANSWER] } },
+      'PATCH /api/chat/sessions/1': { body: session(1, { agent: 'business' }) },
+    })
+    renderAt('/chat/1')
+    const select = await screen.findByRole('combobox', { name: 'Agent' })
+    await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(4))
+    await userEvent.selectOptions(select, 'business')
+    await waitFor(() => expect(select).toHaveValue('business'))
+    const patch = fetch.mock.calls.find(([, i]) => i?.method === 'PATCH')!
+    expect(JSON.parse(String(patch[1]?.body))).toEqual({ agent: 'business' })
+    // Answers keep the label of the agent that gave them.
+    expect(within(screen.getByRole('list', { name: 'Conversation' })).getByText('Technical')).toBeInTheDocument()
   })
 })

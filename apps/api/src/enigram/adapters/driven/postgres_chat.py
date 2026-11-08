@@ -86,15 +86,22 @@ class PostgresChat:
         return _session(row) if row else None
 
     async def update_session(
-        self, session_id: int, *, title: str | None = None, shared: bool | None = None
+        self,
+        session_id: int,
+        *,
+        title: str | None = None,
+        shared: bool | None = None,
+        agent: str | None = None,
     ) -> ChatSession | None:
         row = await self.pool.fetchrow(
-            "UPDATE chat_sessions SET title = coalesce($3, title), shared = coalesce($4, shared) "
-            f"WHERE workspace = $1 AND id = $2 RETURNING {SESSION_COLUMNS}",
+            "UPDATE chat_sessions SET title = coalesce($3, title), shared = coalesce($4, shared), "
+            f"agent = coalesce($5, agent) WHERE workspace = $1 AND id = $2 "
+            f"RETURNING {SESSION_COLUMNS}",
             self.workspace,
             session_id,
             title,
             shared,
+            agent,
         )
         return _session(row) if row else None
 

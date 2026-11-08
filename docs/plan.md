@@ -16,7 +16,7 @@ Per 2026-11-08 malam.
 | 5 Note A1–A3 (form baru, Knowledge + Inbox, duplikat dan bulk) | Selesai | #38, #40, #42 |
 | 6 Dashboard D1–D3; Dashboard jadi halaman awal | Selesai | #44–#47, #52, #53 |
 | 7 Memory M1–M2 (M3 tercakup test M1) | Selesai | #49, #50 |
-| 8 Chat multi-agent | C1 selesai (API #55, halaman Chat #56); berikutnya C2 (empat agent, `@mention`) | #55, #56 |
+| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); berikutnya C3 panel | #55–#57 |
 | 9 Monorepo | Belum (bisa diuji pada `apps/web` repo ini) | — |
 | 10 Hapus note | Selesai | #29 |
 | 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |
@@ -591,6 +591,22 @@ dari fase 7.
 - Guard abstain menilai pertanyaan lanjutan dalam bentuk mandiri (satu panggilan LLM kecil menulis
   ulang "dan user biasa?" menjadi pertanyaan lengkap), dengan jawaban sebelumnya ikut sebagai bukti.
   Tanpa itu jawaban lanjutan yang benar diganti "tidak terjawab" (P 0,06–0,08; sesudahnya 0,69).
+
+**C2 selesai 2026-11-08.** Agent adalah konfigurasi (`domain/chat.py` `AGENTS`): rute (`code`
+untuk Technical dan QA; `auto` lewat router untuk Business rules dan Overview) dan satu kalimat
+fokus di prompt (Technical tanpa fokus, sama persis dengan `/query`). Pertanyaan versi mandiri
+memilih rute dan ditanyakan ke dokumen (LightRAG tidak menerima riwayat); code agent menerima
+pertanyaan aslinya dengan riwayat. `@nama` di awal pesan memilih agent untuk pesan itu saja.
+
+Ukuran kecil (bukan eval golden penuh): empat pertanyaan (b24, b54, s03, s05) dijawab Ask (auto),
+Business rules, QA dan Overview, label oleh Claude. Semua jawaban benar. Porsi kalimat
+`[unsupported]` rata-rata: Ask 0,13; Business 0,15; QA 0,12; Overview 0,16 (Technical = Ask).
+Dua perbaikan prompt dari ukuran ini: Business semula 0,35 karena kalimat ringkasan tanpa sitasi
+(fokus kini menuntut sitasi per kalimat), Overview semula 0,33 karena kalimat penutup "tanya
+@technical" yang tidak bisa disitasi (dihapus; halaman menampilkan daftar `@nama`). Note dipakai
+(`[human]`) oleh Business, QA dan Overview di s03 dan s05. **Belum terukur:** pemakaian dokumen
+oleh Business, karena keempat pertanyaan dirutekan ke kode (dokumen workspace `default` tidak
+membahas repo ini); ulangi pada workspace yang punya dokumen aturan bisnis.
 
 **Keputusan awal (sudah dijawab di atas).**
 - Interaksi utama: pilih satu agent per percakapan, panel, atau keduanya sejak awal.
