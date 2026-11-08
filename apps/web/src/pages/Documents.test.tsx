@@ -2,6 +2,7 @@ import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DocumentRow } from '../api'
+import { asRole } from '../test/access'
 import { mockFetch } from '../test/mockFetch'
 import Documents from './Documents'
 
@@ -289,5 +290,25 @@ describe('Documents', () => {
     render(<Documents />)
 
     expect(await screen.findByText('from github.com/org/handbook')).toBeInTheDocument()
+  })
+})
+
+describe('Documents by role', () => {
+  it('shows a viewer the list without upload, index or delete', async () => {
+    mockFetch({ 'GET /api/documents': { body: [row('paper')] } })
+    render(asRole('viewer', <Documents />))
+    expect(await screen.findByText('paper')).toBeInTheDocument()
+    expect(screen.queryByText('Drop PDF or Markdown files here')).toBeNull()
+    expect(screen.queryByLabelText('Branch or tag')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Delete paper' })).toBeNull()
+    expect(screen.getByText(/need the maintainer role \(yours: viewer\)/)).toBeInTheDocument()
+  })
+
+  it('asks a maintainer for no repository token', async () => {
+    mockFetch({ 'GET /api/documents': { body: [row('paper')] } })
+    render(asRole('maintainer', <Documents />))
+    expect(await screen.findByRole('button', { name: 'Delete paper' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Branch or tag')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Access token')).toBeNull()
   })
 })

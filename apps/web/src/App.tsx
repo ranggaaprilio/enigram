@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router'
-import { getHealth, listWorkspaces, setWorkspace, type Workspace } from './api'
+import { accessOf, AccessProvider } from './access'
+import { getHealth, getMe, listWorkspaces, setWorkspace, type Me, type Workspace } from './api'
 import AppSidebar, { NAV } from './components/AppSidebar'
 import Empty from './components/Empty'
 import { Separator } from './components/ui/separator'
@@ -10,6 +11,7 @@ import Ask from './pages/Ask'
 import Code from './pages/Code'
 import Documents from './pages/Documents'
 import Graph from './pages/Graph'
+import Members from './pages/Members'
 import { TraceDetail, TraceList } from './pages/Trace'
 import { WORKSPACE_NAME } from './workspace'
 
@@ -55,10 +57,16 @@ function WorkspaceShell({ home }: { home: string }) {
   // undefined while loading, null when the API cannot be reached
   const [workspaces, setWorkspaces] = useState<Workspace[] | null | undefined>(undefined)
 
+  // undefined while loading, null when /me could not be read (then the API alone decides)
+  const [me, setMe] = useState<Me | null | undefined>(undefined)
+
   useEffect(() => {
     listWorkspaces()
       .then(setWorkspaces)
       .catch(() => setWorkspaces(null))
+    getMe()
+      .then(setMe)
+      .catch(() => setMe(null))
   }, [])
 
   useEffect(() => {
@@ -75,42 +83,46 @@ function WorkspaceShell({ home }: { home: string }) {
   const page = PAGE_LABELS[pathname.split('/')[3] ?? ''] ?? ''
 
   return (
-    <SidebarProvider>
-      <AppSidebar
-        workspace={workspace}
-        workspaces={workspaces}
-        onCreated={(created) => setWorkspaces([...(workspaces ?? []), created])}
-      />
-      <SidebarInset>
-        <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b bg-background/90 px-4 backdrop-blur">
-          <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-          <span className="truncate text-sm text-muted-foreground">
-            {workspace}
-            {page && <span className="text-foreground"> / {page}</span>}
-          </span>
-        </header>
-        <div className="w-full max-w-[1140px] px-4 pt-6 pb-20 md:px-8">
-          {workspaces === undefined ? null : !known ? (
-            <Empty>
-              No workspace “{workspace}”. <Link to={`/w/${home}/documents`}>Open {home}</Link>
-            </Empty>
-          ) : (
-            // Keyed: a switch remounts every page, so none keeps the old workspace's data.
-            <Routes key={workspace}>
-              <Route index element={<Navigate to="documents" replace />} />
-              <Route path="documents" element={<Documents />} />
-              <Route path="ask" element={<Ask />} />
-              <Route path="code" element={<Code />} />
-              <Route path="trace" element={<TraceList />} />
-              <Route path="trace/:id" element={<TraceDetail />} />
-              <Route path="annotations" element={<Annotations />} />
-              <Route path="graph" element={<Graph />} />
-              <Route path="*" element={<Empty>Not found.</Empty>} />
-            </Routes>
-          )}
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+    <AccessProvider value={accessOf(me, workspace)}>
+      <SidebarProvider>
+        <AppSidebar
+          me={me}
+          workspace={workspace}
+          workspaces={workspaces}
+          onCreated={(created) => setWorkspaces([...(workspaces ?? []), created])}
+        />
+        <SidebarInset>
+          <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b bg-background/90 px-4 backdrop-blur">
+            <SidebarTrigger className="-ml-1" />
+            <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
+            <span className="truncate text-sm text-muted-foreground">
+              {workspace}
+              {page && <span className="text-foreground"> / {page}</span>}
+            </span>
+          </header>
+          <div className="w-full max-w-[1140px] px-4 pt-6 pb-20 md:px-8">
+            {workspaces === undefined ? null : !known ? (
+              <Empty>
+                No workspace “{workspace}”. <Link to={`/w/${home}/documents`}>Open {home}</Link>
+              </Empty>
+            ) : (
+              // Keyed: a switch remounts every page, so none keeps the old workspace's data.
+              <Routes key={workspace}>
+                <Route index element={<Navigate to="documents" replace />} />
+                <Route path="documents" element={<Documents />} />
+                <Route path="ask" element={<Ask />} />
+                <Route path="code" element={<Code />} />
+                <Route path="trace" element={<TraceList />} />
+                <Route path="trace/:id" element={<TraceDetail />} />
+                <Route path="annotations" element={<Annotations />} />
+                <Route path="graph" element={<Graph />} />
+                <Route path="members" element={<Members />} />
+                <Route path="*" element={<Empty>Not found.</Empty>} />
+              </Routes>
+            )}
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
+    </AccessProvider>
   )
 }

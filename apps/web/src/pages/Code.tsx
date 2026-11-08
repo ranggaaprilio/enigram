@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
 import { WsLink } from '@/workspace'
+import { useAccess } from '../access'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, ChevronRight, Plus, X } from 'lucide-react'
@@ -193,8 +194,8 @@ export default function Code() {
       <section>
         {header}
         <Empty>
-          No repository indexed yet. Index one on the{' '}
-          <WsLink to="/documents">Documents</WsLink> page.
+          No repository indexed yet. Index one on the <WsLink to="/documents">Documents</WsLink>{' '}
+          page.
         </Empty>
       </section>
     )
@@ -425,9 +426,7 @@ function Features(props: {
               byKind(list.features).map(([label, features], _, groups) => (
                 <div key={label}>
                   {groups.length > 1 && (
-                    <h4 className={cn('mt-3 mb-1 px-2 font-semibold uppercase', muted)}>
-                      {label}
-                    </h4>
+                    <h4 className={cn('mt-3 mb-1 px-2 font-semibold uppercase', muted)}>{label}</h4>
                   )}
                   <ul>
                     {features.map((f) => (
@@ -442,7 +441,10 @@ function Features(props: {
                           onClick={() => props.onPick(f.symbol_id)}
                         >
                           {f.reviewed ? (
-                            <Check className="size-3.5 shrink-0 text-success" aria-label="reviewed" />
+                            <Check
+                              className="size-3.5 shrink-0 text-success"
+                              aria-label="reviewed"
+                            />
                           ) : (
                             <span className="size-3.5 shrink-0" />
                           )}
@@ -646,6 +648,12 @@ function SymbolPanel({
   const summary = view.summary.flow ?? view.summary.symbol
   const review = view.review
   const body = view.symbol.body
+  // docs/rbac.md: contributors review and write notes; a ✓ is undone by whoever set it or a
+  // maintainer.
+  const access = useAccess()
+  const contributor = access.can('contributor')
+  const mayUndo =
+    access.can('maintainer') || (contributor && review !== null && review.actor === access.name)
   return (
     <div className="min-w-0">
       <div className="rounded-xl bg-card px-5 py-4">
@@ -666,39 +674,45 @@ function SymbolPanel({
         ) : (
           <p className={muted}>No summary yet.</p>
         )}
-        <div className="mt-3 flex flex-wrap gap-2">
-          {summary && !review?.current && (
-            <Button type="button" size="sm" variant="secondary" onClick={onReview}>
-              <Check /> Looks right
+        {contributor && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {summary && !review?.current && (
+              <Button type="button" size="sm" variant="secondary" onClick={onReview}>
+                <Check /> Looks right
+              </Button>
+            )}
+            {summary && (
+              <Button
+                type="button"
+                size="sm"
+                variant="soft-destructive"
+                onClick={() => onMode('mismatch')}
+              >
+                <X /> Not right
+              </Button>
+            )}
+            <Button type="button" size="sm" variant="secondary" onClick={() => onMode('context')}>
+              <Plus /> Add context
             </Button>
-          )}
-          {summary && (
-            <Button
-              type="button"
-              size="sm"
-              variant="soft-destructive"
-              onClick={() => onMode('mismatch')}
-            >
-              <X /> Not right
-            </Button>
-          )}
-          <Button type="button" size="sm" variant="secondary" onClick={() => onMode('context')}>
-            <Plus /> Add context
-          </Button>
-        </div>
+          </div>
+        )}
         {review && (
           <p className={cn('mt-2', muted)}>
             Reviewed by {review.by || review.actor} · {formatTime(review.at)}
             {!review.current && ' — the summary changed since'}
-            {' · '}
-            <Button
-              type="button"
-              variant="link"
-              className="h-auto p-0 text-[13px] text-link"
-              onClick={onUndo}
-            >
-              {review.current ? 'Undo' : 'Remove'}
-            </Button>
+            {mayUndo && (
+              <>
+                {' · '}
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto p-0 text-[13px] text-link"
+                  onClick={onUndo}
+                >
+                  {review.current ? 'Undo' : 'Remove'}
+                </Button>
+              </>
+            )}
           </p>
         )}
         <h3 className={heading}>Steps ({view.steps.length})</h3>
@@ -769,7 +783,15 @@ function SymbolPanel({
 }
 
 // As Trace's sections, but closed by default: PM/QA read the summary, not the code.
-function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) {
+function Section({
+  title,
+  count,
+  children,
+}: {
+  title: string
+  count: number
+  children: ReactNode
+}) {
   return (
     <Collapsible className="group my-3 rounded-xl bg-card">
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-5 py-4 text-left font-semibold tracking-[-0.3px]">

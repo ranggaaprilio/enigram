@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { WsLink } from '@/workspace'
+import { useAccess } from '../access'
 import {
   getAnnotation,
   listAnnotations,
@@ -46,6 +47,7 @@ export default function Annotations() {
   const [repos, setRepos] = useState<RepoRow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [history, setHistory] = useState<Record<number, AnnotationEvent[]>>({})
+  const access = useAccess()
 
   const load = useCallback(async () => {
     try {
@@ -116,11 +118,13 @@ export default function Annotations() {
         title="Annotations"
         description="Human notes on code symbols, graph entities and documents. Answers cite them, and they ask for review when the code they describe changes."
         action={
-          <Button asChild variant="secondary">
-            <WsLink to="/graph" className="hover:no-underline">
-              <Network /> Graph editor
-            </WsLink>
-          </Button>
+          access.can('maintainer') && (
+            <Button asChild variant="secondary">
+              <WsLink to="/graph" className="hover:no-underline">
+                <Network /> Graph editor
+              </WsLink>
+            </Button>
+          )
         }
       />
       <div className="mb-4 flex items-center gap-3">
@@ -144,17 +148,19 @@ export default function Annotations() {
           ))}
         </NativeSelect>
       </div>
-      <NewNoteForm
-        repos={repos}
-        initialKind={(params.get('target_kind') as TargetKind) || 'symbol'}
-        initialRef={params.get('target_ref') ?? ''}
-        initialRepo={Number(params.get('repo')) || null}
-        onCreated={async () => {
-          setError(null)
-          await load()
-        }}
-        onError={setError}
-      />
+      {access.can('contributor') && (
+        <NewNoteForm
+          repos={repos}
+          initialKind={(params.get('target_kind') as TargetKind) || 'symbol'}
+          initialRef={params.get('target_ref') ?? ''}
+          initialRepo={Number(params.get('repo')) || null}
+          onCreated={async () => {
+            setError(null)
+            await load()
+          }}
+          onError={setError}
+        />
+      )}
       {error && <ErrorAlert>{error}</ErrorAlert>}
       {notes === null ? (
         <p className="text-muted-foreground">Loading…</p>
@@ -204,6 +210,13 @@ function NoteRow(props: {
 }) {
   const { note: n } = props
   const [confirming, setConfirming] = useState<'reject' | 'delete' | null>(null)
+  // docs/rbac.md: maintainers verify, reject, mark conflicts and relink, never on an agent
+  // proposal of their own key; the author or a maintainer deletes.
+  const access = useAccess()
+  const maintainer = access.can('maintainer')
+  const ownProposal = n.via === 'mcp' && access.name !== null && n.author === access.name
+  const mayVerify = maintainer && !ownProposal
+  const mayDelete = maintainer || (access.can('contributor') && n.author === access.name)
   const [relinkTo, setRelinkTo] = useState(n.candidates[0]?.id ?? '')
   const meta = 'text-[13px] text-muted-foreground'
   return (
@@ -252,7 +265,7 @@ function NoteRow(props: {
         </TableCell>
         <TableCell>
           <div className="flex flex-wrap items-center gap-1.5">
-            {n.status !== 'verified' && (
+            {mayVerify && n.status !== 'verified' && (
               <Button
                 type="button"
                 size="sm"
@@ -288,7 +301,7 @@ function NoteRow(props: {
                 </Button>
               </>
             )}
-            {n.status !== 'rejected' && !confirming && (
+            {mayVerify && n.status !== 'rejected' && !confirming && (
               <Button
                 type="button"
                 size="sm"
@@ -298,18 +311,20 @@ function NoteRow(props: {
                 Reject
               </Button>
             )}
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => props.onChange({ conflict: !n.conflict })}
-            >
-              {n.conflict ? 'Unmark conflict' : 'Conflict'}
-            </Button>
+            {maintainer && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => props.onChange({ conflict: !n.conflict })}
+              >
+                {n.conflict ? 'Unmark conflict' : 'Conflict'}
+              </Button>
+            )}
             <Button type="button" size="sm" variant="secondary" onClick={props.onHistory}>
               History
             </Button>
-            {!confirming && (
+            {mayDelete && !confirming && (
               <Button
                 type="button"
                 size="sm"
@@ -320,7 +335,7 @@ function NoteRow(props: {
               </Button>
             )}
           </div>
-          {n.status === 'orphaned' && n.candidates.length > 0 && (
+          {maintainer && n.status === 'orphaned' && n.candidates.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <NativeSelect
                 size="sm"

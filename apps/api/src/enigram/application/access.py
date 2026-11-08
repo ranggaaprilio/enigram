@@ -5,8 +5,15 @@ import logging
 
 from enigram.application.ports import PrincipalRepository
 from enigram.config import Config
-from enigram.domain.access import Caller, Principal, check_role, hash_key, new_api_key
-from enigram.domain.errors import EnigramError, NotFound
+from enigram.domain.access import (
+    Caller,
+    Principal,
+    check_principal_name,
+    check_role,
+    hash_key,
+    new_api_key,
+)
+from enigram.domain.errors import EnigramError, Forbidden, NotFound
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +69,7 @@ async def add_key(
     """A new key, member of `workspace` with `role`; the key itself is returned once and only its
     hash is kept."""
     check_role(role)
+    check_principal_name(name)
     key = new_api_key()
     principal = await principals.create(name, "key", hash_key(key), workspace)
     await principals.set_role(workspace, principal.id, role)
@@ -94,3 +102,56 @@ async def set_owner(principals: PrincipalRepository, name: str, owner: bool) -> 
 
 async def revoke(principals: PrincipalRepository, name: str) -> None:
     await principals.revoke((await _named(principals, name)).id)
+
+
+# The members page (docs/rbac.md, R3): an admin of the workspace manages who is in it.
+
+
+async def members(principals: PrincipalRepository, workspace: str) -> list[dict[str, object]]:
+    """The keys with a role in `workspace` (revoked ones left out), by name."""
+    return [
+        {"name": p.name, "kind": p.kind, "role": roles[workspace], "owner": p.owner}
+        for p, revoked, roles in await principals.list()
+        if not revoked and workspace in roles
+    ]
+
+
+async def change_member(
+    principals: PrincipalRepository, workspace: str, name: str, role: str | None
+) -> None:
+    """Give `name` a role in `workspace` (adding it), or None to remove it. The last admin
+    cannot be lowered or removed, so a workspace always keeps someone who manages it."""
+    if role is not None:
+        check_role(role)
+    principal = await _named(principals, name)
+    current = (await principals.roles(principal.id)).get(workspace)
+    if current == "admin" and role != "admin":
+        admins = [m for m in await members(principals, workspace) if m["role"] == "admin"]
+        if len(admins) <= 1:
+            raise EnigramError(
+                f"{name} is the last admin of {workspace}; make another member admin first"
+            )
+    if role is None:
+        if not await principals.remove_member(workspace, principal.id):
+            raise NotFound(f"{name} is no member of {workspace}")
+        return
+    await principals.set_role(workspace, principal.id, role)
+
+
+async def revoke_key(
+    principals: PrincipalRepository, caller: Caller, workspace: str, name: str
+) -> None:
+    """An admin may revoke a key of its workspace when it is also admin of every other workspace
+    the key is in; an owner's key only an owner may revoke."""
+    principal = await _named(principals, name)
+    roles = await principals.roles(principal.id)
+    if workspace not in roles and not principal.owner:
+        raise NotFound(f"{name} is no member of {workspace}")
+    if principal.owner and not (caller.principal is None or caller.principal.owner):
+        raise Forbidden(f"Only an owner may revoke the owner key {name}")
+    elsewhere = [w for w in roles if caller.role_in(w) != "admin"]
+    if elsewhere:
+        raise Forbidden(f"{name} is also in {', '.join(sorted(elsewhere))}, where you are no admin")
+    if roles.get(workspace) == "admin":
+        await change_member(principals, workspace, name, None)  # the last-admin check
+    await principals.revoke(principal.id)

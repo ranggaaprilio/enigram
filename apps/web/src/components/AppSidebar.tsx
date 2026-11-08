@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 import {
   BookOpen,
@@ -13,6 +12,7 @@ import {
   Network,
   StickyNote,
   Sun,
+  Users,
   type LucideIcon,
 } from 'lucide-react'
 import StatusBadge from '@/components/StatusBadge'
@@ -38,7 +38,8 @@ import {
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar'
-import { getMe, type Me, type Workspace } from '../api'
+import { useAccess } from '../access'
+import type { Me, Role, Workspace } from '../api'
 import { useTheme, type Theme } from '../theme'
 import { useWorkspacePath } from '../workspace'
 
@@ -46,9 +47,10 @@ interface Page {
   to: string
   label: string
   icon: LucideIcon
+  minimum?: Role // shown only to this role and above (docs/rbac.md)
 }
 
-// docs/design.md: Review, Monitor and Settings join as their pages land.
+// docs/design.md: Review and Monitor join as their pages land.
 export const NAV: { label: string; pages: Page[] }[] = [
   {
     label: 'Answers',
@@ -66,9 +68,14 @@ export const NAV: { label: string; pages: Page[] }[] = [
       { to: '/graph', label: 'Graph', icon: Network },
     ],
   },
+  {
+    label: 'Settings',
+    pages: [{ to: '/members', label: 'Members', icon: Users, minimum: 'admin' }],
+  },
 ]
 
 export default function AppSidebar(props: {
+  me: Me | null | undefined
   workspace: string
   workspaces: Workspace[] | null | undefined
   onCreated: (created: Workspace) => void
@@ -76,6 +83,11 @@ export default function AppSidebar(props: {
   const path = useWorkspacePath()
   const { pathname } = useLocation()
   const { isMobile, setOpenMobile } = useSidebar()
+  const access = useAccess()
+  const groups = NAV.map((g) => ({
+    ...g,
+    pages: g.pages.filter((p) => !p.minimum || access.can(p.minimum)),
+  })).filter((g) => g.pages.length > 0)
 
   return (
     <Sidebar collapsible="icon">
@@ -102,7 +114,7 @@ export default function AppSidebar(props: {
       </SidebarHeader>
       <SidebarContent>
         <nav aria-label="Pages">
-          {NAV.map((group) => (
+          {groups.map((group) => (
             <SidebarGroup key={group.label}>
               <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
               <SidebarMenu>
@@ -132,7 +144,7 @@ export default function AppSidebar(props: {
         </nav>
       </SidebarContent>
       <SidebarFooter>
-        <UserMenu workspace={props.workspace} />
+        <UserMenu me={props.me} workspace={props.workspace} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
@@ -145,16 +157,9 @@ const THEMES: { value: Theme; label: string; icon: LucideIcon }[] = [
   { value: 'system', label: 'System', icon: Monitor },
 ]
 
-function UserMenu({ workspace }: { workspace: string }) {
+// `me`: undefined while loading, null when /me could not be read.
+function UserMenu({ me, workspace }: { me: Me | null | undefined; workspace: string }) {
   const [theme, setTheme] = useTheme()
-  // undefined while loading, null when /me could not be read
-  const [me, setMe] = useState<Me | null | undefined>(undefined)
-
-  useEffect(() => {
-    getMe()
-      .then(setMe)
-      .catch(() => setMe(null))
-  }, [])
 
   // Without keys the API is open and everyone acts as admin (docs/rbac.md).
   const name = me?.principal?.name ?? (me ? 'Local' : 'Account')

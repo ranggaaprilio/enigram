@@ -63,6 +63,11 @@ MATRIX = [
     ("DELETE", "/graph/relation?source=A&target=B", None, "maintainer"),
     ("POST", "/repos/1/secret", None, "admin"),
     ("POST", "/repos", {"url": "https://github.com/org/app", "token": "ghp_abc123"}, "admin"),
+    ("GET", "/members", None, "admin"),
+    ("PUT", "/members/web", {"role": "contributor"}, "admin"),
+    ("DELETE", "/members/web", None, "admin"),
+    ("POST", "/keys", {"name": "qa-team", "role": "viewer"}, "admin"),
+    ("DELETE", "/keys/web", None, "admin"),
 ]
 
 
@@ -209,3 +214,80 @@ def test_role_order_and_open_caller():
     assert Caller(None).role_in("any") == "admin"  # access control off
     assert Caller(p, {"default": "viewer"}).role_in("other") is None
     assert Caller(dataclasses.replace(p, owner=True)).role_in("other") == "admin"
+
+
+def test_an_admin_manages_the_members(notes_env):
+    client, store, _, _, _ = notes_env
+    _set_role(store, "laptop-a", "admin")
+    laptop = _bearer(LAPTOP_KEY)
+
+    made = client.post("/keys", json={"name": "qa-team", "role": "contributor"}, headers=laptop)
+    key = made.json()["key"]
+    assert made.status_code == 201 and made.json()["role"] == "contributor"
+    assert client.get("/me", headers=_bearer(key)).json()["roles"] == {"default": "contributor"}
+    assert client.put("/members/qa-team", json={"role": "viewer"}, headers=laptop).is_success
+    listed = client.get("/members", headers=laptop).json()
+
+    assert [(m["name"], m["role"]) for m in listed] == [
+        ("laptop-a", "admin"),
+        ("qa-team", "viewer"),
+        ("web", "maintainer"),
+    ]
+    assert client.delete("/keys/qa-team", headers=laptop).status_code == 204
+    assert client.get("/me", headers=_bearer(key)).status_code == 401
+    assert "qa-team" not in [m["name"] for m in client.get("/members", headers=laptop).json()]
+
+
+def test_the_last_admin_stays(notes_env):
+    client, store, _, _, _ = notes_env
+    _set_role(store, "laptop-a", "admin")
+    laptop = _bearer(LAPTOP_KEY)
+
+    lowered = client.put("/members/laptop-a", json={"role": "viewer"}, headers=laptop)
+    removed = client.delete("/members/laptop-a", headers=laptop)
+    revoked = client.delete("/keys/laptop-a", headers=laptop)
+
+    for response in (lowered, removed, revoked):
+        assert response.status_code == 422 and "last admin" in response.json()["detail"]
+    _set_role(store, "web", "admin")
+    assert client.put("/members/laptop-a", json={"role": "viewer"}, headers=laptop).is_success
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        ({"name": "bad name", "role": "viewer"}, "key name"),
+        ({"name": "web", "role": "viewer"}, "already exists"),
+        ({"name": "x", "role": "owner"}, "role"),
+    ],
+)
+def test_a_new_key_needs_a_free_valid_name_and_a_role(notes_env, body, detail):
+    client, store, _, _, _ = notes_env
+    _set_role(store, "laptop-a", "admin")
+
+    response = client.post("/keys", json=body, headers=_bearer(LAPTOP_KEY))
+
+    assert response.status_code == 422 and detail in str(response.json()["detail"])
+
+
+def test_unknown_names_are_404(notes_env):
+    client, store, _, _, _ = notes_env
+    _set_role(store, "laptop-a", "admin")
+    laptop = _bearer(LAPTOP_KEY)
+
+    assert client.put("/members/nobody", json={"role": "viewer"}, headers=laptop).status_code == 404
+    assert client.delete("/keys/nobody", headers=laptop).status_code == 404
+
+
+def test_an_admin_revokes_only_keys_of_its_own_workspaces(notes_env):
+    client, store, _, _, _ = notes_env
+    _set_role(store, "laptop-a", "admin")
+    laptop = _bearer(LAPTOP_KEY)
+    _grant(store, "web", "viewer", "ws-b")  # web is also in a workspace laptop-a cannot manage
+
+    elsewhere = client.delete("/keys/web", headers=laptop)
+    _grant(store, "web", "owner")
+    owner = client.delete("/keys/web", headers=laptop)
+
+    assert elsewhere.status_code == 403 and "ws-b" in elsewhere.json()["detail"]
+    assert owner.status_code == 403 and "owner" in owner.json()["detail"]

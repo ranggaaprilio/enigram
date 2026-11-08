@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Annotation, Feature, SymbolView } from '../api'
+import { asRole } from '../test/access'
 import { mockFetch } from '../test/mockFetch'
 import Code from './Code'
 
@@ -444,6 +445,40 @@ describe('Code', () => {
       expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true),
     )
   })
+
+  it.each([
+    ['viewer', 'me', [], false],
+    ['contributor', 'web', ['Looks right', 'Not right', 'Add context'], true],
+    ['contributor', 'me', ['Looks right', 'Not right', 'Add context'], false],
+    ['maintainer', 'me', ['Looks right', 'Not right', 'Add context'], true],
+  ] as const)(
+    'shows a %s (key %s) the review actions its role allows',
+    async (role, name, actions, undo) => {
+      const stale = {
+        ...view,
+        review: { by: '', actor: 'web', at: '2026-11-01T08:00:00Z', current: false },
+      }
+      mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: stale } })
+      render(
+        asRole(
+          role,
+          <MemoryRouter initialEntries={[AT_SYMBOL]}>
+            <Routes>
+              <Route path="/code" element={<Code />} />
+            </Routes>
+          </MemoryRouter>,
+          name,
+        ),
+      )
+
+      expect(await screen.findByText(/Reviewed by web/)).toBeInTheDocument()
+      for (const label of ['Looks right', 'Not right', 'Add context'])
+        expect(!!screen.queryByRole('button', { name: label })).toBe(
+          (actions as readonly string[]).includes(label),
+        )
+      expect(!!screen.queryByRole('button', { name: 'Remove' })).toBe(undo)
+    },
+  )
 
   it('offers a new review when the summary changed since the last one', async () => {
     const stale = {

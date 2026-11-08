@@ -2,7 +2,8 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { describe, expect, it } from 'vitest'
-import type { Annotation } from '../api'
+import type { Annotation, Role } from '../api'
+import { asRole } from '../test/access'
 import { mockFetch } from '../test/mockFetch'
 import Annotations from './Annotations'
 
@@ -242,5 +243,61 @@ describe('Annotations', () => {
     expect(bodyOf(fetch, 'PATCH /api/annotations/5')).toEqual({
       target_ref: 'src/b.ts#Auth.logout',
     })
+  })
+})
+
+describe('Annotations by role', () => {
+  function renderAs(role: Role, name = 'me') {
+    render(
+      asRole(
+        role,
+        <MemoryRouter initialEntries={['/annotations']}>
+          <Routes>
+            <Route path="/annotations" element={<Annotations />} />
+          </Routes>
+        </MemoryRouter>,
+        name,
+      ),
+    )
+  }
+
+  const ROUTES = (notes: Annotation[]) => ({
+    'GET /api/annotations': { body: notes },
+    'GET /api/repos': { body: REPOS },
+  })
+
+  it('shows a viewer no actions but the history', async () => {
+    mockFetch(ROUTES([note(1, { author: 'me' })]))
+    renderAs('viewer')
+    const row = (await screen.findByText(/Logout also revokes/)).closest('tr')!
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['History'])
+    expect(screen.queryByText('New annotation')).toBeNull()
+    expect(screen.queryByRole('link', { name: /Graph editor/ })).toBeNull()
+  })
+
+  it('lets a contributor delete its own note but not verify', async () => {
+    mockFetch(ROUTES([note(1, { author: 'me' }), note(2, { author: 'web' })]))
+    renderAs('contributor')
+    const [own, other] = await screen.findAllByText(/Logout also revokes/)
+    const buttons = (el: HTMLElement) =>
+      within(el.closest('tr')!)
+        .getAllByRole('button')
+        .map((b) => b.textContent)
+    expect(buttons(own)).toEqual(['History', 'Delete'])
+    expect(buttons(other)).toEqual(['History'])
+    expect(screen.getByText('New annotation')).toBeInTheDocument()
+  })
+
+  it('keeps a maintainer from verifying its own agent proposal', async () => {
+    mockFetch(
+      ROUTES([
+        note(1, { status: 'proposed', via: 'mcp', author: 'me' }),
+        note(2, { status: 'proposed', via: 'mcp', author: 'laptop-b' }),
+      ]),
+    )
+    renderAs('maintainer')
+    const [own, other] = await screen.findAllByText(/Logout also revokes/)
+    expect(within(own.closest('tr')!).queryByRole('button', { name: 'Verify' })).toBeNull()
+    expect(within(other.closest('tr')!).getByRole('button', { name: 'Verify' })).toBeVisible()
   })
 })
