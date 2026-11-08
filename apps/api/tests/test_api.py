@@ -5,6 +5,7 @@ from urllib.parse import quote
 import pytest
 from code_fakes import (
     FakeAnnotations,
+    FakeChatStore,
     FakeCodeGraph,
     FakeConflicts,
     FakeDecider,
@@ -73,7 +74,10 @@ def _deps(cfg, store, built):
     async def new_stats(store):
         return FakeStats()
 
-    deps.new_stats = new_stats
+    async def new_chat(store):
+        return FakeChatStore()
+
+    deps.new_stats, deps.new_chat = new_stats, new_chat
     return deps
 
 

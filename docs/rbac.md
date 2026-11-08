@@ -130,6 +130,8 @@ CLI (`enigram principals ...`) bekerja langsung ke DB dan setara `owner`.
 | `GET /memories`, `GET /memories/{id}` (item 7) | `contributor` (memory sendiri) / `maintainer` (semua key) | Keputusan A, 2026-11-07 |
 | `DELETE /memories/{id}` (item 7) | `contributor` (memory sendiri) / `maintainer` (key lain) | Diputuskan 2026-11-08; tanpa retensi otomatis |
 | `POST /memories/{id}/note` (item 7) | `contributor` | Menjadi proposal |
+| `GET /chat/agents`, `GET`/`POST /chat/sessions`, `GET`/`PATCH /chat/sessions/{id}`, `POST /chat/sessions/{id}/messages` (item 8) | `viewer`; hanya pemilik yang menulis, mengganti judul, dan membagikan; sesi orang lain hanya terbaca bila dibagikan, selain itu 404 | Diputuskan 2026-11-08 |
+| `DELETE /chat/sessions/{id}` (item 8) | Pemilik, atau `admin` (sesi siapa pun) | Riwayat disimpan sampai dihapus |
 | Chat (item 8) | `viewer` | Siapa boleh melihat sesi orang lain: belum diputuskan |
 
 ## Tool MCP (HTTP `/mcp`)

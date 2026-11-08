@@ -266,6 +266,7 @@ def _fake_adapters(deps):
 
     deps.new_memory, deps.new_code_graph = tagged("memory"), tagged("graph")
     deps.new_annotations, deps.new_conflicts = tagged("notes"), tagged("conflicts")
+    deps.new_chat = tagged("chat")
     return deps
 
 

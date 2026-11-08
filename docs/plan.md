@@ -16,7 +16,7 @@ Per 2026-11-08 malam.
 | 5 Note A1–A3 (form baru, Knowledge + Inbox, duplikat dan bulk) | Selesai | #38, #40, #42 |
 | 6 Dashboard D1–D3; Dashboard jadi halaman awal | Selesai | #44–#47, #52, #53 |
 | 7 Memory M1–M2 (M3 tercakup test M1) | Selesai | #49, #50 |
-| 8 Chat multi-agent | **Belum**; menunggu lima keputusan di bagian 8 | — |
+| 8 Chat multi-agent | C1a (API) dikerjakan; C1b halaman Chat berikutnya, lalu C2–C4 | #55 |
 | 9 Monorepo | Belum (bisa diuji pada `apps/web` repo ini) | — |
 | 10 Hapus note | Selesai | #29 |
 | 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |
@@ -575,7 +575,24 @@ Business rules benar-benar memakai note dan dokumen, dan apakah fokus tidak menu
 dibanding Ask (porsi `[unsupported]`, abstain yang benar). Biaya eval kecil ini dicatat terpisah
 dari fase 7.
 
-**Keputusan yang dibutuhkan.**
+**Diputuskan 2026-11-08.**
+- Interaksi utama: satu agent per percakapan (atau `@mention` per pesan, C2); panel di C3.
+- Agent bawaan: empat di atas, nama UI seperti di tabel (Technical, Business rules, QA, Overview).
+- Sesi milik orang yang memulainya; pemilik bisa membagikannya ke anggota workspace (baca saja).
+  Sesi privat orang lain tampak tidak ada (404), juga bagi admin.
+- Riwayat disimpan sampai dihapus (pemilik, atau `admin` untuk sesi siapa pun), seperti memory.
+- Halaman Ask tetap ada di samping Chat; ditinjau lagi setelah Chat dipakai.
+
+**C1a (API) selesai 2026-11-08.** Tabel `chat_sessions` dan `chat_messages`, route `/chat/...`
+(README), agent Technical dengan riwayat. Dua penyesuaian terhadap rencana:
+- *Streaming* berupa event langkah (`step`: "Reading a file", ...) lalu jawaban utuh, bukan teks
+  per token: jawaban masih diproses setelah selesai (label asal, peringatan note, guard abstain),
+  dan `ChatModel` belum punya streaming. Per token bisa menyusul bila terasa lambat.
+- Guard abstain menilai pertanyaan lanjutan dalam bentuk mandiri (satu panggilan LLM kecil menulis
+  ulang "dan user biasa?" menjadi pertanyaan lengkap), dengan jawaban sebelumnya ikut sebagai bukti.
+  Tanpa itu jawaban lanjutan yang benar diganti "tidak terjawab" (P 0,06–0,08; sesudahnya 0,69).
+
+**Keputusan awal (sudah dijawab di atas).**
 - Interaksi utama: pilih satu agent per percakapan, panel, atau keduanya sejak awal.
 - Daftar agent bawaan (empat di atas) dan namanya di UI.
 - Siapa boleh melihat sesi chat: hanya pemiliknya, atau anggota workspace (berbagi percakapan).
