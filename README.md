@@ -256,10 +256,9 @@ metadata, not just text:
   empty = never). The document matches are automatic and often wrong; the tool tells the agent
   to read the cited code first.
 
-An MCP proposal can be verified or rejected only by a key in `ANNOTATION_VERIFIERS`, and never
-by the key that proposed it, even when it is the owner or a verifier itself (403). To approve
-proposals in the web UI, put `web` in `ANNOTATION_VERIFIERS`; the Annotations page shows "via
-MCP by <key>", the question and the memory id.
+An MCP proposal can be verified or rejected only by a `maintainer` (see [Roles](#roles)), and
+never by the key that proposed it, even as an admin (403). The Annotations page shows "via MCP by
+<key>", the question and the memory id.
 
 Docs-vs-code detection is a worker job, started by hand (`POST /conflicts/detect` with
 `{"url", "ref"?}`, or inline with the CLI below); `GET /conflicts?repo=<id>` and `get_conflicts`
@@ -300,14 +299,14 @@ write the same index.
 | `POST /documents` (multipart `file`) | Save a PDF/Markdown file and queue it (202). 200 if already indexed unchanged; 409 if a different version is indexed or queued |
 | `GET /documents` | Indexed and queued documents with status |
 | `DELETE /documents/{book}` | Queue deleting a document: its index entries, parsed files and uploaded file (202; 404 unknown; 409 while it has a job) |
-| `POST /repos` `{"url", "ref"?, "token"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL or token; 409 already queued). `token`: a private repository's access token, see [Private repositories](#private-repositories) (403 unless the key is in `ANNOTATION_VERIFIERS`) |
+| `POST /repos` `{"url", "ref"?, "token"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL or token; 409 already queued). `token`: a private repository's access token, see [Private repositories](#private-repositories) (needs `admin`) |
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set, whether it is `private` (has an access token) |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50), for the annotation form |
 | `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each and whether their summary has a current ✓ (`reviewed`), the first 500 whose route or symbol name contains `q`, plus `total` |
 | `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |
 | `GET /repos/{id}/symbols/{symbol_id}` | One symbol (`<file>#<qualified_name>`, URL-encoded) with its location, entry points, flow and symbol summaries, steps (direct callees with their summaries and note counts), callers (the repository symbols that call it directly, with note counts), notes and ✓ (`review`, with `current: false` once the summary changed) |
 | `POST /repos/{id}/symbols/{symbol_id}/review` `{"by"?}` | Mark the summary the Code page shows for the symbol as right (✓): not a note, never cited or shown to agents; a later mark replaces it; 422 without a summary |
-| `DELETE /repos/{id}/symbols/{symbol_id}/review` | Remove the ✓ (204; 404 when there is none; 403 unless the key that set it or a key in `ANNOTATION_VERIFIERS`) |
+| `DELETE /repos/{id}/symbols/{symbol_id}/review` | Remove the ✓ (204; 404 when there is none; 403 unless the key that set it or a `maintainer`) |
 | `POST /repos/{id}/secret` | Create or rotate the repository's webhook secret; returned once, never again |
 | `POST /repos/{id}/webhook` | GitHub/GitLab push webhook: no Bearer key, signed with the repository's secret; queues a re-index (202), ignores other branches and commits already indexed |
 | `DELETE /repos/{id}` | Queue deleting a repository's code graph and clone; its annotations become `orphaned` (202; 404 unknown; 409 while it has a job) |
@@ -315,7 +314,7 @@ write the same index.
 | `POST /annotations` `{"target_kind", "target_ref", "text", "repo"?, "by"?, "owner"?, "scope"?, "verify_by"?, "note_type"?, "proposed"?}` | Create a note (201); see [Annotations](#annotations) |
 | `GET /annotations/{id}` | One note with its change history |
 | `PATCH /annotations/{id}` `{"status"?, "text"?, "owner"?, "verify_by"?, "conflict"?, "target_ref"?, "by"?}` | Verify, reject, edit, relink or flag a note (403 when the key may not verify) |
-| `DELETE /annotations/{id}` | Delete a note and its history for good (204; 403 unless the key wrote it or is in `ANNOTATION_VERIFIERS`); the deletion is logged |
+| `DELETE /annotations/{id}` | Delete a note and its history for good (204; 403 unless the key wrote it or is a `maintainer`); the deletion is logged |
 | `GET /jobs/{id}` | One indexing job: status, result (chunks, timings, report), error |
 | `POST /query` `{"question", "mode": "mix"\|"naive", "scope": "auto"\|"docs"\|"code", "repo"?}` | Answer with sources, chunks, entities and relations, plus its stored `id`; `scope` defaults to `auto` (the router picks code, documents or both; decision in `extra.route`), `"code"` asks the code agent (`mode` applies to the documents only, `repo` = a repository URL and makes `auto` a code question) |
 | `GET /queries?limit=50` | Recent queries, newest first, without their traces (`limit` 1-200) |
@@ -327,8 +326,9 @@ write the same index.
 | `POST /graph/entity/merge` `{"sources": [...], "target", "description"?}` | Queue a merge into `target` (new or existing) |
 | `DELETE /graph/entity/{name}` | Queue deleting an entity and its relations |
 | `DELETE /graph/relation?source=&target=` | Queue deleting one relation |
-| `GET /workspaces` | The workspaces, by name; the process `WORKSPACE` is always one |
-| `POST /workspaces` `{"name"}` | Create a workspace (201; 422 unless 1-32 of `a-z`, `0-9`, `-`, starting with a letter or digit; 409 exists) |
+| `GET /workspaces` | The caller's workspaces, by name (every one for an owner or without keys) |
+| `POST /workspaces` `{"name"}` | Create a workspace (201; 403 unless `owner`; 422 unless 1-32 of `a-z`, `0-9`, `-`, starting with a letter or digit; 409 exists) |
+| `GET /me` | The caller (name, kind, owner, default workspace) and its role per workspace; `principal: null` without keys |
 | `GET /health` | Liveness; with `POST /repos/{id}/webhook` the only routes without a key |
 
 A request works on the workspace named in its `X-Enigram-Workspace` header (404 for an unknown
@@ -388,10 +388,43 @@ API_BIND=0.0.0.0                # publish the API port on the LAN, e.g. for MCP 
 
 With keys set, every route except `GET /health` and the signed repository webhook needs `Authorization: Bearer <key>`
 (`curl -H "Authorization: Bearer $KEY" ...`); otherwise it answers 401. Without
-`ENIGRAM_API_KEYS` every route is open and the API logs a warning, so keep `API_BIND` at its
-default (`127.0.0.1`) until keys are set. Changing keys needs a restart (`docker compose up -d`).
-The API speaks plain HTTP: on an untrusted network put TLS in front (a reverse proxy or
-Tailscale).
+`ENIGRAM_API_KEYS` every route is open (no roles) and the API logs a warning, so keep `API_BIND`
+at its default (`127.0.0.1`) until keys are set. The API speaks plain HTTP: on an untrusted
+network put TLS in front (a reverse proxy or Tailscale).
+
+#### Roles
+
+With keys set, every key is a *principal* with one role per workspace (full table:
+[`docs/rbac.md`](docs/rbac.md)); each role has every right of the ones before it:
+
+| Role | May |
+|---|---|
+| `viewer` | Read every page, ask (`/query`, MCP `query_knowledge_base`), see traces |
+| `contributor` | + propose notes, ✓ *Looks right*, flag a note for re-check, edit or delete its own notes, agent memory, MCP `propose_annotation` |
+| `maintainer` | + verify or reject notes, upload and delete documents, index and delete repositories, edit the graph, detect conflicts |
+| `admin` | + webhook secrets and private repository tokens |
+
+An `owner` is `admin` in every workspace and the only one who may create workspaces. A workspace
+the key is no member of answers 404, as one that does not exist; a role too low answers 403.
+`GET /me` shows the key's name and its role per workspace; `GET /workspaces` lists only its
+workspaces. Without `X-Enigram-Workspace` a request goes to the key's default workspace.
+
+At API start every key in `ENIGRAM_API_KEYS` seen for the first time becomes a principal: a key
+in `ANNOTATION_VERIFIERS` becomes `owner` (so `web` there keeps the UI's rights, *New workspace*
+included), any other key `maintainer` of every existing workspace. Later starts only update a
+rotated key; roles set since then are kept. Keys and roles are managed without a restart:
+
+```bash
+uv run enigram principals list
+uv run enigram principals add-key qa-team --workspace whiteboard --role contributor  # prints the key once
+uv run enigram principals role laptop-b default viewer      # or `none` to remove the membership
+uv run enigram principals owner laptop-b [--off]
+uv run enigram principals revoke qa-team                     # 401 from the next request on
+```
+
+Keys are stored as SHA-256 hashes (table `principals`, roles in `workspace_members`). MCP over
+HTTP checks the same roles in the process workspace; MCP over stdio has none. Everyone in the web
+UI still shares the `web` key and its role until per-person login (roadmap item 2, R4).
 
 ### Web UI
 
@@ -533,8 +566,8 @@ sent to DeepSeek and Voyage does not change.
 Give a read-only personal access token in the Documents page ("Access token") or as `token` in
 `POST /repos`: a GitHub fine-grained token with *Contents: read* on that repository, or a GitLab
 token with `read_repository`. It needs `REPO_CREDENTIALS_KEY` (make one with
-`uv run enigram repo-key`, put it in `.env`) and, when `ENIGRAM_API_KEYS` is set, a key in
-`ANNOTATION_VERIFIERS`.
+`uv run enigram repo-key`, put it in `.env`) and, when `ENIGRAM_API_KEYS` is set, the `admin`
+role.
 
 - The token is kept per repository URL and workspace (table `repo_credentials`), encrypted with
   `REPO_CREDENTIALS_KEY` (Fernet). It is never in the job payload, a log line, an API response
@@ -571,12 +604,12 @@ above`. Conflicts are marked by the [decision layer](#decision-layer) when a sym
 verified and when a re-index flags it, or by hand (`PATCH {"conflict": true}`, which wins over the
 decider in the same request).
 
-Who may do what: the author is the API key's name (`web` for the UI, `anonymous` without
-`ENIGRAM_API_KEYS`) and owns the note unless `owner` names another key. A note created by its
-owner is `verified`; one created for someone else is `proposed`. Only the owner or a key named in
-`ANNOTATION_VERIFIERS` (comma list) may verify, reject, change the owner or extend `verify_by`
-(403 otherwise). A text edit by anyone else turns the note back into a proposal. Relinking and
-marking a conflict are open to every key. Every change is kept as an event.
+Who may do what ([Roles](#roles)): the author is the API key's name (`web` for the UI,
+`anonymous` without `ENIGRAM_API_KEYS`). A `maintainer`'s note is `verified` at once (unless sent
+with `proposed: true`); a `contributor`'s is `proposed`. Only a maintainer may verify, reject,
+change the owner, extend `verify_by`, relink or mark a conflict (403 otherwise); a contributor
+may flag a note `needs_verification`. Only the author or a maintainer may edit the text, and a
+contributor's edit turns the note back into a proposal. Every change is kept as an event.
 
 A symbol note stores the symbol's body hash and, for `scope: deps` (default), a hash of the
 callees it reaches (the same set its flow summary covers). Every re-index then flags it

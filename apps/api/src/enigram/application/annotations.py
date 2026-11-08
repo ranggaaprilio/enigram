@@ -1,5 +1,5 @@
 """Annotation use cases shared by the API, MCP, the CLI and the golden runner: create, propose
-(agents over MCP) and change with the verifier rule (domain.may_verify), one event per change."""
+(agents over MCP) and change by role (docs/rbac.md, domain.may_verify), one event per change."""
 
 import asyncio
 import dataclasses
@@ -17,6 +17,7 @@ from enigram.application.ports import (
 )
 from enigram.application.staleness import hashes_for
 from enigram.config import Config
+from enigram.domain.access import at_least
 from enigram.domain.annotation import (
     ANNOTATION_MAX_CHARS,
     DEFAULT_NOTE_TYPE,
@@ -198,11 +199,14 @@ async def create_annotation(
     new: NewAnnotation,
     actor: str,
     *,
+    role: str = "admin",
     decider: DecisionProvider | None = None,
 ) -> Annotation:
-    """With `decider`, a symbol note verified on creation is checked against the code and gets
-    `conflict` set by the decider (event `conflict_detected` by actor `decider`). With
-    `new.proposed` the note is a proposal whoever writes it."""
+    """A maintainer's note is verified at once, a contributor's is a proposal; with
+    `new.proposed` it is a proposal whoever writes it. With `decider`, a symbol note verified on
+    creation is checked against the code and gets `conflict` set by the decider (event
+    `conflict_detected` by actor `decider`). `role` is the actor's role in the workspace
+    (admin when access control is off)."""
     _check_kind(new.target_kind, new.scope)
     if new.note_type not in NOTE_TYPES:
         raise EnigramError(f"note_type must be one of {NOTE_TYPES}")
@@ -222,7 +226,7 @@ async def create_annotation(
         "note_type": new.note_type,
     }
     p = None
-    if not new.proposed and (actor == owner or actor in cfg.annotation_verifiers):
+    if not new.proposed and at_least(role, "maintainer"):
         fields |= _verify_fields(actor, verify_by)
         if new.target_kind == "symbol":
             conflict, p = await _detect_conflict(decider, graph, new.repo_id, symbol, text)
@@ -249,7 +253,7 @@ async def propose_annotation(
     api_key: str | None = None,
     memory: MemoryRepository | None = None,
 ) -> Annotation:
-    """An agent's note: always `proposed`, via "mcp"; only a verifier other than `actor` may
+    """An agent's note: always `proposed`, via "mcp"; only a maintainer other than `actor` may
     approve it (domain.may_verify), and the conflict check runs then. With `memory_id`, the text
     defaults to that memory, which must belong to `api_key` (None on stdio and without keys)."""
     _check_kind(proposal.target_kind, proposal.scope)
@@ -334,6 +338,7 @@ async def change_annotation(
     changes: dict[str, Any],
     actor: str,
     *,
+    role: str = "admin",
     decider: DecisionProvider | None = None,
 ) -> Annotation:
     """With `decider`, a symbol note that becomes `verified` here is checked against the code
@@ -350,16 +355,21 @@ async def change_annotation(
     status = changes.get("status")
     if status is not None and status not in CHANGE_STATUSES:
         raise EnigramError(f"status must be one of {CHANGE_STATUSES}")
-    trusted = may_verify(actor, note, cfg.annotation_verifiers)
-    if not trusted and (
-        status in ("verified", "rejected") or "owner" in changes or "verify_by" in changes
-    ):
-        who = (
-            f"Only a key in ANNOTATION_VERIFIERS other than the proposer ({note.author})"
-            if note.via == "mcp"
-            else f"Only the owner ({note.owner}) or a key in ANNOTATION_VERIFIERS"
+    # docs/rbac.md, PATCH /annotations per field.
+    maintainer = at_least(role, "maintainer")
+    trusted = may_verify(actor, note, role)
+    if ("text" in changes or "by" in changes) and not (maintainer or actor == note.author):
+        raise Forbidden(f"Only the author ({note.author}) or a maintainer may edit this note")
+    if status in ("verified", "rejected") and not trusted:
+        raise Forbidden(
+            f"Only a maintainer other than the proposer ({note.author}) may verify or reject "
+            "this agent proposal"
+            if maintainer
+            else "Only a maintainer may verify or reject a note"
         )
-        raise Forbidden(f"{who} may verify, reject, reassign or extend this note")
+    managed = sorted({"owner", "verify_by", "conflict", "target_ref"} & set(changes))
+    if managed and not maintainer:
+        raise Forbidden(f"Only a maintainer may change {', '.join(managed)}")
     verify_by = _when(changes.get("verify_by"))
     updates: dict[str, Any] = {}
     target_ref = note.target_ref
@@ -440,17 +450,15 @@ async def change_annotation(
 
 
 async def delete_annotation(
-    cfg: Config, notes: AnnotationRepository, annotation_id: int, actor: str
+    notes: AnnotationRepository, annotation_id: int, actor: str, role: str = "admin"
 ) -> None:
-    """Remove a note and its history for good. Only the key that wrote it or a key in
-    ANNOTATION_VERIFIERS may; the deletion is written to the log, as no event outlives the note."""
+    """Remove a note and its history for good. Only its author or a maintainer may; the
+    deletion is written to the log, as no event outlives the note."""
     note = await notes.get(annotation_id)
     if note is None:
         raise NotFound(f"No annotation {annotation_id}")
-    if actor != note.author and actor not in cfg.annotation_verifiers:
-        raise Forbidden(
-            f"Only the author ({note.author}) or a key in ANNOTATION_VERIFIERS may delete this note"
-        )
+    if actor != note.author and not at_least(role, "maintainer"):
+        raise Forbidden(f"Only the author ({note.author}) or a maintainer may delete this note")
     if not await notes.delete(annotation_id):
         raise NotFound(f"No annotation {annotation_id}")
     log.info(

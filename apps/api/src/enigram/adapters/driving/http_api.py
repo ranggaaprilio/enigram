@@ -1,12 +1,11 @@
 """HTTP API: upload documents for the index worker, ask questions, read stored query traces."""
 
 import hashlib
-import hmac
 import logging
 import os
 import re
 import secrets
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -24,6 +23,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from enigram.adapters.driving.mcp_server import AppContext, create_server
 from enigram.adapters.driving.workspaces import WORKSPACE_HEADER, Workspace, Workspaces
+from enigram.application.access import import_env_keys, resolve_key
 from enigram.application.annotations import (
     NewAnnotation,
     change_annotation,
@@ -51,6 +51,7 @@ from enigram.application.routing import answer_routed, scope_mode
 from enigram.application.webhooks import parse_push, verify_webhook
 from enigram.bootstrap import build_deps
 from enigram.config import Config
+from enigram.domain.access import OPEN, Caller, at_least
 from enigram.domain.annotation import ANNOTATION_MAX_CHARS, Annotation
 from enigram.domain.answer import QUERY_MODE, QueryResult
 from enigram.domain.budget import BudgetExceeded, metered
@@ -196,26 +197,21 @@ async def _save_upload(upload: UploadFile, path: Path) -> str:
 
 
 class ApiKeyMiddleware:
-    """Every request but OPEN_PATHS needs `Authorization: Bearer <key>` from ENIGRAM_API_KEYS.
+    """Every request but OPEN_PATHS needs `Authorization: Bearer <key>` of a principal that is
+    not revoked (ENIGRAM_API_KEYS, imported at start, or a key made with `enigram principals`).
 
-    The matching key's name goes to `scope["state"]["api_key"]` (`request.state.api_key`), so
-    routes and MCP tools can log who asked without ever seeing the key.
+    The principal's name goes to `scope["state"]["api_key"]` (`request.state.api_key`), so
+    routes and MCP tools can log who asked without ever seeing the key, and its roles to
+    `scope["state"]["caller"]` for the role checks (docs/rbac.md).
     """
 
-    def __init__(self, app: ASGIApp, keys: tuple[tuple[str, str], ...]):
+    def __init__(self, app: ASGIApp):
         self.app = app
-        self.keys = [(name, key.encode()) for name, key in keys]
 
-    def _name_for(self, header: str) -> str | None:
+    @staticmethod
+    def _bearer(header: str) -> str:
         scheme, _, token = header.partition(" ")
-        if scheme.lower() != "bearer":
-            return None
-        presented = token.strip().encode()
-        name = None
-        for key_name, key in self.keys:  # no early exit: compare against every key
-            if hmac.compare_digest(presented, key):
-                name = key_name
-        return name
+        return token.strip() if scheme.lower() == "bearer" else ""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
@@ -227,8 +223,9 @@ class ApiKeyMiddleware:
             await self.app(scope, receive, send)
             return
         headers = dict(scope["headers"])
-        name = self._name_for(headers.get(b"authorization", b"").decode("latin-1"))
-        if name is None:
+        key = self._bearer(headers.get(b"authorization", b"").decode("latin-1"))
+        caller = await resolve_key(scope["app"].state.principals, key) if key else None
+        if caller is None or caller.principal is None:
             log.warning("[api] 401 %s %s", scope["method"], scope["path"])
             response = JSONResponse(
                 {"detail": "Missing or invalid API key"},
@@ -237,7 +234,8 @@ class ApiKeyMiddleware:
             )
             await response(scope, receive, send)
             return
-        scope.setdefault("state", {})["api_key"] = name
+        state = scope.setdefault("state", {})
+        state["api_key"], state["caller"] = caller.principal.name, caller
         await self.app(scope, receive, send)
 
 
@@ -266,16 +264,53 @@ def _raise_http(e: EnigramError) -> HTTPException:
     return HTTPException(422, str(e))
 
 
+def _caller(request: Request) -> Caller:
+    """OPEN (everyone acts as admin) when ENIGRAM_API_KEYS is not set."""
+    return getattr(request.state, "caller", OPEN)
+
+
 async def _workspace(request: Request) -> Workspace:
-    """The workspace of the X-Enigram-Workspace header; the process workspace without it."""
-    name = request.headers.get(WORKSPACE_HEADER, "").strip() or None
+    """The workspace of the X-Enigram-Workspace header; without it the caller's default
+    workspace, else the process workspace. 404 for a workspace the caller is no member of, as
+    for one that does not exist, so names do not leak. The caller's role there goes to
+    `request.state.role`."""
+    caller = _caller(request)
+    workspaces = request.app.state.workspaces
+    default = caller.principal.default_workspace if caller.principal else None
+    name = request.headers.get(WORKSPACE_HEADER, "").strip() or default or workspaces.cfg.workspace
+    role = caller.role_in(name)  # checked before the workspace's adapters are built
+    if role is None:
+        raise HTTPException(404, f"No workspace {name!r}")
     try:
-        return await request.app.state.workspaces.get(name)
+        ws = await workspaces.get(name)
     except NotFound as e:
         raise HTTPException(404, str(e)) from e
+    request.state.role = role
+    return ws
 
 
-Scoped = Annotated[Workspace, Depends(_workspace)]
+def _need(minimum: str) -> Callable[..., Awaitable[Workspace]]:
+    async def check(request: Request, ws: Annotated[Workspace, Depends(_workspace)]) -> Workspace:
+        role = request.state.role
+        if not at_least(role, minimum):
+            raise HTTPException(
+                403, f"Needs the {minimum} role in workspace {ws.cfg.workspace} (yours: {role})"
+            )
+        return ws
+
+    return check
+
+
+def _role(request: Request) -> str:
+    """The caller's role in the request's workspace (set by _workspace)."""
+    return request.state.role
+
+
+# The minimum role of a route (docs/rbac.md); each has every right of the ones before it.
+Viewer = Annotated[Workspace, Depends(_need("viewer"))]
+Contributor = Annotated[Workspace, Depends(_need("contributor"))]
+Maintainer = Annotated[Workspace, Depends(_need("maintainer"))]
+Admin = Annotated[Workspace, Depends(_need("admin"))]
 
 
 def create_app(
@@ -334,6 +369,10 @@ def create_app(
                 await workspaces.start()
                 # Only the registry: every route reads its workspace's adapters from it.
                 app.state.workspaces = workspaces
+                app.state.principals = await deps.new_principals(store)
+                if cfg.api_keys:
+                    names = [w["name"] for w in await workspaces.list()]
+                    await import_env_keys(app.state.principals, cfg, names)
                 # A mounted app's own lifespan never runs, so the MCP session manager starts here.
                 async with mcp.session_manager.run():
                     yield
@@ -342,7 +381,7 @@ def create_app(
 
     app = FastAPI(title="enigram", lifespan=lifespan)
     if cfg.api_keys:
-        app.add_middleware(ApiKeyMiddleware, keys=cfg.api_keys)
+        app.add_middleware(ApiKeyMiddleware)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -351,10 +390,36 @@ def create_app(
 
     @app.get("/workspaces")
     async def list_workspaces(request: Request) -> list[dict[str, Any]]:
-        return jsonable_encoder(await request.app.state.workspaces.list())
+        """Only the workspaces the caller is a member of (every one for an owner)."""
+        caller = _caller(request)
+        rows = await request.app.state.workspaces.list()
+        return jsonable_encoder([w for w in rows if caller.role_in(w["name"]) is not None])
+
+    @app.get("/me")
+    async def me(request: Request) -> dict[str, Any]:
+        """The caller and its role per workspace; `principal` null when access control is off."""
+        caller = _caller(request)
+        names = [w["name"] for w in await request.app.state.workspaces.list()]
+        p = caller.principal
+        return {
+            "principal": (
+                {
+                    "name": p.name,
+                    "kind": p.kind,
+                    "owner": p.owner,
+                    "default_workspace": p.default_workspace,
+                }
+                if p
+                else None
+            ),
+            "roles": {w: caller.role_in(w) for w in caller.workspaces(names)},
+        }
 
     @app.post("/workspaces", status_code=201)
     async def create_workspace(request: Request, body: WorkspaceCreate) -> Any:
+        caller = _caller(request)
+        if caller.principal is not None and not caller.principal.owner:
+            raise HTTPException(403, "Only an owner may create a workspace")
         try:
             row = await request.app.state.workspaces.create(body.name)
         except EnigramError as e:
@@ -365,7 +430,7 @@ def create_app(
         return jsonable_encoder(row)
 
     @app.post("/documents", status_code=202)
-    async def upload_document(ws: Scoped, file: Annotated[UploadFile, File()]) -> Any:
+    async def upload_document(ws: Maintainer, file: Annotated[UploadFile, File()]) -> Any:
         name = Path(file.filename or "").name
         # The indexer skips hidden files (macOS `._name` metadata) and other suffixes.
         if not name or name.startswith(".") or Path(name).suffix.lower() not in SOURCE_SUFFIXES:
@@ -412,7 +477,7 @@ def create_app(
         return {"book": book, "status": job.status, "job": asdict(job)}
 
     @app.get("/documents")
-    async def list_documents(ws: Scoped) -> list[dict[str, Any]]:
+    async def list_documents(ws: Viewer) -> list[dict[str, Any]]:
         return await documents_overview(ws.cfg, ws.store)
 
     def known_book(ws: Workspace, book: str) -> bool:
@@ -424,7 +489,7 @@ def create_app(
         )
 
     @app.delete("/documents/{book}", status_code=202)
-    async def delete_document_route(ws: Scoped, request: Request, book: str) -> Any:
+    async def delete_document_route(ws: Maintainer, request: Request, book: str) -> Any:
         if not known_book(ws, book):
             raise HTTPException(404, f"No document {book!r}")
         store = ws.store
@@ -439,7 +504,7 @@ def create_app(
             raise HTTPException(429, message)
 
     @app.post("/repos", status_code=202)
-    async def index_repo_route(ws: Scoped, request: Request, body: RepoRequest) -> Any:
+    async def index_repo_route(ws: Maintainer, request: Request, body: RepoRequest) -> Any:
         token = body.token.get_secret_value() if body.token else ""
         try:
             check_repo_url(body.url, ws.cfg.repo_hosts)
@@ -449,10 +514,8 @@ def create_app(
         except EnigramError as e:
             raise HTTPException(422, str(e)) from e
         actor = _actor(request)
-        if token and ws.cfg.api_keys and actor not in ws.cfg.annotation_verifiers:
-            raise HTTPException(
-                403, "Only a key in ANNOTATION_VERIFIERS may add a repository access token"
-            )
+        if token and not at_least(_role(request), "admin"):
+            raise HTTPException(403, "Only an admin may add a repository access token")
         store = ws.store
         await _refuse_when_exhausted(ws)
         if any(j.payload.get("url") == body.url for j in await store.active_jobs()):
@@ -477,7 +540,7 @@ def create_app(
         return repo
 
     @app.get("/repos")
-    async def list_repos(ws: Scoped) -> list[dict[str, Any]]:
+    async def list_repos(ws: Viewer) -> list[dict[str, Any]]:
         repos = await ws.code_graph.list_repos()
         private = await ws.code_graph.private_urls()
         return jsonable_encoder(
@@ -498,7 +561,7 @@ def create_app(
 
     @app.get("/repos/{repo_id}/symbols")
     async def repo_symbols(
-        ws: Scoped, repo_id: int, q: Annotated[str, Query(min_length=1)]
+        ws: Viewer, repo_id: int, q: Annotated[str, Query(min_length=1)]
     ) -> list[dict[str, Any]]:
         """Exact qualified names or names ending in ".<q>" (`find`, `AuthService.logout`)."""
         await _repo_or_404(ws, repo_id)
@@ -507,7 +570,7 @@ def create_app(
         return [{k: getattr(s, k) for k in keys} for s in found[:SYMBOL_LOOKUP_MAX]]
 
     @app.get("/repos/{repo_id}/features")
-    async def repo_features(ws: Scoped, repo_id: int, q: str | None = None) -> dict[str, Any]:
+    async def repo_features(ws: Viewer, repo_id: int, q: str | None = None) -> dict[str, Any]:
         """Entry points with the number of notes on each, the first FEATURE_LIST_MAX whose
         route or symbol name contains `q`; `total` counts every match."""
         await _repo_or_404(ws, repo_id)
@@ -515,7 +578,7 @@ def create_app(
         return {"features": rows[:FEATURE_LIST_MAX], "total": len(rows)}
 
     @app.get("/repos/{repo_id}/tree")
-    async def repo_tree(ws: Scoped, repo_id: int) -> dict[str, Any]:
+    async def repo_tree(ws: Viewer, repo_id: int) -> dict[str, Any]:
         """Every indexed file with its symbols (no bodies) and their note counts."""
         await _repo_or_404(ws, repo_id)
         return await tree_view(ws.code_graph, ws.notes, repo_id)
@@ -523,7 +586,11 @@ def create_app(
     # The Code page's "looks right" marker; POST/DELETE only, so the GET below never takes them.
     @app.post("/repos/{repo_id}/symbols/{symbol_id:path}/review")
     async def review_repo_symbol(
-        ws: Scoped, request: Request, repo_id: int, symbol_id: str, body: ReviewCreate | None = None
+        ws: Contributor,
+        request: Request,
+        repo_id: int,
+        symbol_id: str,
+        body: ReviewCreate | None = None,
     ) -> dict[str, Any]:
         """Mark the symbol's current summary as right; a later mark replaces it."""
         repo = await _repo_or_404(ws, repo_id)
@@ -542,7 +609,7 @@ def create_app(
 
     @app.delete("/repos/{repo_id}/symbols/{symbol_id:path}/review", status_code=204)
     async def unreview_repo_symbol(
-        ws: Scoped, request: Request, repo_id: int, symbol_id: str
+        ws: Contributor, request: Request, repo_id: int, symbol_id: str
     ) -> None:
         await _repo_or_404(ws, repo_id)
         try:
@@ -551,14 +618,14 @@ def create_app(
                 repo_id,
                 symbol_id,
                 _actor(request),
-                ws.cfg.annotation_verifiers,
+                _role(request),
             )
         except EnigramError as e:
             raise _raise_http(e) from e
 
     # :path because symbol ids are "<file>#<qualified_name>" (sent as %2F and %23).
     @app.get("/repos/{repo_id}/symbols/{symbol_id:path}")
-    async def repo_symbol(ws: Scoped, repo_id: int, symbol_id: str) -> dict[str, Any]:
+    async def repo_symbol(ws: Viewer, repo_id: int, symbol_id: str) -> dict[str, Any]:
         """One symbol with its summaries, steps (direct callees) and notes."""
         repo = await _repo_or_404(ws, repo_id)
         view = await symbol_view(ws.code_graph, ws.notes, repo, symbol_id)
@@ -567,7 +634,7 @@ def create_app(
         return jsonable_encoder({**view, "notes": [_note_json(n) for n in view["notes"]]})
 
     @app.post("/repos/{repo_id}/secret")
-    async def rotate_webhook_secret(ws: Scoped, request: Request, repo_id: int) -> dict[str, str]:
+    async def rotate_webhook_secret(ws: Admin, request: Request, repo_id: int) -> dict[str, str]:
         """A new webhook secret, returned once; the previous one stops working."""
         await _repo_or_404(ws, repo_id)
         secret = secrets.token_hex(32)
@@ -576,7 +643,7 @@ def create_app(
         return {"secret": secret}
 
     @app.delete("/repos/{repo_id}", status_code=202)
-    async def delete_repo_route(ws: Scoped, request: Request, repo_id: int) -> Any:
+    async def delete_repo_route(ws: Maintainer, request: Request, repo_id: int) -> Any:
         repo = await _repo_or_404(ws, repo_id)
         store = ws.store
         if any(j.payload.get("url") == repo["url"] for j in await store.active_jobs()):
@@ -639,7 +706,7 @@ def create_app(
         return JSONResponse({"job": jsonable_encoder(asdict(job))}, status_code=202)
 
     @app.get("/conflicts")
-    async def list_conflicts(ws: Scoped, repo: int | None = None) -> dict[str, Any]:
+    async def list_conflicts(ws: Viewer, repo: int | None = None) -> dict[str, Any]:
         """Notes in conflict with the code and the stored docs-vs-code conflicts, for one
         repository or all (then with entity and document notes too)."""
         graph = ws.code_graph
@@ -654,7 +721,7 @@ def create_app(
         return jsonable_encoder({**view, "notes": [_note_json(n) for n in view["notes"]]})
 
     @app.post("/conflicts/detect", status_code=202)
-    async def detect_conflicts_route(ws: Scoped, request: Request, body: ConflictDetect) -> Any:
+    async def detect_conflicts_route(ws: Maintainer, request: Request, body: ConflictDetect) -> Any:
         ref = body.ref or None
         if await ws.code_graph.get_repo(body.url, ref) is None:
             raise HTTPException(404, f"{body.url} ({ref or 'default branch'}) is not indexed")
@@ -676,7 +743,7 @@ def create_app(
 
     @app.get("/annotations")
     async def list_annotations(
-        ws: Scoped,
+        ws: Viewer,
         status: str | None = None,
         target_kind: str | None = None,
         repo: int | None = None,
@@ -693,7 +760,9 @@ def create_app(
         return [_note_json(n, summary=False) for n in notes]
 
     @app.post("/annotations", status_code=201)
-    async def create_annotation_route(ws: Scoped, request: Request, body: AnnotationCreate) -> Any:
+    async def create_annotation_route(
+        ws: Contributor, request: Request, body: AnnotationCreate
+    ) -> Any:
         new = NewAnnotation(
             target_kind=body.target_kind,
             target_ref=body.target_ref,
@@ -713,6 +782,7 @@ def create_app(
                 ws.notes,
                 new,
                 _actor(request),
+                role=_role(request),
                 decider=ws.decider,
             )
         except EnigramError as e:
@@ -720,7 +790,7 @@ def create_app(
         return _note_json(note)
 
     @app.get("/annotations/{annotation_id}")
-    async def get_annotation(ws: Scoped, annotation_id: int) -> dict[str, Any]:
+    async def get_annotation(ws: Viewer, annotation_id: int) -> dict[str, Any]:
         notes = ws.notes
         note = await notes.get(annotation_id)
         if note is None:
@@ -730,7 +800,7 @@ def create_app(
 
     @app.patch("/annotations/{annotation_id}")
     async def patch_annotation(
-        ws: Scoped, request: Request, annotation_id: int, body: AnnotationPatch
+        ws: Contributor, request: Request, annotation_id: int, body: AnnotationPatch
     ) -> dict[str, Any]:
         changes = body.model_dump(exclude_unset=True)
         try:
@@ -741,6 +811,7 @@ def create_app(
                 annotation_id,
                 changes,
                 _actor(request),
+                role=_role(request),
                 decider=ws.decider,
             )
         except EnigramError as e:
@@ -748,21 +819,23 @@ def create_app(
         return _note_json(note)
 
     @app.delete("/annotations/{annotation_id}", status_code=204)
-    async def delete_annotation_route(ws: Scoped, request: Request, annotation_id: int) -> None:
+    async def delete_annotation_route(
+        ws: Contributor, request: Request, annotation_id: int
+    ) -> None:
         try:
-            await delete_annotation(ws.cfg, ws.notes, annotation_id, _actor(request))
+            await delete_annotation(ws.notes, annotation_id, _actor(request), _role(request))
         except EnigramError as e:
             raise _raise_http(e) from e
 
     @app.get("/jobs/{job_id}")
-    async def get_job(ws: Scoped, job_id: int) -> dict[str, Any]:
+    async def get_job(ws: Viewer, job_id: int) -> dict[str, Any]:
         job = await ws.store.get_job(job_id)
         if job is None:
             raise HTTPException(404, f"No job {job_id}")
         return asdict(job)
 
     @app.post("/query")
-    async def query(ws: Scoped, request: Request, body: QueryRequest) -> dict[str, Any]:
+    async def query(ws: Viewer, request: Request, body: QueryRequest) -> dict[str, Any]:
         store = ws.store
         key = _key_name(request)
         try:
@@ -818,12 +891,12 @@ def create_app(
 
     @app.get("/queries")
     async def list_queries(
-        ws: Scoped, limit: Annotated[int, Query(ge=1, le=200)] = 50
+        ws: Viewer, limit: Annotated[int, Query(ge=1, le=200)] = 50
     ) -> list[dict[str, Any]]:
         return await ws.store.list_queries(limit)
 
     @app.get("/queries/{query_id}")
-    async def get_query(ws: Scoped, query_id: int) -> dict[str, Any]:
+    async def get_query(ws: Viewer, query_id: int) -> dict[str, Any]:
         row = await ws.store.get_query(query_id)
         if row is None:
             raise HTTPException(404, f"No query {query_id}")
@@ -840,34 +913,34 @@ def create_app(
 
     @app.get("/graph/search")
     async def search_graph(
-        ws: Scoped,
+        ws: Viewer,
         q: Annotated[str, Query(min_length=1)],
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> dict[str, list[dict[str, Any]]]:
         return await ws.store.search_graph(q, limit)
 
     @app.post("/graph/entity/edit", status_code=202)
-    async def edit_entity(ws: Scoped, request: Request, body: EntityEdit) -> Any:
+    async def edit_entity(ws: Maintainer, request: Request, body: EntityEdit) -> Any:
         return await enqueue_graph(ws, request, "edit_entity", body.model_dump(exclude_none=True))
 
     @app.post("/graph/relation/edit", status_code=202)
-    async def edit_relation(ws: Scoped, request: Request, body: RelationEdit) -> Any:
+    async def edit_relation(ws: Maintainer, request: Request, body: RelationEdit) -> Any:
         return await enqueue_graph(ws, request, "edit_relation", body.model_dump(exclude_none=True))
 
     @app.post("/graph/entity/merge", status_code=202)
-    async def merge_entities(ws: Scoped, request: Request, body: EntityMerge) -> Any:
+    async def merge_entities(ws: Maintainer, request: Request, body: EntityMerge) -> Any:
         return await enqueue_graph(
             ws, request, "merge_entities", body.model_dump(exclude_none=True)
         )
 
     # :path because entity names may contain "/" (sent encoded as %2F).
     @app.delete("/graph/entity/{name:path}", status_code=202)
-    async def delete_entity(ws: Scoped, request: Request, name: str) -> Any:
+    async def delete_entity(ws: Maintainer, request: Request, name: str) -> Any:
         return await enqueue_graph(ws, request, "delete_entity", {"name": name})
 
     @app.delete("/graph/relation", status_code=202)
     async def delete_relation(
-        ws: Scoped,
+        ws: Maintainer,
         request: Request,
         source: Annotated[str, Query(min_length=1)],
         target: Annotated[str, Query(min_length=1)],

@@ -35,6 +35,7 @@ from enigram.application.querying import answer_question
 from enigram.application.routing import answer_routed, resolve_scope, scope_mode
 from enigram.bootstrap import build_deps
 from enigram.config import Config
+from enigram.domain.access import OPEN, at_least
 from enigram.domain.annotation import (
     ANNOTATION_MAX_CHARS,
     QUESTION_MAX_CHARS,
@@ -226,6 +227,17 @@ def _api_key(ctx: Context[AppContext]) -> str | None:
     return getattr(getattr(ctx.request_context.request, "state", None), "api_key", None)
 
 
+def _require(ctx: Context[AppContext], workspace: str, minimum: str) -> None:
+    """The role check of docs/rbac.md for a tool: the caller the API's auth middleware put on the
+    HTTP request; on stdio (no request) and without keys everyone acts as admin."""
+    caller = getattr(getattr(ctx.request_context.request, "state", None), "caller", OPEN)
+    role = caller.role_in(workspace)
+    if role is None:
+        raise ToolError(f"404: not a member of workspace {workspace}")
+    if not at_least(role, minimum):
+        raise ToolError(f"403: needs the {minimum} role in workspace {workspace} (yours: {role})")
+
+
 def create_server(
     cfg: Config,
     lifespan: Callable[[MCPServer], AbstractAsyncContextManager[AppContext]] | None = None,
@@ -281,6 +293,7 @@ def create_server(
         source), citing `path:start-end@sha` inline. By default (scope="auto") a router picks
         the source, or answers from both under two headings when unsure; pass scope="docs" or
         "code" to force one. Ask one specific question per call."""
+        _require(ctx, cfg.workspace, "viewer")
         app = ctx.request_context.lifespan_context
         key = _api_key(ctx)
         cap = None
@@ -344,6 +357,7 @@ def create_server(
     async def list_documents(ctx: Context[AppContext]) -> list[DocumentInfo]:
         """List the documents in the knowledge base with their indexing status (indexed,
         queued, running, failed). Use it to see what can be asked about."""
+        _require(ctx, cfg.workspace, "viewer")
         docs = await documents_overview(cfg, ctx.request_context.lifespan_context.store)
         return [DocumentInfo(d["book"], d["title"], d["status"], d["pages"]) for d in docs]
 
@@ -370,6 +384,7 @@ def create_server(
     ) -> MemoryAdded:
         """Save a note to recall later with search_memory. Notes are private to your API key
         and are not part of the knowledge base that query_knowledge_base answers from."""
+        _require(ctx, cfg.workspace, "contributor")
         try:
             memory_id, created_at = await memory_of(ctx).add(text, _api_key(ctx))
         except EnigramError as e:
@@ -386,6 +401,7 @@ def create_server(
     ) -> MemoryResults:
         """Find your saved notes closest in meaning to `query`, best first, each with a
         similarity score (1 = same meaning). Only notes added with your API key are searched."""
+        _require(ctx, cfg.workspace, "contributor")
         try:
             found = await memory_of(ctx).search(query, _api_key(ctx), limit)
         except EnigramError as e:
@@ -433,6 +449,7 @@ def create_server(
         orphaned, verified or marked as conflicting since then. Call it at the start of a task
         to know which earlier knowledge (yours or the answers you got) may be stale. A commit
         works only if it was indexed; otherwise pass a date."""
+        _require(ctx, cfg.workspace, "viewer")
         app = ctx.request_context.lifespan_context
         repos = await _repos(app, repo)
         try:
@@ -486,6 +503,7 @@ def create_server(
         when the note contradicts the code, who verified it and when it expires. Read them
         before relying on or changing the symbol; a note that is not plainly verified is a lead,
         not a fact."""
+        _require(ctx, cfg.workspace, "viewer")
         app = ctx.request_context.lifespan_context
         notes = notes_of(app)
         out: list[NoteInfo] = []
@@ -563,6 +581,7 @@ def create_server(
         a reason). It is stored as `proposed` and is only cited in answers after a human
         verifier approves it; your own key can never approve it. Pass `question` with the
         question it answers, and `memory_id` to promote one of your saved memories."""
+        _require(ctx, cfg.workspace, "contributor")
         app = ctx.request_context.lifespan_context
         notes = notes_of(app)
         repo_id, url = None, None
@@ -615,6 +634,7 @@ def create_server(
         contradicts the document, trust the code and say so. `runs` tells when detection last
         ran per repository; an empty `runs` means it never ran (ask the owner to run
         `enigram conflicts detect`)."""
+        _require(ctx, cfg.workspace, "viewer")
         app = ctx.request_context.lifespan_context
         repos = await _repos(app, repo)
         view = await conflicts_view(
