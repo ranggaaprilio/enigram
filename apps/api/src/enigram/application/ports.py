@@ -400,7 +400,8 @@ class CodeGraphRepository(Protocol):
 
     async def callers(self, repo_id: int, symbol_id: str) -> list["CodeSymbol"]:
         """The repository symbols with a `calls` edge to this one, once each, by file and line.
-        Direct calls only: a call through an interface member lists under that member."""
+        For an implementation member, a call to the interface or abstract member it implements
+        counts too (the inverse of the IMPLEMENTATION_CALL edges of `callees`)."""
         ...
 
     async def edges_from(

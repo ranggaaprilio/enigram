@@ -240,6 +240,28 @@ describe('Code', () => {
     expect(screen.queryByText('bootstrap')).toBeNull()
   })
 
+  it('scrolls the feature list, not the page, to the open feature', async () => {
+    mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: view } })
+    // jsdom has no layout: the open feature sits 900px down a list whose box ends at 300px.
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const top = this.getAttribute('aria-current') === 'true' ? 900 : 0
+        return { top, bottom: top + (top ? 20 : 300), height: top ? 20 : 300 } as DOMRect
+      })
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+
+    renderAt(AT_SYMBOL)
+    const open = (await screen.findByText('GET /users/:id')).closest('button') as HTMLElement
+    expect(open).toHaveAttribute('aria-current', 'true')
+
+    const list = open.closest('.overflow-y-auto') as HTMLElement
+    await waitFor(() => expect(list.scrollTop).toBeGreaterThan(600))
+    expect(scrollTo).not.toHaveBeenCalled()
+    rect.mockRestore()
+    scrollTo.mockRestore()
+  })
+
   it('groups features by kind under headings when there is more than one kind', async () => {
     mockFetch({
       ...BASE,

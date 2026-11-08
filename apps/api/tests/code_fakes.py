@@ -239,10 +239,19 @@ class FakeCodeGraph:
 
     async def callers(self, repo_id, symbol_id):
         symbols, graph = self._symbols(repo_id), self.graphs[repo_id]
+        targets = {symbol_id}
+        if (member := symbols.get(symbol_id)) and member.parent:
+            owner = f"{member.file}#{member.parent}"
+            name = member.qualified_name.rsplit(".", 1)[-1]
+            for x in graph.edges:
+                if x.kind in ("implements", "extends") and x.src == owner:
+                    base = symbols.get(f"{x.dst}.{name}")
+                    if base and is_abstract(base):
+                        targets.add(base.id)
         ids = {
             e.src
             for e in graph.edges
-            if e.kind == "calls" and e.dst == symbol_id and e.src != symbol_id
+            if e.kind == "calls" and e.dst in targets and e.src != symbol_id
         }
         return sorted(
             (symbols[i] for i in ids if i in symbols), key=lambda s: (s.file, s.line_start, s.id)

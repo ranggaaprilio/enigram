@@ -373,15 +373,33 @@ class PostgresCodeGraph:
         return [_symbol(r) for r in rows]
 
     async def callers(self, repo_id: int, symbol_id: str) -> list[CodeSymbol]:
+        targets = [symbol_id, *await self._abstract_members(repo_id, symbol_id)]
         rows = await self.pool.fetch(
             f"SELECT {_JOINED_SYMBOL_COLUMNS} FROM code_symbols s "
             "WHERE s.repo_id = $1 AND s.id <> $2 AND EXISTS (SELECT 1 FROM code_edges e "
-            "WHERE e.repo_id = s.repo_id AND e.src = s.id AND e.dst = $2 AND e.kind = 'calls') "
-            "ORDER BY s.file, s.line_start, s.id",
+            "WHERE e.repo_id = s.repo_id AND e.src = s.id AND e.dst = ANY($3::text[]) "
+            "AND e.kind = 'calls') ORDER BY s.file, s.line_start, s.id",
             repo_id,
             symbol_id,
+            targets,
         )
         return [_symbol(r, "s_") for r in rows]
+
+    async def _abstract_members(self, repo_id: int, symbol_id: str) -> list[str]:
+        """The interface or abstract members an implementation member stands for: the inverse
+        of _implementations, so a call through the interface counts as a call to it."""
+        member = (await self.symbols_by_id(repo_id, [symbol_id])).get(symbol_id)
+        if member is None or not member.parent:
+            return []
+        bases = await self.pool.fetch(
+            "SELECT DISTINCT dst FROM code_edges WHERE repo_id = $1 AND src = $2 "
+            "AND kind IN ('implements', 'extends') ORDER BY dst",
+            repo_id,
+            f"{member.file}#{member.parent}",
+        )
+        name = member.qualified_name.rsplit(".", 1)[-1]
+        found = await self.symbols_by_id(repo_id, [f"{r['dst']}.{name}" for r in bases])
+        return [i for i, s in found.items() if is_abstract(s)]
 
     async def callees(
         self, repo_id: int, symbol_id: str
