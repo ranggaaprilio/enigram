@@ -369,15 +369,18 @@ export function setWorkspace(name: string | null) {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, workspace ? withWorkspace(init, workspace) : init)
+  const res = await fetch(`/api${path}`, withHeaders(init, workspace))
   const body: unknown = await res.json().catch(() => null)
   if (!res.ok) throw new ApiError(res.status, errorMessage(res, body))
   return body as T
 }
 
-function withWorkspace(init: RequestInit | undefined, name: string): RequestInit {
+function withHeaders(init: RequestInit | undefined, name: string | null): RequestInit {
   const headers = new Headers(init?.headers)
-  headers.set('X-Enigram-Workspace', name)
+  if (name) headers.set('X-Enigram-Workspace', name)
+  // A signed-in user's writes ride on the session cookie; the API wants this header on them,
+  // which a cross-site form cannot send (R4).
+  headers.set('X-Requested-With', 'enigram')
   return { ...init, headers }
 }
 
@@ -408,11 +411,24 @@ export const listWorkspaces = () => request<Workspace[]>('/workspaces')
 
 // GET /me: the caller and its role per workspace; principal null when the API has no keys.
 export interface Me {
-  principal: { name: string; kind: string; owner: boolean; default_workspace: string | null } | null
+  principal: {
+    name: string
+    kind: string // key | user (signed in with the login provider)
+    owner: boolean
+    default_workspace: string | null
+    display_name?: string | null
+  } | null
   roles: Record<string, string>
 }
 
 export const getMe = () => request<Me>('/me')
+
+// Whether the API can sign people in (OIDC is set); login itself is a page redirect.
+export const getAuthConfig = () => request<{ login: boolean }>('/auth/config')
+
+export const logout = () => request<null>('/auth/logout', { method: 'POST' })
+
+export const loginUrl = (next: string) => `/api/auth/login?next=${encodeURIComponent(next)}`
 
 // Members and keys of the current workspace (docs/rbac.md): its admins only.
 export type Role = 'viewer' | 'contributor' | 'maintainer' | 'admin'
@@ -445,7 +461,7 @@ export const revokeKey = (name: string) =>
 
 export const createWorkspace = (name: string) => sendJson<Workspace>('/workspaces', { name })
 
-export const ask= (question: string, mode: Mode, scope: Scope = 'auto') =>
+export const ask = (question: string, mode: Mode, scope: Scope = 'auto') =>
   sendJson<QueryResult & { id: number }>('/query', { question, mode, scope })
 
 export const listQueries = (limit = 50) => request<QuerySummary[]>(`/queries?limit=${limit}`)

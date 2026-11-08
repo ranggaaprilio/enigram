@@ -18,7 +18,12 @@ const found: GraphSearch = {
   ],
 }
 
-const job = (id: number, kind: string, status: Job['status'], error: string | null = null): Job => ({
+const job = (
+  id: number,
+  kind: string,
+  status: Job['status'],
+  error: string | null = null,
+): Job => ({
   id,
   kind,
   payload: {},
@@ -75,7 +80,10 @@ describe('Graph', () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     const fetch = mockFetch({
       [SEARCH]: { body: found },
-      'POST /api/graph/entity/edit': { status: 202, body: { job: job(7, 'edit_entity', 'queued') } },
+      'POST /api/graph/entity/edit': {
+        status: 202,
+        body: { job: job(7, 'edit_entity', 'queued') },
+      },
       'GET /api/jobs/7': { body: job(7, 'edit_entity', 'done') },
     })
     renderAt('/graph?q=60%25')
@@ -151,7 +159,7 @@ describe('Graph', () => {
     expect(await screen.findByText('Delete Kestrel → Mutation Score')).toBeInTheDocument()
     expect(fetch).toHaveBeenCalledWith(
       '/api/graph/relation?source=Kestrel&target=Mutation%20Score',
-      { method: 'DELETE' },
+      expect.objectContaining({ method: 'DELETE' }),
     )
   })
 

@@ -1,5 +1,6 @@
 """Composition root: the one place that picks the adapters behind the ports."""
 
+from collections.abc import Callable
 from functools import partial
 
 from enigram.adapters.driven.docling_parser import DoclingParser
@@ -29,6 +30,7 @@ from enigram.application.ports import (
     ConflictRepository,
     DecisionProvider,
     Deps,
+    IdentityProvider,
     JobRepository,
     MemoryRepository,
     PrincipalRepository,
@@ -86,6 +88,15 @@ def _decider(cfg: Config) -> DecisionProvider:
     return FallbackDecider(primary, fallback)
 
 
+def _identity_provider(cfg: Config) -> Callable[[], IdentityProvider | None]:
+    oidc = cfg.oidc
+    if oidc is None:
+        return lambda: None
+    from enigram.adapters.driven.oidc import OidcProvider
+
+    return lambda: OidcProvider(oidc)
+
+
 def build_deps(cfg: Config) -> Deps:
     return Deps(
         open_engine=partial(open_engine, cfg),
@@ -104,6 +115,7 @@ def build_deps(cfg: Config) -> Deps:
         answer_scorer=partial(RagasScorer, cfg),
         decider=partial(_decider, cfg),
         code_embedder=partial(VoyageCodeEmbedder, cfg),
+        identity_provider=_identity_provider(cfg),
         query_budget={
             "max_entity_tokens": QUERY_MAX_ENTITY_TOKENS,
             "max_relation_tokens": QUERY_MAX_RELATION_TOKENS,

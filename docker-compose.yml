@@ -58,9 +58,14 @@ services:
     build: ./apps/web
     image: enigram-web:local
     environment:
-      ENIGRAM_WEB_KEY: ${ENIGRAM_WEB_KEY:-} # nginx sends it to the API on every /api call
+      # Set: nginx sends it to the API on every /api call (no login; keep WEB_BIND on localhost).
+      # Empty with OIDC_ISSUER set: people sign in (docs/rbac.md, R4).
+      ENIGRAM_WEB_KEY: ${ENIGRAM_WEB_KEY:-}
+      WEB_HOST: ${WEB_HOST:-localhost} # the host name people open, with sign-in
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost} # its origin, e.g. https://enigram.example.com
     ports:
-      - "127.0.0.1:${WEB_PORT:-3000}:80" # no login in the UI: localhost only
+      # WEB_BIND=0.0.0.0 publishes the UI: only with sign-in and ENIGRAM_WEB_KEY empty.
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:80"
     depends_on:
       - api
     restart: unless-stopped

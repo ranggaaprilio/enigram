@@ -7,6 +7,7 @@ export interface Access {
   name: string | null // the key's name; null without keys or before /me answers
   role: Role
   owner: boolean
+  user: boolean // signed in as a person (R4): notes and reviews carry the login's name
   can: (minimum: Role) => boolean
 }
 
@@ -17,7 +18,7 @@ const atLeast = (role: Role | undefined, minimum: Role) =>
 
 // No keys (principal null), /me still loading, or an API without /me: show everything and let
 // the API answer.
-const FULL: Access = { name: null, role: 'admin', owner: true, can: () => true }
+const FULL: Access = { name: null, role: 'admin', owner: true, user: false, can: () => true }
 
 export function accessOf(me: Me | null | undefined, workspace: string): Access {
   if (!me?.principal) return FULL
@@ -27,6 +28,7 @@ export function accessOf(me: Me | null | undefined, workspace: string): Access {
     name: me.principal.name,
     role: role ?? 'viewer',
     owner,
+    user: me.principal.kind === 'user',
     can: (minimum) => atLeast(role, minimum),
   }
 }

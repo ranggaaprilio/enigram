@@ -1,5 +1,23 @@
-# nginx adds the UI's API key to every /api call, so only localhost may use it: any other Host
-# (a DNS-rebinding page) is dropped, and a foreign Origin (a cross-site form post) is refused.
+# Two ways in (docs/rbac.md):
+# - ENIGRAM_WEB_KEY set: no login, nginx adds the UI's API key to every /api call, so only this
+#   machine may use it: any other Host (a DNS-rebinding page) is dropped, and a foreign Origin (a
+#   cross-site form post) is refused. Keep the port on localhost.
+# - Sign-in (OIDC_ISSUER on the API, ENIGRAM_WEB_KEY empty): each person's session cookie goes
+#   through; WEB_HOST and WEB_ORIGIN name the address people open, e.g. enigram.example.com and
+#   https://enigram.example.com.
+map "${ENIGRAM_WEB_KEY}" $enigram_authorization {
+    ""      $http_authorization;  # sign-in: the UI sends none, a script may send its own key
+    default "Bearer ${ENIGRAM_WEB_KEY}";
+}
+
+# Browsers send Origin on cross-site posts; same-origin calls and curl send none or ours.
+map $http_origin $enigram_origin_ok {
+    ""                                               1;
+    "~^http://(localhost|127\.0\.0\.1)(:[0-9]+)?$"   1;
+    "${WEB_ORIGIN}"                                  1;
+    default                                          0;
+}
+
 server {
     listen 80 default_server;
     return 444;
@@ -7,12 +25,11 @@ server {
 
 server {
     listen 80;
-    server_name localhost 127.0.0.1;
+    server_name localhost 127.0.0.1 ${WEB_HOST};
     root /usr/share/nginx/html;
 
     location /api/ {
-        # Browsers send Origin on cross-site posts; same-origin calls and curl send none or ours.
-        if ($http_origin !~* "^(|http://(localhost|127\.0\.0\.1)(:[0-9]+)?)$") {
+        if ($enigram_origin_ok = 0) {
             return 403;
         }
         # A recreated api container gets a new IP: a variable makes nginx resolve `api` again
@@ -22,8 +39,8 @@ server {
         set $api_upstream api:8080;
         rewrite ^/api/(.*)$ /$1 break;  # strip /api; the query string is kept
         proxy_pass http://$api_upstream;
-        # The browser has no login: nginx holds the UI's API key and overrides any header sent.
-        proxy_set_header Authorization "Bearer ${ENIGRAM_WEB_KEY}";
+        # With ENIGRAM_WEB_KEY this overrides any header the browser sent.
+        proxy_set_header Authorization $enigram_authorization;
         # Queries on a local LLM take 30-60 s; uploads are whole PDFs.
         proxy_read_timeout 300s;
         client_max_body_size 200m;

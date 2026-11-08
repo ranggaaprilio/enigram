@@ -159,8 +159,10 @@ dan tool MCP: [`rbac.md`](rbac.md). `ANNOTATION_VERIFIERS` digantikan oleh `main
 - MCP memilih workspace dengan keduanya: header/path per koneksi sebagai default, argumen
   `workspace` per tool untuk override.
 
-**Keputusan yang masih dibutuhkan.** Penyedia login untuk R4 (Google Workspace, Microsoft Entra,
-GitHub), atau tetap key per orang; diputuskan sebelum R4, karena R1–R3 tidak bergantung padanya.
+**Diputuskan untuk R4 (2026-11-08).** OIDC generik (penyedia dipilih saat deploy lewat
+`OIDC_ISSUER`); login pertama otomatis menjadi `viewer` di workspace proses, hanya untuk domain
+email di `OIDC_ALLOWED_DOMAINS`; `ENIGRAM_WEB_KEY` tetap pilihan lewat env (tanpa OIDC, UI tetap
+memakai key bersama seperti sebelumnya).
 
 **Kaitan dengan item lain.** Kredensial repo private (item 1) hanya boleh diatur `admin`; sesi
 PM/QA (item 3) lebih bermakna setelah R1–R3, karena PM/QA masuk sebagai `contributor`, bukan

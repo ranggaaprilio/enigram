@@ -62,6 +62,49 @@ def _int(name: str, default: int) -> int:
         raise EnigramError(f"{name} must be an integer, got {raw!r}") from e
 
 
+@dataclass(frozen=True)
+class OidcConfig:
+    issuer: str  # https://accounts.google.com, https://login.microsoftonline.com/<tenant>/v2.0
+    client_id: str
+    client_secret: str = field(repr=False)
+    redirect_url: str  # https://<web host>/api/auth/callback, registered at the provider
+    # Email domains that may sign in (lowercase); ("*",) lets every account of the issuer in,
+    # for a provider that is already one organisation's (an Entra tenant, Keycloak).
+    allowed_domains: tuple[str, ...]
+    session_days: int
+
+
+def _oidc() -> OidcConfig | None:
+    issuer = os.environ.get("OIDC_ISSUER", "").strip().rstrip("/")
+    if not issuer:
+        return None
+    values = {
+        name: os.environ.get(name, "").strip()
+        for name in ("OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_REDIRECT_URL")
+    }
+    missing = [name for name, value in values.items() if not value]
+    domains = tuple(
+        d.strip().lower().lstrip("@")
+        for d in os.environ.get("OIDC_ALLOWED_DOMAINS", "").split(",")
+        if d.strip()
+    )
+    if not domains:
+        missing.append("OIDC_ALLOWED_DOMAINS")
+    if missing:
+        raise EnigramError(f"OIDC_ISSUER is set, so set {', '.join(missing)} too")
+    days = int(os.environ.get("SESSION_DAYS", "").strip() or 7)
+    if days < 1:
+        raise EnigramError("SESSION_DAYS must be at least 1")
+    return OidcConfig(
+        issuer=issuer,
+        client_id=values["OIDC_CLIENT_ID"],
+        client_secret=values["OIDC_CLIENT_SECRET"],
+        redirect_url=values["OIDC_REDIRECT_URL"],
+        allowed_domains=domains,
+        session_days=days,
+    )
+
+
 def _api_keys(raw: str) -> tuple[tuple[str, str], ...]:
     """`name:key,name2:key2` -> ((name, key), ...); errors name the item, never the key."""
     keys: list[tuple[str, str]] = []
@@ -119,6 +162,9 @@ class Config:
     # Fernet key that encrypts the access tokens of private repositories (REPO_CREDENTIALS_KEY);
     # empty: only public repositories can be indexed.
     repo_credentials_key: str = field(repr=False)
+    # Per-person login for the web UI (docs/rbac.md, R4): an OpenID Connect provider. Empty
+    # issuer: no login, the UI uses ENIGRAM_WEB_KEY as before.
+    oidc: "OidcConfig | None"
     # Token caps counted from every provider call (0 = off): per worker job, per day for the
     # whole workspace (jobs and queries), and per API key per day on the query path.
     max_tokens_per_job: int
@@ -240,6 +286,7 @@ class Config:
             ),
             repo_poll_secs=repo_poll_secs,
             repo_credentials_key=os.environ.get("REPO_CREDENTIALS_KEY", "").strip(),
+            oidc=_oidc(),
             max_tokens_per_job=caps["MAX_TOKENS_PER_JOB"],
             daily_token_budget=caps["DAILY_TOKEN_BUDGET"],
             per_key_daily_tokens=caps["PER_KEY_DAILY_TOKENS"],

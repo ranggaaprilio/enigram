@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { useAccess } from '../access'
 import { ChevronRight, Search } from 'lucide-react'
 import {
   createAnnotation,
@@ -34,6 +35,7 @@ export default function NewNoteForm(props: {
   const [found, setFound] = useState<SymbolRow[]>([])
   const [text, setText] = useState('')
   const [by, setBy] = useState('')
+  const access = useAccess() // signed in: the API puts the login's name on the note
   const [scope, setScope] = useState<'deps' | 'body'>('deps')
   const [noteType, setNoteType] = useState<NoteType>('technical')
   const [verifyBy, setVerifyBy] = useState('')
@@ -186,17 +188,19 @@ export default function NewNoteForm(props: {
                 ))}
               </NativeSelect>
             </div>
-            <div className={field}>
-              <Label htmlFor="note-by" className={label}>
-                By
-              </Label>
-              <Input
-                id="note-by"
-                className="w-48"
-                value={by}
-                onChange={(e) => setBy(e.target.value)}
-              />
-            </div>
+            {!access.user && (
+              <div className={field}>
+                <Label htmlFor="note-by" className={label}>
+                  By
+                </Label>
+                <Input
+                  id="note-by"
+                  className="w-48"
+                  value={by}
+                  onChange={(e) => setBy(e.target.value)}
+                />
+              </div>
+            )}
             {kind === 'symbol' && (
               <div className={field}>
                 <Label htmlFor="note-scope" className={label}>

@@ -70,6 +70,7 @@ export default function Code() {
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState<GuidedMode | null>(null)
   const [by, setBy] = useState(readName)
+  const access = useAccess()
   // An unknown ?repo= (deleted repository, old link) falls back to the first one.
   const asked = Number(params.get('repo'))
   const repoId = repos?.some((r) => r.id === asked) ? asked : (repos?.[0]?.id ?? null)
@@ -219,16 +220,21 @@ export default function Code() {
             </NativeSelectOption>
           ))}
         </NativeSelect>
-        <Label htmlFor="code-by" className="text-muted-foreground">
-          Your name
-        </Label>
-        <Input
-          id="code-by"
-          className="w-44"
-          value={by}
-          placeholder="shown on your reviews"
-          onChange={(e) => saveName(e.target.value)}
-        />
+        {/* Signed in, the API puts the login's name on reviews and notes. */}
+        {!access.user && (
+          <>
+            <Label htmlFor="code-by" className="text-muted-foreground">
+              Your name
+            </Label>
+            <Input
+              id="code-by"
+              className="w-44"
+              value={by}
+              placeholder="shown on your reviews"
+              onChange={(e) => saveName(e.target.value)}
+            />
+          </>
+        )}
       </div>
       {error && <ErrorAlert>{error}</ErrorAlert>}
       <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">

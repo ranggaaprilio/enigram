@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { setWorkspace } from './api'
 import { mockFetch, type Reply } from './test/mockFetch'
@@ -259,5 +259,73 @@ describe('App by role', () => {
     renderAt('/w/default/documents')
     expect(await screen.findByRole('button', { name: 'New workspace' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Members' })).toBeInTheDocument()
+  })
+})
+
+describe('Sign-in (R4)', () => {
+  const signedOut = {
+    ...ROUTES,
+    'GET /api/me': { status: 401, body: { detail: 'Missing or invalid API key' } },
+    'GET /api/workspaces': { status: 401, body: { detail: 'Missing or invalid API key' } },
+  }
+
+  it('asks to sign in and comes back to the same page', async () => {
+    mockFetch({ ...signedOut, 'GET /api/auth/config': { body: { login: true } } })
+    renderAt('/w/default/code?repo=1')
+    const link = await screen.findByRole('link', { name: 'Sign in' })
+    expect(link).toHaveAttribute(
+      'href',
+      `/api/auth/login?next=${encodeURIComponent('/w/default/code?repo=1')}`,
+    )
+    expect(screen.queryByRole('navigation', { name: 'Pages' })).toBeNull()
+  })
+
+  it('shows why the last sign-in failed and drops it from the way back', async () => {
+    mockFetch({ ...signedOut, 'GET /api/auth/config': { body: { login: true } } })
+    renderAt('/w/default/documents?login_error=eve%40other.com+may+not+sign+in')
+    expect(await screen.findByText('eve@other.com may not sign in')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Sign in' })).toHaveAttribute(
+      'href',
+      `/api/auth/login?next=${encodeURIComponent('/w/default/documents')}`,
+    )
+  })
+
+  it('names the shared key when the API has no sign-in', async () => {
+    mockFetch({ ...signedOut, 'GET /api/auth/config': { body: { login: false } } })
+    renderAt('/w/default/documents')
+    expect(await screen.findByText(/refused the web UI's key/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Sign in' })).toBeNull()
+  })
+
+  it('shows a signed-in user by name and signs out', async () => {
+    const fetch = mockFetch({
+      ...ROUTES,
+      'GET /api/me': {
+        body: {
+          principal: {
+            name: 'ann@example.com',
+            kind: 'user',
+            owner: false,
+            default_workspace: 'default',
+            display_name: 'Ann Lee',
+          },
+          roles: { default: 'viewer' },
+        },
+      },
+      'POST /api/auth/logout': { status: 204, body: null },
+    })
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign })
+    renderAt('/w/default/documents')
+    const menu = await screen.findByRole('button', { name: 'Account and theme' })
+    await waitFor(() => expect(menu).toHaveTextContent('Ann Lee'))
+
+    await userEvent.click(menu)
+    expect(screen.getByText('ann@example.com')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }))
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('/'))
+    const [, init] = fetch.mock.calls.find(([url]) => url === '/api/auth/logout')!
+    expect(new Headers(init?.headers).get('X-Requested-With')).toBe('enigram')
   })
 })
