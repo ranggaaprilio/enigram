@@ -16,6 +16,7 @@ from enigram.domain.annotation import (
     AnnotationEvent,
     SymbolReview,
 )
+from enigram.domain.chat import ChatMessage, ChatSession
 from enigram.domain.code import (
     IDENTIFIER,
     IMPLEMENTATION_CALL,
@@ -926,6 +927,64 @@ class FakePrincipals:
 
     async def delete_session(self, token_hash):
         self.sessions.pop(token_hash, None)
+
+
+class FakeChatStore:
+    """In-memory ChatRepository; ids and clock increase with each write."""
+
+    def __init__(self):
+        self.rows: dict[int, ChatSession] = {}
+        self.msgs: list[ChatMessage] = []
+        self.tick = 0
+
+    def _now(self) -> datetime:
+        self.tick += 1
+        return datetime(2026, 11, 8, 12, 0, tzinfo=UTC) + timedelta(seconds=self.tick)
+
+    async def ensure_schema(self):
+        pass
+
+    async def create_session(self, owner, title, agent):
+        now = self._now()
+        session = ChatSession(len(self.rows) + 1, owner, title, agent, False, now, now)
+        self.rows[session.id] = session
+        return session
+
+    async def sessions(self, owner, *, limit=100):
+        rows = [s for s in self.rows.values() if s.owner == owner or s.shared]
+        return sorted(rows, key=lambda s: (s.updated_at, s.id), reverse=True)[:limit]
+
+    async def session(self, session_id):
+        return self.rows.get(session_id)
+
+    async def update_session(self, session_id, *, title=None, shared=None):
+        if session_id not in self.rows:
+            return None
+        s = self.rows[session_id]
+        if title is not None:
+            s = dataclasses.replace(s, title=title)
+        if shared is not None:
+            s = dataclasses.replace(s, shared=shared)
+        self.rows[session_id] = s
+        return s
+
+    async def delete_session(self, session_id):
+        self.msgs = [m for m in self.msgs if m.session_id != session_id]
+        return self.rows.pop(session_id, None) is not None
+
+    async def add_message(
+        self, session_id, role, text, *, agent=None, query_id=None, tokens=0, error=None
+    ):
+        now = self._now()
+        message = ChatMessage(
+            len(self.msgs) + 1, session_id, role, agent, text, query_id, tokens, error, now
+        )
+        self.msgs.append(message)
+        self.rows[session_id] = dataclasses.replace(self.rows[session_id], updated_at=now)
+        return message
+
+    async def messages(self, session_id):
+        return [m for m in self.msgs if m.session_id == session_id]
 
 
 class FakeStats:

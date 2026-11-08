@@ -15,6 +15,7 @@ from enigram.adapters.driven.lightrag_engine import (
 from enigram.adapters.driven.llm_decider import LlmDecider
 from enigram.adapters.driven.openai_llm import OpenAIChatModel, check_providers
 from enigram.adapters.driven.postgres_annotations import PostgresAnnotations
+from enigram.adapters.driven.postgres_chat import PostgresChat
 from enigram.adapters.driven.postgres_code_graph import PostgresCodeGraph
 from enigram.adapters.driven.postgres_conflicts import PostgresConflicts
 from enigram.adapters.driven.postgres_jobs import PostgresJobStore, open_store
@@ -27,6 +28,7 @@ from enigram.adapters.driven.voyage_embedding import VoyageCodeEmbedder, make_em
 from enigram.application.decisions import FallbackDecider
 from enigram.application.ports import (
     AnnotationRepository,
+    ChatRepository,
     CodeGraphRepository,
     ConflictRepository,
     DashboardStats,
@@ -90,6 +92,14 @@ async def _new_stats(cfg: Config, store: JobRepository) -> DashboardStats:
     return PostgresStats(store.pool, store.workspace)
 
 
+async def _new_chat(cfg: Config, store: JobRepository) -> ChatRepository:
+    # Like _new_memory: the chat tables share the job store's pool.
+    assert isinstance(store, PostgresJobStore)
+    chat = PostgresChat(store.pool, cfg.workspace)
+    await chat.ensure_schema()
+    return chat
+
+
 def _decider(cfg: Config) -> DecisionProvider:
     """Jev first when DECISION_PROVIDER=jev, the judge model as the automatic fallback."""
     fallback = LlmDecider(OpenAIChatModel(cfg.judge), cfg.judge_model)
@@ -121,6 +131,7 @@ def build_deps(cfg: Config) -> Deps:
         new_principals=partial(_new_principals, cfg),
         new_conflicts=partial(_new_conflicts, cfg),
         new_stats=partial(_new_stats, cfg),
+        new_chat=partial(_new_chat, cfg),
         judge=partial(OpenAIChatModel, cfg.judge),
         answer_scorer=partial(RagasScorer, cfg),
         decider=partial(_decider, cfg),

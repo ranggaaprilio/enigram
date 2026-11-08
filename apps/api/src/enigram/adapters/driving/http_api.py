@@ -1,5 +1,6 @@
 """HTTP API: upload documents for the index worker, ask questions, read stored query traces."""
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -18,7 +19,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field, SecretStr, StringConstraints, model_validator
@@ -35,6 +36,17 @@ from enigram.application.annotations import (
     delete_annotation,
 )
 from enigram.application.budget import daily_exhausted, query_allowance
+from enigram.application.chat import (
+    ask,
+    change_session,
+    check_question,
+    delete_session,
+    new_session,
+    owned,
+    session_detail,
+    session_json,
+    standalone_question,
+)
 from enigram.application.code_agent import answer_with_agent, repo_name
 from enigram.application.code_browse import (
     features_view,
@@ -80,6 +92,7 @@ from enigram.domain.access import OPEN, Caller, at_least
 from enigram.domain.annotation import ANNOTATION_MAX_CHARS, Annotation
 from enigram.domain.answer import QUERY_MODE, QueryResult
 from enigram.domain.budget import BudgetExceeded, metered
+from enigram.domain.chat import AGENTS
 from enigram.domain.chunk import SOURCE_SUFFIXES, book_name
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
 
@@ -172,6 +185,20 @@ class AnnotationCreate(BaseModel):
         "technical"
     )
     proposed: bool = False  # stay a proposal even for the owner (Code page claims about the code)
+
+
+class ChatSessionCreate(BaseModel):
+    agent: str | None = None  # the default agent (Technical) when missing
+    title: str | None = None  # the first question when missing
+
+
+class ChatSessionChange(BaseModel):
+    title: str | None = None
+    shared: bool | None = None  # every member of the workspace may read it (read-only)
+
+
+class ChatMessageCreate(BaseModel):
+    text: str = Field(min_length=1)
 
 
 class MemoryNoteCreate(BaseModel):
@@ -481,12 +508,15 @@ def create_app(
                 app.state.workspaces = workspaces
                 app.state.principals = await deps.new_principals(store)
                 app.state.identity = deps.identity_provider()
+                app.state.chat_turns = set()  # chat answers still running (POST .../messages)
                 if cfg.api_keys:
                     names = [w["name"] for w in await workspaces.list()]
                     await import_env_keys(app.state.principals, cfg, names)
                 # A mounted app's own lifespan never runs, so the MCP session manager starts here.
                 async with mcp.session_manager.run():
                     yield
+                # A chat answer whose client left still stores itself before the pool closes.
+                await asyncio.gather(*app.state.chat_turns, return_exceptions=True)
         finally:
             await store.close()
 
@@ -1293,6 +1323,122 @@ def create_app(
         if row is None:
             raise HTTPException(404, f"No query {query_id}")
         return row
+
+    # Chat (plan item 8, C1; docs/rbac.md): any member chats in their own sessions; a shared
+    # one is read-only for the others; another person's private session looks missing.
+
+    @app.get("/chat/agents")
+    async def chat_agents(ws: Viewer) -> list[dict[str, str]]:
+        return [asdict(a) for a in AGENTS.values()]
+
+    @app.get("/chat/sessions")
+    async def chat_sessions(ws: Viewer, request: Request) -> list[dict[str, Any]]:
+        """Newest activity first: your sessions, and the ones others shared (`mine` false)."""
+        owner = _key_name(request)
+        return jsonable_encoder([session_json(s, owner) for s in await ws.chat.sessions(owner)])
+
+    @app.post("/chat/sessions", status_code=201)
+    async def new_chat_session(
+        ws: Viewer, request: Request, body: ChatSessionCreate
+    ) -> dict[str, Any]:
+        owner = _key_name(request)
+        try:
+            session = await new_session(ws.chat, owner, agent=body.agent, title=body.title)
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return jsonable_encoder(session_json(session, owner))
+
+    @app.get("/chat/sessions/{session_id}")
+    async def chat_session(ws: Viewer, request: Request, session_id: int) -> dict[str, Any]:
+        """The session and its messages; each answer with its sources and its trace id."""
+        try:
+            found = await session_detail(ws.chat, ws.store, session_id, _key_name(request))
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return jsonable_encoder(found)
+
+    @app.patch("/chat/sessions/{session_id}")
+    async def change_chat_session(
+        ws: Viewer, request: Request, session_id: int, body: ChatSessionChange
+    ) -> dict[str, Any]:
+        """Rename or share (the owner only)."""
+        owner = _key_name(request)
+        try:
+            session = await change_session(
+                ws.chat, session_id, owner, title=body.title, shared=body.shared
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return jsonable_encoder(session_json(session, owner))
+
+    @app.delete("/chat/sessions/{session_id}", status_code=204)
+    async def remove_chat_session(ws: Viewer, request: Request, session_id: int) -> Response:
+        """The owner's, or any for an admin; its messages go with it (traces stay)."""
+        try:
+            await delete_session(ws.chat, session_id, _key_name(request), _role(request))
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return Response(status_code=204)
+
+    @app.post("/chat/sessions/{session_id}/messages")
+    async def chat_message(
+        ws: Viewer, request: Request, session_id: int, body: ChatMessageCreate
+    ) -> StreamingResponse:
+        """Ask in your session; the reply is a server-sent event stream: `question` (stored),
+        `step` per tool call, then `answer` (stored, with its sources and trace id; `error`
+        set when it failed) or `error` if the turn itself broke. The answer is stored even
+        when the client goes away."""
+        owner = _key_name(request)
+        try:
+            session = await owned(ws.chat, session_id, owner)
+            check_question(body.text)
+        except EnigramError as e:
+            raise _raise_http(e) from e
+
+        async def answer(question, history, on_tool):  # the Technical agent: the code agent
+            model = ws.deps.generator()
+            return await answer_with_agent(
+                ws.cfg,
+                model,
+                ws.code_graph,
+                question,
+                model=ws.cfg.llm_model,
+                notes=ws.notes,
+                decider=ws.decider,
+                embedder=ws.code_embedder,
+                history=history,
+                on_tool=on_tool,
+                guard_question=await standalone_question(model, history, question),
+            )
+
+        events: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+
+        async def emit(event: str, data: dict[str, Any]) -> None:
+            await events.put((event, data))
+
+        async def turn() -> None:
+            try:
+                await ask(ws.cfg, ws.chat, ws.store, session, body.text, owner, answer, emit)
+            except Exception as e:  # the stream must end with something the UI can show
+                log.exception("[chat] session %d: the turn failed", session_id)
+                detail = str(e) if isinstance(e, EnigramError) else "The answer failed"
+                await events.put(("error", {"detail": detail}))
+            finally:
+                await events.put(None)
+
+        # Kept referenced until done, so a closed connection does not lose the answer.
+        task = asyncio.create_task(turn())
+        request.app.state.chat_turns.add(task)
+        task.add_done_callback(request.app.state.chat_turns.discard)
+
+        async def stream() -> AsyncIterator[str]:
+            while (item := await events.get()) is not None:
+                event, data = item
+                yield f"event: {event}\ndata: {json.dumps(jsonable_encoder(data))}\n\n"
+
+        # X-Accel-Buffering: nginx (the web service) passes each event on at once.
+        headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
 
     # Graph edits are jobs: only the worker writes the index (see adapters/driving/worker.py).
     async def enqueue_graph(

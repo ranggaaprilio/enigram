@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from enigram.domain.access import Identity, Principal
     from enigram.domain.annotation import Annotation, AnnotationEvent, SymbolReview
     from enigram.domain.answer import QueryResult
+    from enigram.domain.chat import ChatMessage, ChatSession
     from enigram.domain.chunk import ParsedBook
     from enigram.domain.code import CodeEdge, CodeEntrypoint, CodeFile, CodeSymbol, FlowSummary
     from enigram.domain.decision import Decisions, Question
@@ -177,6 +178,47 @@ class MemoryRepository(Protocol):
 
     async def delete(self, memory_id: int) -> bool:
         """False when there was none. Notes made from it keep their memory_id."""
+        ...
+
+
+class ChatRepository(Protocol):
+    """Chat sessions and their messages (plan item 8), scoped to one workspace. Who may read or
+    change a session is decided by application/chat.py, not here."""
+
+    async def ensure_schema(self) -> None: ...
+
+    async def create_session(self, owner: str | None, title: str, agent: str) -> "ChatSession": ...
+
+    async def sessions(self, owner: str | None, *, limit: int = 100) -> list["ChatSession"]:
+        """Newest activity first: the owner's sessions and the ones others shared."""
+        ...
+
+    async def session(self, session_id: int) -> "ChatSession | None": ...
+
+    async def update_session(
+        self, session_id: int, *, title: str | None = None, shared: bool | None = None
+    ) -> "ChatSession | None": ...
+
+    async def delete_session(self, session_id: int) -> bool:
+        """False when there was none; its messages go with it."""
+        ...
+
+    async def add_message(
+        self,
+        session_id: int,
+        role: str,
+        text: str,
+        *,
+        agent: str | None = None,
+        query_id: int | None = None,
+        tokens: int = 0,
+        error: str | None = None,
+    ) -> "ChatMessage":
+        """Also moves the session's updated_at."""
+        ...
+
+    async def messages(self, session_id: int) -> list["ChatMessage"]:
+        """Oldest first."""
         ...
 
 
@@ -750,6 +792,8 @@ class Deps:
     new_principals: Callable[[JobRepository], Awaitable[PrincipalRepository]]
     # new_stats(store): the Dashboard's totals, read-only over the store's pool.
     new_stats: Callable[[JobRepository], Awaitable[DashboardStats]]
+    # new_chat(store): chat sessions and messages, sharing the store's pool like new_memory.
+    new_chat: Callable[[JobRepository], Awaitable[ChatRepository]]
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)

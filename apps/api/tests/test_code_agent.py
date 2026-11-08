@@ -716,3 +716,50 @@ async def test_an_answer_with_a_failed_query_embedding_is_not_cached(cfg, graph,
 
     assert result.extra["diagnostics"]["semantic_error"]
     assert not (tmp_path / "cache").exists() or not list((tmp_path / "cache").iterdir())
+
+
+async def test_a_chat_follow_up_carries_its_history_and_reports_each_tool(cfg, graph, tmp_path):
+    # Plan item 8 (C1): the history sits between the system prompt and the question; the guard
+    # reads the follow-up rewritten to stand alone; the cache keeps conversations apart.
+    from code_fakes import FakeDecider, noul
+
+    history = [
+        {"role": "user", "content": "Who may call /users?"},
+        {"role": "assistant", "content": "Only admins."},
+    ]
+    steps = []
+
+    async def on_tool(name, args):
+        steps.append((name, args["name"]))
+
+    decider = FakeDecider({"answerable": noul(0.9)}, name="jev")
+    chat = ScriptedChat(
+        [tool_reply(("find_symbol", _args(name="AppController"))), answer_reply(FINAL)]
+    )
+    cache = tmp_path / "cache"
+    result = await answer_with_agent(
+        cfg,
+        chat,
+        graph,
+        "And a normal user?",
+        cache_dir=cache,
+        decider=decider,
+        history=history,
+        on_tool=on_tool,
+        guard_question="What does a normal user get from /users?",
+    )
+
+    sent = chat.calls[0]["messages"]
+    assert [m["role"] for m in sent] == ["system", "user", "assistant", "user"]
+    assert sent[1:3] == history and sent[3]["content"] == "And a normal user?"
+    assert steps == [("find_symbol", "AppController")]
+    ((state, _),) = decider.calls
+    assert state["question"] == "What does a normal user get from /users?"
+    assert state["evidence"].startswith("Earlier answers in this conversation:\nOnly admins.\n")
+    assert "AppController" in state["evidence"]  # the tool output follows
+    assert result.question == "And a normal user?"
+    assert result.extra["standalone_question"] == "What does a normal user get from /users?"
+    # The same question without the history is another answer, not the cached one.
+    alone = ScriptedChat([answer_reply(FINAL)])
+    await answer_with_agent(cfg, alone, graph, "And a normal user?", cache_dir=cache)
+    assert len(alone.calls) == 1

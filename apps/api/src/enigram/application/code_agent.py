@@ -9,11 +9,12 @@ question. Every violation comes back to the model as text. Callers/callees and l
 dropped from the tool set in Phase 1b iteration 1: each schema is resent on every turn."""
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
@@ -552,9 +553,16 @@ async def answer_with_agent(
     notes: AnnotationRepository | None = None,
     decider: DecisionProvider | None = None,
     embedder: CodeEmbedder | None = None,
+    history: list[dict[str, str]] | None = None,
+    on_tool: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    guard_question: str | None = None,
 ) -> QueryResult:
     """With `decider`, the abstain guard runs on the answer (part of the system: the guarded
-    answer is what gets cached); with `embedder`, search_code also ranks by code embeddings."""
+    answer is what gets cached); with `embedder`, search_code also ranks by code embeddings.
+    `history` (chat, plan item 8) is the conversation before `question` as user and assistant
+    messages; `on_tool` hears each tool call before it runs (the chat's progress events);
+    `guard_question` is what the abstain guard reads instead of `question` (a follow-up
+    rewritten to stand alone)."""
     repos = await graph_repo.list_repos()
     if not repos:
         raise EnigramError("No repository indexed; run `enigram repo <url>`")
@@ -574,6 +582,8 @@ async def answer_with_agent(
             f"{AGENT_VERSION}\n{question}\n{shas}\n{picked}\n{model}\n{notes_version}\n{guard}"
             f"\n{embed}"
         )
+        if history:  # appended only then: the keys of answers without one stay valid
+            cache_key += "\n" + json.dumps(history, sort_keys=True)
         key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
         if path.exists():
@@ -590,15 +600,22 @@ async def answer_with_agent(
     )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt(tools.repo_lines())},
+        *(history or []),
         {"role": "user", "content": question},
     ]
+
+    async def run_tool(name: str, args: dict[str, Any]) -> str:
+        if on_tool is not None:
+            await on_tool(name, args)
+        return await tools.run(name, args)
+
     start = time.perf_counter()
     counting = _CountingChat(chat)
     loop = await run_tool_loop(
         counting,
         messages,
         TOOLS,
-        tools.run,
+        run_tool,
         max_tool_calls=max_tool_calls,
         max_input_tokens=max_input_tokens,
     )
@@ -616,7 +633,22 @@ async def answer_with_agent(
     )
     cited = set(parse_note_citations(result.answer))
     result = attach_notes(result, {i: n for i, n in tools.notes_seen.items() if i in cited})
-    result = await guard_abstain(decider, result, tool_evidence(messages))
+    evidence = tool_evidence(messages)
+    if history:
+        # A follow-up builds on what the earlier answers found (they passed this guard), and
+        # often reads nothing again: without them the evidence lacked the very facts it used.
+        # First: the evidence is clipped at its end, and tool output can be long.
+        earlier = [m["content"] for m in history if m.get("role") == "assistant"]
+        evidence = (
+            "Earlier answers in this conversation:\n" + "\n\n".join(earlier) + "\n\n" + evidence
+        )
+    if guard_question and guard_question != question:
+        standalone = dataclasses.replace(result, question=guard_question)
+        guarded = await guard_abstain(decider, standalone, evidence)
+        extra = {**guarded.extra, "standalone_question": guard_question}
+        result = dataclasses.replace(guarded, question=question, extra=extra)
+    else:
+        result = await guard_abstain(decider, result, evidence)
     log.info(
         "[agent] enigram: %d tool calls, %d in / %d out tokens%s",
         loop.calls,

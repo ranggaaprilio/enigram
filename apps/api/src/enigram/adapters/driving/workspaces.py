@@ -10,6 +10,7 @@ from typing import Any
 
 from enigram.application.ports import (
     AnnotationRepository,
+    ChatRepository,
     CodeEmbedder,
     CodeGraphRepository,
     ConflictRepository,
@@ -40,6 +41,7 @@ class Workspace:
     # The decision layer: the abstain guard on /query, conflict checks on verification.
     decider: DecisionProvider
     code_embedder: CodeEmbedder  # search_code's semantic channel on /query and MCP
+    chat: ChatRepository  # chat sessions and messages (plan item 8)
     engine: KnowledgeEngine | None = None  # the home one opens at start, others on first use
 
 
@@ -112,6 +114,7 @@ async def _build(cfg: Config, deps: Deps, store: JobRepository) -> Workspace:
     code_graph = await deps.new_code_graph(store)
     conflicts = await deps.new_conflicts(store)
     notes = await deps.new_annotations(store)
+    chat = await deps.new_chat(store)
     return Workspace(
         cfg,
         deps,
@@ -122,4 +125,5 @@ async def _build(cfg: Config, deps: Deps, store: JobRepository) -> Workspace:
         notes,
         deps.decider(),
         deps.code_embedder(),
+        chat,
     )
