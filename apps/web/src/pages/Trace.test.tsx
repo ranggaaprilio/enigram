@@ -80,11 +80,11 @@ describe('Trace', () => {
     // Names open the Annotations page with a note on that entity prefilled.
     expect(screen.getByRole('link', { name: 'Mira Okafor' })).toHaveAttribute(
       'href',
-      '/annotations?target_kind=entity&target_ref=Mira%20Okafor',
+      '/knowledge?tab=notes&target_kind=entity&target_ref=Mira%20Okafor',
     )
     expect(screen.getAllByRole('link', { name: 'Lighthouse Protocol' })[0]).toHaveAttribute(
       'href',
-      '/annotations?target_kind=entity&target_ref=Lighthouse%20Protocol',
+      '/knowledge?tab=notes&target_kind=entity&target_ref=Lighthouse%20Protocol',
     )
     expect(screen.getByText('Chunks (1)')).toBeInTheDocument()
   })

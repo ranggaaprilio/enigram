@@ -44,7 +44,8 @@ import { formatTime } from '../format'
 const STATUSES = ['all', 'needs_verification', 'orphaned', 'verified', 'proposed', 'rejected']
 
 // Writes are synchronous (no worker job): every action reloads the list.
-export default function Annotations() {
+// `embedded`: the All notes tab of the Knowledge page, which has the header (item 5, A2).
+export default function Annotations({ embedded = false }: { embedded?: boolean }) {
   const [params, setParams] = useSearchParams()
   const status = params.get('status') ?? 'all'
   const openId = Number(params.get('id')) || null
@@ -137,19 +138,21 @@ export default function Annotations() {
 
   return (
     <section>
-      <PageHeader
-        title="Annotations"
-        description="Human notes on code symbols, graph entities and documents. Answers cite them, and they ask for review when the code they describe changes."
-        action={
-          access.can('maintainer') && (
-            <Button asChild variant="secondary">
-              <WsLink to="/graph" className="hover:no-underline">
-                <Network /> Graph editor
-              </WsLink>
-            </Button>
-          )
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title="Annotations"
+          description="Human notes on code symbols, graph entities and documents. Answers cite them, and they ask for review when the code they describe changes."
+          action={
+            access.can('maintainer') && (
+              <Button asChild variant="secondary">
+                <WsLink to="/graph" className="hover:no-underline">
+                  <Network /> Graph editor
+                </WsLink>
+              </Button>
+            )
+          }
+        />
+      )}
       <div className="mb-4 flex items-center gap-3">
         <Label htmlFor="status" className="text-muted-foreground">
           Status

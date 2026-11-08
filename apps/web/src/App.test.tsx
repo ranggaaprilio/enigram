@@ -81,7 +81,10 @@ describe('App workspaces', () => {
     renderAt('/w/ws-a/documents')
     await waitFor(() => expect(headersOf(fetch, '/api/documents')).toContain('ws-a'))
     expect(headersOf(fetch, '/api/documents').every((h) => h === 'ws-a')).toBe(true)
-    expect(screen.getByRole('link', { name: 'Code' })).toHaveAttribute('href', '/w/ws-a/code')
+    expect(screen.getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
+      'href',
+      '/w/ws-a/knowledge',
+    )
     expect(document.title).toBe('ws-a · enigram')
   })
 
@@ -91,7 +94,7 @@ describe('App workspaces', () => {
     const select = await screen.findByLabelText('Workspace')
     await waitFor(() => expect(headersOf(fetch, '/api/repos')).toEqual(['ws-a']))
     await userEvent.selectOptions(select, 'default')
-    expect(where()).toBe('/w/default/code')
+    expect(where()).toBe('/w/default/knowledge')
     await waitFor(() => expect(headersOf(fetch, '/api/repos').at(-1)).toBe('default'))
     expect(document.title).toBe('default · enigram')
   })
@@ -165,20 +168,23 @@ describe('App workspaces', () => {
 describe('App frame', () => {
   it('reaches every page from the sidebar and marks the current one', async () => {
     mockFetch(ROUTES)
-    renderAt('/w/ws-a/code')
+    renderAt('/w/ws-a/knowledge')
     const nav = await screen.findByRole('navigation', { name: 'Pages' })
     const links = within(nav).getAllByRole('link')
     expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
       ['Ask', '/w/ws-a/ask'],
       ['Trace', '/w/ws-a/trace'],
       ['Documents', '/w/ws-a/documents'],
-      ['Code', '/w/ws-a/code'],
-      ['Annotations', '/w/ws-a/annotations'],
+      ['Knowledge', '/w/ws-a/knowledge'],
       ['Graph', '/w/ws-a/graph'],
+      ['Inbox', '/w/ws-a/review'],
       ['Members', '/w/ws-a/members'], // no /me here: the API alone decides
     ])
-    expect(within(nav).getByRole('link', { name: 'Code' })).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('banner')).toHaveTextContent('ws-a / Code')
+    expect(within(nav).getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    expect(screen.getByRole('banner')).toHaveTextContent('ws-a / Knowledge')
   })
 
   it('shows the key and its role, and keeps the theme picked', async () => {
@@ -351,7 +357,9 @@ describe('Page patterns (U2)', () => {
     mockFetch(ROUTES)
     renderAt('/w/ws-a/code?repo=1&symbol=src%2Fa.ts%23AuthService.logout')
     const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' })
-    expect(crumbs).toHaveTextContent('ws-a / Code / AuthService.logout')
+    // The old /code link opens Knowledge with the same symbol.
+    await waitFor(() => expect(crumbs).toHaveTextContent('ws-a / Knowledge / AuthService.logout'))
+    expect(where()).toBe('/w/ws-a/knowledge?repo=1&symbol=src%2Fa.ts%23AuthService.logout')
   })
 
   it('confirms an action with a toast', async () => {
@@ -367,5 +375,34 @@ describe('Page patterns (U2)', () => {
     await userEvent.type(screen.getByLabelText('Workspace name'), 'whiteboard')
     await userEvent.click(screen.getByRole('button', { name: 'Create' }))
     expect(await screen.findByText('Workspace whiteboard created')).toBeInTheDocument()
+  })
+})
+
+describe('Knowledge and Review (A2)', () => {
+  it('opens an old Annotations link on the All notes tab', async () => {
+    mockFetch({ ...ROUTES, 'GET /api/annotations': { body: [] } })
+    renderAt('/w/ws-a/annotations?id=7')
+    await waitFor(() => expect(where()).toBe('/w/ws-a/knowledge?id=7&tab=notes'))
+    const tabs = await screen.findByRole('navigation', { name: 'Knowledge views' })
+    expect(within(tabs).getByRole('link', { name: 'All notes' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    expect(await screen.findByText('No annotations.')).toBeInTheDocument()
+  })
+
+  it('counts the waiting notes on the Inbox link for a maintainer', async () => {
+    mockFetch({
+      ...ROUTES,
+      'GET /api/me': {
+        body: {
+          principal: { name: 'k', kind: 'key', owner: false, default_workspace: 'default' },
+          roles: { default: 'maintainer' },
+        },
+      },
+      'GET /api/review': { body: [{}, {}, {}] },
+    })
+    renderAt('/w/default/documents')
+    expect(await screen.findByLabelText('3 waiting')).toHaveTextContent('3')
   })
 })

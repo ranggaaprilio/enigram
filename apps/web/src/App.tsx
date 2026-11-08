@@ -16,14 +16,24 @@ import Empty from './components/Empty'
 import SignIn from './components/SignIn'
 import { Separator } from './components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar'
-import Annotations from './pages/Annotations'
 import Ask from './pages/Ask'
-import Code from './pages/Code'
 import Documents from './pages/Documents'
 import Graph from './pages/Graph'
+import Knowledge from './pages/Knowledge'
 import Members from './pages/Members'
+import Review from './pages/Review'
 import { TraceDetail, TraceList } from './pages/Trace'
 import { WORKSPACE_NAME } from './workspace'
+
+// An old link (/code?repo=1&symbol=…, /annotations?id=7) opens the same view on Knowledge.
+function Moved({ to, tab }: { to: string; tab?: string }) {
+  const { workspace = '' } = useParams()
+  const { search } = useLocation()
+  const params = new URLSearchParams(search)
+  if (tab) params.set('tab', tab)
+  const query = params.toString()
+  return <Navigate replace to={`/w/${workspace}/${to}${query ? `?${query}` : ''}`} />
+}
 
 // The item a page shows, for the breadcrumb: a query, a symbol, a note.
 function itemOf(segment: string, pathname: string, search: string): string | null {
@@ -32,8 +42,10 @@ function itemOf(segment: string, pathname: string, search: string): string | nul
     const id = pathname.split('/')[4]
     return id ? `Query ${id}` : null
   }
-  if (segment === 'code') return params.get('symbol')?.split('#').pop() ?? null
-  if (segment === 'annotations') return params.get('id') ? `Note ${params.get('id')}` : null
+  if (segment === 'knowledge') {
+    if (params.get('id')) return `Note ${params.get('id')}`
+    return params.get('symbol')?.split('#').pop() ?? null
+  }
   return null
 }
 
@@ -168,10 +180,13 @@ function WorkspaceShell({ home }: { home: string }) {
                 <Route index element={<Navigate to="documents" replace />} />
                 <Route path="documents" element={<Documents />} />
                 <Route path="ask" element={<Ask />} />
-                <Route path="code" element={<Code />} />
+                <Route path="knowledge" element={<Knowledge />} />
+                {/* Before item 5 A2: Code and Annotations were pages of their own. */}
+                <Route path="code" element={<Moved to="knowledge" />} />
+                <Route path="annotations" element={<Moved to="knowledge" tab="notes" />} />
+                <Route path="review" element={<Review />} />
                 <Route path="trace" element={<TraceList />} />
                 <Route path="trace/:id" element={<TraceDetail />} />
-                <Route path="annotations" element={<Annotations />} />
                 <Route path="graph" element={<Graph />} />
                 <Route path="members" element={<Members />} />
                 <Route path="*" element={<Empty>Not found.</Empty>} />

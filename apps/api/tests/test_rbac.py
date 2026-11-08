@@ -43,6 +43,7 @@ MATRIX = [
     ("GET", "/queries/1", None, "viewer"),
     ("GET", "/graph/search?q=user", None, "viewer"),
     ("GET", "/targets?q=find", None, "viewer"),
+    ("GET", "/review", None, "viewer"),
     ("POST", f"/repos/1/symbols/{CONTROLLER}/review", {"by": "Ann"}, "contributor"),
     ("DELETE", f"/repos/1/symbols/{CONTROLLER}/review", None, "contributor"),
     ("POST", "/annotations", SYMBOL_NOTE, "contributor"),
