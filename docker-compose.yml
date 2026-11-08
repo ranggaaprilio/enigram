@@ -70,6 +70,31 @@ services:
       - api
     restart: unless-stopped
 
+  # A local OIDC provider to try sign-in (README "Sign-in", "Try it locally with Keycloak"); off
+  # unless asked: `docker compose --profile keycloak up -d keycloak`. Development mode, fixed
+  # passwords and client secret: never publish it.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    profiles: [keycloak]
+    # One address for the browser and the API container alike, so the token's issuer matches
+    # OIDC_ISSUER: browsers resolve *.localhost to this machine (the published port), and the
+    # alias below sends the API container to this container on the same port.
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8081
+      - --hostname=http://keycloak.localhost:8081
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./tools/keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "127.0.0.1:8081:8081" # localhost only
+    networks:
+      default:
+        aliases: [keycloak.localhost]
+
 volumes:
   pgdata:
   model-cache:
