@@ -1518,10 +1518,24 @@ def create_app(
     @app.get("/graph/search")
     async def search_graph(
         ws: Viewer,
-        q: Annotated[str, Query(min_length=1)],
+        q: str = "",
+        type: str | None = None,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        offset: Annotated[int, Query(ge=0)] = 0,
     ) -> dict[str, list[dict[str, Any]]]:
-        return await ws.store.search_graph(q, limit)
+        # No phrase lists the whole graph, most connected entities first.
+        return await ws.store.search_graph(q.strip(), limit, offset, type or None)
+
+    @app.get("/graph/types")
+    async def graph_types(ws: Viewer) -> list[dict[str, Any]]:
+        return await ws.store.graph_types()
+
+    # A query parameter, not a path: entity names may hold "/".
+    @app.get("/graph/relations")
+    async def entity_relations(
+        ws: Viewer, entity: Annotated[str, Query(min_length=1)]
+    ) -> list[dict[str, Any]]:
+        return await ws.store.entity_relations(entity)
 
     @app.post("/graph/entity/edit", status_code=202)
     async def edit_entity(ws: Maintainer, request: Request, body: EntityEdit) -> Any:

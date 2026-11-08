@@ -250,8 +250,17 @@ class PostgresJobStore:
         )
         return [dict(r) for r in rows]
 
-    async def search_graph(self, phrase: str, limit: int = 50) -> dict[str, list[dict[str, Any]]]:
+    async def search_graph(
+        self,
+        phrase: str = "",
+        limit: int = 50,
+        offset: int = 0,
+        entity_type: str | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
         """Entities and relations whose name or description contains `phrase`, any case.
+
+        An empty phrase matches everything. Entities come most connected first, with their
+        relation count as `degree`; `entity_type` narrows entities only.
 
         LightRAG has no text search over the graph, so this reads its tables directly
         (PGTableGraphStorage). Reads only: every write goes through LightRAG in a worker job.
@@ -259,14 +268,20 @@ class PostgresJobStore:
         escaped = phrase.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         pattern = f"%{escaped}%"
         entities = await self.pool.fetch(
-            "SELECT id AS name, properties->>'entity_type' AS type, "
-            "properties->>'description' AS description FROM lightrag_graph_nodes "
-            "WHERE workspace = $1 AND namespace = 'chunk_entity_relation' "
-            "AND (id ILIKE $2 ESCAPE '\\' OR properties->>'description' ILIKE $2 ESCAPE '\\') "
-            "ORDER BY id LIMIT $3",
+            "SELECT n.id AS name, n.properties->>'entity_type' AS type, "
+            "n.properties->>'description' AS description, "
+            "(SELECT count(*) FROM lightrag_graph_edges e WHERE e.workspace = n.workspace "
+            "AND e.namespace = n.namespace AND (e.src_id = n.id OR e.tgt_id = n.id)) AS degree "
+            "FROM lightrag_graph_nodes n "
+            "WHERE n.workspace = $1 AND n.namespace = 'chunk_entity_relation' "
+            "AND (n.id ILIKE $2 ESCAPE '\\' OR n.properties->>'description' ILIKE $2 ESCAPE '\\') "
+            "AND ($5::text IS NULL OR n.properties->>'entity_type' = $5) "
+            "ORDER BY degree DESC, n.id LIMIT $3 OFFSET $4",
             self.workspace,
             pattern,
             limit,
+            offset,
+            entity_type,
         )
         relations = await self.pool.fetch(
             "SELECT src_id AS source, tgt_id AS target, properties->>'keywords' AS keywords, "
@@ -274,12 +289,38 @@ class PostgresJobStore:
             "WHERE workspace = $1 AND namespace = 'chunk_entity_relation' "
             "AND (src_id ILIKE $2 ESCAPE '\\' OR tgt_id ILIKE $2 ESCAPE '\\' "
             "OR properties->>'description' ILIKE $2 ESCAPE '\\') "
-            "ORDER BY src_id, tgt_id LIMIT $3",
+            "ORDER BY src_id, tgt_id LIMIT $3 OFFSET $4",
             self.workspace,
             pattern,
             limit,
+            offset,
         )
         return {"entities": [dict(r) for r in entities], "relations": [dict(r) for r in relations]}
+
+    async def graph_types(self) -> list[dict[str, Any]]:
+        """Each entity type with how many entities have it, most common first."""
+        rows = await self.pool.fetch(
+            "SELECT properties->>'entity_type' AS type, count(*) AS count "
+            "FROM lightrag_graph_nodes "
+            "WHERE workspace = $1 AND namespace = 'chunk_entity_relation' "
+            "AND properties->>'entity_type' IS NOT NULL "
+            "GROUP BY 1 ORDER BY count DESC, type",
+            self.workspace,
+        )
+        return [dict(r) for r in rows]
+
+    async def entity_relations(self, name: str, limit: int = 100) -> list[dict[str, Any]]:
+        """Relations with `name` at either end."""
+        rows = await self.pool.fetch(
+            "SELECT src_id AS source, tgt_id AS target, properties->>'keywords' AS keywords, "
+            "properties->>'description' AS description FROM lightrag_graph_edges "
+            "WHERE workspace = $1 AND namespace = 'chunk_entity_relation' "
+            "AND (src_id = $2 OR tgt_id = $2) ORDER BY src_id, tgt_id LIMIT $3",
+            self.workspace,
+            name,
+            limit,
+        )
+        return [dict(r) for r in rows]
 
     async def add_tokens(self, source: str, api_key: str | None, tokens: int) -> None:
         # The day comes from Python: a container's clock can drift from the host's.

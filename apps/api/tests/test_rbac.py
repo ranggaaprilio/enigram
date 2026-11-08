@@ -42,6 +42,8 @@ MATRIX = [
     ("GET", "/queries", None, "viewer"),
     ("GET", "/queries/1", None, "viewer"),
     ("GET", "/graph/search?q=user", None, "viewer"),
+    ("GET", "/graph/types", None, "viewer"),
+    ("GET", "/graph/relations?entity=user", None, "viewer"),
     ("GET", "/targets?q=find", None, "viewer"),
     ("GET", "/review", None, "viewer"),
     ("GET", "/stats", None, "viewer"),

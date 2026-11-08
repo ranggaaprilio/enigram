@@ -218,9 +218,38 @@ async def test_search_graph_matches_names_and_descriptions_any_case(store, graph
 async def test_search_graph_treats_wildcards_literally_and_limits(store, graph_rows):
     assert [e["name"] for e in (await store.search_graph("0_p"))["entities"]] == ["Kestrel"]
     assert (await store.search_graph("%"))["entities"] == [
-        {"name": "Mutation Score", "type": "concept", "description": "below 60% blocks a release"}
+        {
+            "name": "Mutation Score",
+            "type": "concept",
+            "description": "below 60% blocks a release",
+            "degree": 1,
+        }
     ]
     assert len((await store.search_graph("e", limit=1))["entities"]) == 1
+
+
+async def test_search_graph_without_a_phrase_lists_most_connected_first(store, graph_rows):
+    found = await store.search_graph()
+
+    assert [(e["name"], e["degree"]) for e in found["entities"]] == [
+        ("Kestrel", 1),
+        ("Mutation Score", 1),
+        ("Other", 0),
+    ]
+    assert len(found["relations"]) == 1
+    page = await store.search_graph(limit=2, offset=2)
+    assert [e["name"] for e in page["entities"]] == ["Other"]
+    typed = await store.search_graph(entity_type="concept")
+    assert [e["name"] for e in typed["entities"]] == ["Mutation Score", "Other"]
+
+
+async def test_graph_types_and_entity_relations(store, graph_rows):
+    assert await store.graph_types() == [
+        {"type": "concept", "count": 2},
+        {"type": "organization", "count": 1},
+    ]
+    assert [r["source"] for r in await store.entity_relations("Mutation Score")] == ["Kestrel"]
+    assert await store.entity_relations("Other") == []
 
 
 async def test_search_graph_is_scoped_to_the_workspace(store, pool, graph_rows):

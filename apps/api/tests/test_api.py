@@ -561,11 +561,30 @@ def test_graph_search_passes_the_phrase_and_limit(env):
 
     assert response.status_code == 200
     assert response.json() == store.graph
-    assert store.searches == [("60%", 5)]
+    assert store.searches == [("60%", 5, 0, None)]
+
+
+def test_graph_search_without_a_phrase_lists_everything(env):
+    client, store, _, _ = env
+
+    assert client.get("/graph/search").status_code == 200
+    client.get("/graph/search", params={"q": " ", "type": "concept", "offset": 50})
+
+    assert store.searches == [("", 50, 0, None), ("", 50, 50, "concept")]
+
+
+def test_graph_types_and_entity_relations(env):
+    client, store, _, _ = env
+    edge = {"source": "A/B", "target": "C", "keywords": "k", "description": "d"}
+    store.graph = {"entities": [], "relations": [edge]}
+
+    assert client.get("/graph/types").json() == [{"type": "concept", "count": 2}]
+    assert client.get("/graph/relations", params={"entity": "A/B"}).json() == [edge]
+    assert client.get("/graph/relations").status_code == 422
 
 
 @pytest.mark.parametrize(
-    "params", [{"q": ""}, {}, {"q": "x", "limit": 0}, {"q": "x", "limit": 201}]
+    "params", [{"q": "x", "limit": 0}, {"q": "x", "limit": 201}, {"offset": -1}]
 )
 def test_graph_search_validates_input(env, params):
     client, _, _, _ = env
