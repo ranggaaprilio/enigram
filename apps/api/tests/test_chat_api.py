@@ -285,3 +285,65 @@ def test_a_panel_asks_its_agents_at_once_within_one_share_each(chat_env):
     many = "@auto @technical @business @qa which?"
     assert client.post(url, json={"text": many}, headers=LAPTOP).status_code == 422
     assert len(client.get(f"/chat/sessions/{sid}", headers=LAPTOP).json()["messages"]) == 3
+
+
+def test_an_admin_adds_changes_and_deletes_a_custom_agent(chat_env):
+    client, _, asked = chat_env
+    body = {
+        "name": "security",
+        "label": "Security",
+        "description": "Who may do what",
+        "route": "code",
+        "focus": "Answer for a security reviewer.",
+        "note_types": ["known_issue"],
+    }
+    # A viewer may use agents, not make them.
+    assert client.post("/chat/agents", json=body, headers=LAPTOP).status_code == 403
+    made = client.post("/chat/agents", json=body, headers=WEB)
+    assert made.status_code == 201, made.text
+    assert made.json()["custom"] and made.json()["created_by"] == "web"
+    assert client.post("/chat/agents", json=body, headers=WEB).status_code == 422  # twice
+    taken = client.post("/chat/agents", json=body | {"name": "qa"}, headers=WEB)
+    assert taken.status_code == 422 and "built-in" in taken.json()["detail"]
+
+    listed = client.get("/chat/agents", headers=LAPTOP).json()
+    assert [a["name"] for a in listed][-1] == "security"
+    assert [a["custom"] for a in listed] == [False] * 5 + [True]
+
+    # Every member chats with it: as a session's agent and as an @name.
+    sid = _start(client, agent="security")["id"]
+    url = f"/chat/sessions/{sid}/messages"
+    events = _events(client.post(url, json={"text": "Who may call /users?"}, headers=LAPTOP))
+    assert events[-1][1]["agent"] == "security"
+    assert asked[-1]["focus"] == ("Answer for a security reviewer. Lean on known issue notes.")
+    other = _start(client)["id"]
+    events = _events(
+        client.post(
+            f"/chat/sessions/{other}/messages",
+            json={"text": "@security @qa who may call it?"},
+            headers=LAPTOP,
+        )
+    )
+    assert events[0][1]["answering"] == ["security", "qa"]
+
+    # An admin changes it (not its name); a built-in agent cannot be changed.
+    changed = client.patch(
+        "/chat/agents/security", json={"focus": "Name the guard.", "note_types": []}, headers=WEB
+    )
+    assert changed.status_code == 200 and changed.json()["note_types"] == []
+    assert (
+        client.patch("/chat/agents/security", json={"label": "x"}, headers=LAPTOP).status_code
+        == 403
+    )
+    assert client.patch("/chat/agents/qa", json={"label": "x"}, headers=WEB).status_code == 404
+    client.post(url, json={"text": "And /auth?"}, headers=LAPTOP)
+    assert asked[-1]["focus"] == "Name the guard."
+
+    # Deleted: its session moves to Auto; the answers it gave keep its name.
+    assert client.delete("/chat/agents/security", headers=WEB).status_code == 204
+    assert client.delete("/chat/agents/security", headers=WEB).status_code == 404
+    detail = client.get(f"/chat/sessions/{sid}", headers=LAPTOP).json()
+    assert detail["agent"] == "auto"
+    assert {m["agent"] for m in detail["messages"] if m["role"] == "agent"} == {"security"}
+    unknown = client.post(url, json={"text": "@security who?"}, headers=LAPTOP)
+    assert _events(unknown)[0][1]["answering"] == ["auto"]  # no such agent: plain text

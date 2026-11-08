@@ -1,9 +1,12 @@
-"""ChatRepository on Postgres: two own tables, scoped to one workspace. Shares the job store's
+"""ChatRepository on Postgres: three own tables, scoped to one workspace. Shares the job store's
 pool and never closes it. Message text is never logged."""
+
+from typing import Any
 
 import asyncpg
 
-from enigram.domain.chat import ChatMessage, ChatSession
+from enigram.domain.chat import ChatMessage, ChatSession, CustomAgent
+from enigram.domain.errors import EnigramError
 
 CHAT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -31,10 +34,27 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS chat_messages_session ON chat_messages (session_id, id);
+-- C4: an admin's agents, per workspace; the built-in ones live in the code (domain/chat.py).
+CREATE TABLE IF NOT EXISTS chat_agents (
+    workspace TEXT NOT NULL,
+    name TEXT NOT NULL,
+    label TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    route TEXT NOT NULL,
+    focus TEXT NOT NULL DEFAULT '',
+    note_types TEXT[] NOT NULL DEFAULT '{}',
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (workspace, name)
+);
 """
 
 SESSION_COLUMNS = "id, owner, title, agent, shared, created_at, updated_at"
 MESSAGE_COLUMNS = "id, session_id, role, agent, text, query_id, tokens, error, created_at"
+AGENT_COLUMNS = (
+    "name, label, description, route, focus, note_types, created_by, created_at, updated_at"
+)
 
 
 def _session(row: asyncpg.Record) -> ChatSession:
@@ -43,6 +63,10 @@ def _session(row: asyncpg.Record) -> ChatSession:
 
 def _message(row: asyncpg.Record) -> ChatMessage:
     return ChatMessage(**dict(row))
+
+
+def _agent(row: asyncpg.Record) -> CustomAgent:
+    return CustomAgent(**{**dict(row), "note_types": tuple(row["note_types"])})
 
 
 class PostgresChat:
@@ -150,3 +174,64 @@ class PostgresChat:
             session_id,
         )
         return [_message(r) for r in rows]
+
+    async def custom_agents(self) -> list[CustomAgent]:
+        rows = await self.pool.fetch(
+            f"SELECT {AGENT_COLUMNS} FROM chat_agents WHERE workspace = $1 ORDER BY name",
+            self.workspace,
+        )
+        return [_agent(r) for r in rows]
+
+    async def add_custom_agent(self, fields: dict[str, Any], by: str | None) -> CustomAgent:
+        try:
+            row = await self.pool.fetchrow(
+                "INSERT INTO chat_agents "
+                "(workspace, name, label, description, route, focus, note_types, created_by) "
+                f"VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {AGENT_COLUMNS}",
+                self.workspace,
+                fields["name"],
+                fields["label"],
+                fields["description"],
+                fields["route"],
+                fields["focus"],
+                list(fields["note_types"]),
+                by,
+            )
+        except asyncpg.UniqueViolationError as e:
+            raise EnigramError(f"There is an agent @{fields['name']} already") from e
+        return _agent(row)
+
+    async def update_custom_agent(self, name: str, fields: dict[str, Any]) -> CustomAgent | None:
+        types = fields.get("note_types")
+        row = await self.pool.fetchrow(
+            "UPDATE chat_agents SET label = coalesce($3, label), "
+            "description = coalesce($4, description), route = coalesce($5, route), "
+            "focus = coalesce($6, focus), note_types = coalesce($7, note_types), "
+            f"updated_at = now() WHERE workspace = $1 AND name = $2 RETURNING {AGENT_COLUMNS}",
+            self.workspace,
+            name,
+            fields.get("label"),
+            fields.get("description"),
+            fields.get("route"),
+            fields.get("focus"),
+            None if types is None else list(types),
+        )
+        return _agent(row) if row else None
+
+    async def delete_custom_agent(self, name: str, fallback: str) -> bool:
+        # One transaction: no session is left with an agent that is gone.
+        async with self.pool.acquire() as conn, conn.transaction():
+            status = await conn.execute(
+                "DELETE FROM chat_agents WHERE workspace = $1 AND name = $2",
+                self.workspace,
+                name,
+            )
+            if not status.endswith(" 1"):
+                return False
+            await conn.execute(
+                "UPDATE chat_sessions SET agent = $3 WHERE workspace = $1 AND agent = $2",
+                self.workspace,
+                name,
+                fallback,
+            )
+        return True

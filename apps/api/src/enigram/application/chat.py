@@ -1,6 +1,7 @@
 """Chat (plan item 8): sessions with an agent and their history, each answer a trace. C2: the
 agents (domain/chat.py AGENTS), a message starting with @name asks another one. C3: a message
 starting with several @names is a panel: those agents answer it at once, each with its trace.
+C4: an admin adds custom agents to the workspace; a deleted one's sessions move to Auto.
 
 Who may do what (decided 2026-11-08): a member (viewer and up) starts sessions and asks in
 their own; the owner may share a session, which every member then reads but cannot write to;
@@ -8,7 +9,7 @@ the owner deletes it, and an admin may delete any. Another person's private sess
 missing (404), as another key's memory does. History is kept until deleted."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from typing import Any
 
@@ -35,6 +36,7 @@ from enigram.domain.chat import (
     AGENTS,
     CHAT_MESSAGE_MAX_CHARS,
     CHAT_TITLE_MAX_CHARS,
+    CUSTOM_AGENTS_MAX,
     DEFAULT_AGENT,
     HISTORY_MAX_TOKENS,
     HISTORY_MAX_TURNS,
@@ -42,7 +44,9 @@ from enigram.domain.chat import (
     ChatAgent,
     ChatMessage,
     ChatSession,
+    CustomAgent,
     agent_named,
+    check_custom_agent,
     split_mentions,
     title_of,
 )
@@ -79,20 +83,90 @@ def message_json(message: ChatMessage, result: dict[str, Any] | None = None) -> 
     return data
 
 
-def _agent(name: str | None) -> str:
-    agent = agent_named((name or DEFAULT_AGENT).strip())
+Agents = Mapping[str, ChatAgent]
+
+
+async def agents_of(chat: ChatRepository) -> dict[str, ChatAgent]:
+    """The workspace's agents: the built-in ones, then its custom ones."""
+    return {**AGENTS, **{a.name: a.as_agent() for a in await chat.custom_agents()}}
+
+
+def agent_json(agent: ChatAgent, custom: CustomAgent | None = None) -> dict[str, Any]:
+    """For the UI: name, label, description and other @names; a custom agent also with what
+    an admin edits."""
+    out: dict[str, Any] = {
+        "name": agent.name,
+        "label": agent.label,
+        "description": agent.description,
+        "aliases": agent.aliases,
+        "custom": agent.custom,
+    }
+    if custom is not None:
+        out |= {
+            "route": custom.route,
+            "focus": custom.focus,
+            "note_types": custom.note_types,
+            "created_by": custom.created_by,
+            "updated_at": custom.updated_at,
+        }
+    return out
+
+
+async def list_agents(chat: ChatRepository) -> list[dict[str, Any]]:
+    custom = await chat.custom_agents()
+    return [agent_json(a) for a in AGENTS.values()] + [agent_json(c.as_agent(), c) for c in custom]
+
+
+async def add_agent(chat: ChatRepository, by: str | None, fields: dict[str, Any]) -> CustomAgent:
+    """An admin's new agent (the route checks the role)."""
+    clean = check_custom_agent(**fields)
+    if len(await chat.custom_agents()) >= CUSTOM_AGENTS_MAX:
+        raise EnigramError(f"A workspace has at most {CUSTOM_AGENTS_MAX} custom agents")
+    return await chat.add_custom_agent(clean, by)
+
+
+async def change_agent(chat: ChatRepository, name: str, fields: dict[str, Any]) -> CustomAgent:
+    """Changes the given fields; the name stays. A built-in agent cannot be changed."""
+    found = next((a for a in await chat.custom_agents() if a.name == name), None)
+    if found is None:
+        raise NotFound(f"No custom agent @{name}")
+    current = {
+        "name": found.name,
+        "label": found.label,
+        "description": found.description,
+        "route": found.route,
+        "focus": found.focus,
+        "note_types": found.note_types,
+    }
+    given = {k: v for k, v in fields.items() if v is not None and k != "name"}
+    clean = check_custom_agent(**(current | given))
+    changed = await chat.update_custom_agent(name, {k: clean[k] for k in given})
+    if changed is None:  # deleted meanwhile
+        raise NotFound(f"No custom agent @{name}")
+    return changed
+
+
+async def remove_agent(chat: ChatRepository, name: str) -> None:
+    """Its sessions move to the default agent (decided 2026-11-08); their answers keep its
+    name."""
+    if not await chat.delete_custom_agent(name, DEFAULT_AGENT):
+        raise NotFound(f"No custom agent @{name}")
+
+
+def _agent(name: str | None, agents: Agents = AGENTS) -> str:
+    agent = agent_named((name or DEFAULT_AGENT).strip(), agents)
     if agent is None:
-        raise EnigramError(f"No agent {name!r}; one of {', '.join(AGENTS)}")
+        raise EnigramError(f"No agent {name!r}; one of {', '.join(agents)}")
     return agent.name
 
 
-def check_question(text: str) -> str:
+def check_question(text: str, agents: Agents = AGENTS) -> str:
     text = text.strip()
     if not text:
         raise EnigramError("Ask something")
     if len(text) > CHAT_MESSAGE_MAX_CHARS:
         raise EnigramError(f"A message is at most {CHAT_MESSAGE_MAX_CHARS} characters")
-    if len(split_mentions(text)[0]) > PANEL_MAX_AGENTS:
+    if len(split_mentions(text, agents)[0]) > PANEL_MAX_AGENTS:
         raise EnigramError(f"A panel has at most {PANEL_MAX_AGENTS} agents")
     return text
 
@@ -118,7 +192,9 @@ async def new_session(
 ) -> ChatSession:
     """`title` defaults to the first question (set when it is asked)."""
     title = " ".join((title or "").split())[:CHAT_TITLE_MAX_CHARS]
-    return await chat.create_session(owner, title or "New chat", _agent(agent))
+    return await chat.create_session(
+        owner, title or "New chat", _agent(agent, await agents_of(chat))
+    )
 
 
 async def change_session(
@@ -133,7 +209,7 @@ async def change_session(
     """Rename, share, or change the agent that answers when no @name says otherwise."""
     await owned(chat, session_id, owner)
     if agent is not None:
-        agent = _agent(agent)
+        agent = _agent(agent, await agents_of(chat))
     if title is not None:
         title = " ".join(title.split())[:CHAT_TITLE_MAX_CHARS]
         if not title:
@@ -196,12 +272,12 @@ async def standalone_question(
     return rewritten[:CHAT_MESSAGE_MAX_CHARS] or question
 
 
-def _label(name: str | None) -> str:
-    agent = agent_named(name or "")
+def _label(name: str | None, agents: Agents) -> str:
+    agent = agent_named(name or "", agents)
     return agent.label if agent else (name or "Agent")
 
 
-def history_of(messages: list[ChatMessage]) -> list[dict[str, str]]:
+def history_of(messages: list[ChatMessage], agents: Agents = AGENTS) -> list[dict[str, str]]:
     """The answered turns before a new question, as chat messages, oldest first: the newest
     HISTORY_MAX_TURNS pairs that fit in HISTORY_MAX_TOKENS. A question whose answer failed is
     left out with it. A panel's answers are one answer, each part named by its agent, so a
@@ -217,7 +293,7 @@ def history_of(messages: list[ChatMessage]) -> list[dict[str, str]]:
         if len(answers) == 1:
             pairs.append((asked, answers[0].text))
         elif answers:
-            parts = [f"{_label(a.agent)} answer:\n{a.text}" for a in answers]
+            parts = [f"{_label(a.agent, agents)} answer:\n{a.text}" for a in answers]
             pairs.append((asked, "\n\n".join(parts)))
     kept: list[tuple[str, str]] = []
     used = 0
@@ -248,10 +324,14 @@ async def ask(
     at once; each gets an equal share of the tokens left today, so together they stay within
     it. `emit` hears the stored question, each tool step (with its agent) and each stored
     answer as it comes, for the stream."""
-    question = check_question(text)
-    named, asked_text = split_mentions(question)
-    agents = [AGENTS[n] for n in named] or [AGENTS[session.agent]]
-    history = history_of(await chat.messages(session.id))
+    catalogue = await agents_of(chat)
+    question = check_question(text, catalogue)
+    named, asked_text = split_mentions(question, catalogue)
+    # A session whose custom agent was deleted meanwhile: the default one answers.
+    agents = [catalogue[n] for n in named] or [
+        catalogue.get(session.agent, catalogue[DEFAULT_AGENT])
+    ]
+    history = history_of(await chat.messages(session.id), catalogue)
     if not history and session.title == "New chat":
         session = await chat.update_session(session.id, title=title_of(question)) or session
     asked = await chat.add_message(session.id, "user", question)

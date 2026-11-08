@@ -16,7 +16,7 @@ from enigram.domain.annotation import (
     AnnotationEvent,
     SymbolReview,
 )
-from enigram.domain.chat import ChatMessage, ChatSession
+from enigram.domain.chat import ChatMessage, ChatSession, CustomAgent
 from enigram.domain.code import (
     IDENTIFIER,
     IMPLEMENTATION_CALL,
@@ -935,6 +935,7 @@ class FakeChatStore:
     def __init__(self):
         self.rows: dict[int, ChatSession] = {}
         self.msgs: list[ChatMessage] = []
+        self.agents: dict[str, CustomAgent] = {}
         self.tick = 0
 
     def _now(self) -> datetime:
@@ -987,6 +988,35 @@ class FakeChatStore:
 
     async def messages(self, session_id):
         return [m for m in self.msgs if m.session_id == session_id]
+
+    async def custom_agents(self):
+        return [self.agents[n] for n in sorted(self.agents)]
+
+    async def add_custom_agent(self, fields, by):
+        if fields["name"] in self.agents:
+            raise EnigramError(f"There is an agent @{fields['name']} already")
+        now = self._now()
+        self.agents[fields["name"]] = CustomAgent(
+            **fields, created_by=by, created_at=now, updated_at=now
+        )
+        return self.agents[fields["name"]]
+
+    async def update_custom_agent(self, name, fields):
+        if name not in self.agents:
+            return None
+        changed = {k: v for k, v in fields.items() if v is not None and k != "name"}
+        self.agents[name] = dataclasses.replace(
+            self.agents[name], **changed, updated_at=self._now()
+        )
+        return self.agents[name]
+
+    async def delete_custom_agent(self, name, fallback):
+        if self.agents.pop(name, None) is None:
+            return False
+        for sid, session in self.rows.items():
+            if session.agent == name:
+                self.rows[sid] = dataclasses.replace(session, agent=fallback)
+        return True
 
 
 class FakeStats:

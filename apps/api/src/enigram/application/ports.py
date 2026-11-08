@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from enigram.domain.access import Identity, Principal
     from enigram.domain.annotation import Annotation, AnnotationEvent, SymbolReview
     from enigram.domain.answer import QueryResult
-    from enigram.domain.chat import ChatMessage, ChatSession
+    from enigram.domain.chat import ChatMessage, ChatSession, CustomAgent
     from enigram.domain.chunk import ParsedBook
     from enigram.domain.code import CodeEdge, CodeEntrypoint, CodeFile, CodeSymbol, FlowSummary
     from enigram.domain.decision import Decisions, Question
@@ -224,6 +224,22 @@ class ChatRepository(Protocol):
 
     async def messages(self, session_id: int) -> list["ChatMessage"]:
         """Oldest first."""
+        ...
+
+    async def custom_agents(self) -> list["CustomAgent"]:
+        """The workspace's custom agents (C4), by name."""
+        ...
+
+    async def add_custom_agent(self, fields: dict[str, Any], by: str | None) -> "CustomAgent":
+        """EnigramError when one has that name already."""
+        ...
+
+    async def update_custom_agent(self, name: str, fields: dict[str, Any]) -> "CustomAgent | None":
+        """Changes the given fields (not the name); None when there is none."""
+        ...
+
+    async def delete_custom_agent(self, name: str, fallback: str) -> bool:
+        """False when there was none. The sessions it answered for move to `fallback`."""
         ...
 
 

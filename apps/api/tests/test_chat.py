@@ -121,3 +121,47 @@ def test_a_focus_comes_last_in_the_code_agent_prompt():
     assert system_prompt(["org-app 70ae60dbb609"], "Answer for a tester.") == (
         plain + "\nAnswer for a tester."
     )
+
+
+def test_a_custom_agent_is_checked_and_its_note_types_join_the_focus():
+    import pytest
+
+    from enigram.domain.chat import CustomAgent, check_custom_agent
+    from enigram.domain.errors import EnigramError
+
+    base = {
+        "name": "security",
+        "label": "  Security  review ",
+        "description": "Who may do what",
+        "route": "code",
+        "focus": "Answer for a security reviewer. ",
+        "note_types": ("known_issue", "business_rule", "known_issue"),
+    }
+    clean = check_custom_agent(**base)
+    assert (
+        clean["label"] == "Security review" and clean["focus"] == "Answer for a security reviewer."
+    )
+    assert clean["note_types"] == ("business_rule", "known_issue")  # fixed order, each once
+    agent = CustomAgent(**clean, created_by="web", created_at=NOW, updated_at=NOW).as_agent()
+    assert agent.custom and agent.route == "code"
+    assert agent.focus == (
+        "Answer for a security reviewer. Lean on business rule and known issue notes."
+    )
+    # No focus and no note types: the answerer's own prompt, as Auto and Technical have.
+    bare = clean | {"focus": "", "note_types": ()}
+    assert (
+        CustomAgent(**bare, created_by=None, created_at=NOW, updated_at=NOW).as_agent().focus
+        is None
+    )
+
+    for wrong, says in [
+        ({"name": "QA"}, "lowercase"),
+        ({"name": "qa"}, "built-in"),
+        ({"name": "tester"}, "built-in"),  # QA's other @name
+        ({"label": " "}, "label"),
+        ({"route": "docs"}, "source"),
+        ({"focus": "x" * 1001}, "focus"),
+        ({"note_types": ("rumour",)}, "note type"),
+    ]:
+        with pytest.raises(EnigramError, match=says):
+            check_custom_agent(**(base | wrong))
