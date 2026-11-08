@@ -58,6 +58,7 @@ sama.
 | `DELETE /documents/{book}` | `maintainer` | |
 | `GET /jobs/{id}` | `viewer` | Job workspace itu saja |
 | `GET /stats` | `viewer` | Angka Dashboard (item 6); `tokens.by_key` hanya untuk `admin`, peran lain mendapat `null` |
+| `GET /stats/repos`, `/stats/repos/{id}` | `viewer` | Detail repo di Dashboard (D2b) |
 
 ### Repo dan Code page
 

@@ -172,7 +172,10 @@ async def poll_repos(cfg: Config, store: JobRepository, graph: CodeGraphReposito
             head = await asyncio.to_thread(remote_head, repo["url"], repo["ref"], token)
         except EnigramError as e:
             log.warning("[worker] poll %s: %s", repo["url"], e)
+            await graph.set_remote(repo["id"], None, str(e))  # git_failure scrubbed the token
             continue
+        # The Dashboard's "behind the remote" (D2b); a missing ref is an error, not a head.
+        await graph.set_remote(repo["id"], head, None if head else "ref not found on the remote")
         if head and head != repo["indexed_sha"]:
             payload = {
                 "url": repo["url"],

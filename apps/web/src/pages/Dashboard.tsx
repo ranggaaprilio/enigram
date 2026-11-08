@@ -1,11 +1,20 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
-import { getStats, messageOf, NOTE_TYPES, type NoteType, type Stats } from '../api'
-import { formatSecs, formatTime } from '../format'
+import {
+  getRepoStats,
+  getStats,
+  messageOf,
+  NOTE_TYPES,
+  type NoteType,
+  type RepoStat,
+  type Stats,
+} from '../api'
+import { formatAgo, formatSecs } from '../format'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
 import Loading from '@/components/Loading'
 import PageHeader from '@/components/PageHeader'
+import { Commit, RemoteBadge, RunOutcome, UPDATES_LABEL } from '@/components/RepoState'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -267,34 +276,7 @@ function Panels({ stats }: { stats: Stats }) {
         {knowledge.repos.length === 0 ? (
           <p className="m-0 text-muted-foreground">No repository indexed.</p>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Repository</TableHead>
-                <TableHead>Commit</TableHead>
-                <TableHead>Indexed</TableHead>
-                <TableHead className="text-right">Files</TableHead>
-                <TableHead className="text-right">Symbols</TableHead>
-                <TableHead className="text-right">Entry points</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {knowledge.repos.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell>
-                    <WsLink to={`/knowledge?repo=${r.id}`}>{r.name}</WsLink>
-                  </TableCell>
-                  <TableCell>
-                    <code className="text-[12px]">{r.indexed_sha.slice(0, 7)}</code>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">{formatTime(r.indexed_at)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{number(r.files)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{number(r.symbols)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{number(r.entrypoints)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <RepoTable />
         )}
       </Panel>
 
@@ -445,6 +427,68 @@ function Bars(props: {
         </li>
       ))}
     </ul>
+  )
+}
+
+// Plan item 6, D2b: each repository's commit, last index and state against its remote; a name
+// opens its detail page.
+function RepoTable() {
+  const [repos, setRepos] = useState<RepoStat[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let current = true
+    getRepoStats()
+      .then((r) => current && setRepos(r))
+      .catch((e) => current && setError(messageOf(e)))
+    return () => {
+      current = false
+    }
+  }, [])
+
+  if (error) return <ErrorAlert>{error}</ErrorAlert>
+  if (!repos) return <Loading rows={2} />
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Repository</TableHead>
+          <TableHead>Commit</TableHead>
+          <TableHead>Indexed</TableHead>
+          <TableHead>Remote</TableHead>
+          <TableHead>Last index</TableHead>
+          <TableHead className="text-right">Size</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {repos.map((r) => (
+          <TableRow key={r.id}>
+            <TableCell>
+              <WsLink to={`/dashboard/repos/${r.id}`}>{r.name}</WsLink>
+              <div className="text-[12px] text-muted-foreground">
+                {UPDATES_LABEL[r.updates]} updates
+              </div>
+            </TableCell>
+            <TableCell>
+              <Commit repo={r} />
+            </TableCell>
+            <TableCell className="whitespace-nowrap">{formatAgo(r.indexed_at)}</TableCell>
+            <TableCell>
+              <RemoteBadge repo={r} />
+            </TableCell>
+            <TableCell>
+              <RunOutcome run={r.last_run} />
+            </TableCell>
+            <TableCell className="text-right text-[12px] whitespace-nowrap text-muted-foreground tabular-nums">
+              {number(r.files)} files · {number(r.symbols)} symbols
+              <div>
+                {number(r.entrypoints)} entry points · {number(r.documents)} docs
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
