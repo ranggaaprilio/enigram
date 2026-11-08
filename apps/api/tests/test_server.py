@@ -365,7 +365,7 @@ async def test_propose_then_get_annotations(cfg):
         "owner": "mcp-anonymous",
         "note_type": "technical",  # agent proposals carry no type
     }
-    assert info["line"] == 'note#1 [proposed] "find is cached for 5 minutes in prod"'
+    assert info["line"] == 'note#1 [technical, proposed] "find is cached for 5 minutes in prod"'
     note = state["notes"].notes[1]
     assert (note.question, note.memory_id, note.author) == (
         "Is find cached?",

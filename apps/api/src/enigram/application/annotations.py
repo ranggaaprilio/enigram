@@ -23,6 +23,7 @@ from enigram.domain.annotation import (
     DEFAULT_NOTE_TYPE,
     DEFAULT_VERIFY_DAYS,
     NOTE_TYPES,
+    NOTE_WEIGHT_RULE,
     QUESTION_MAX_CHARS,
     SCOPES,
     TARGET_KINDS,
@@ -513,7 +514,7 @@ async def seed_annotations(
 NOTES_INSTRUCTION = (
     "Team notes rank above the Knowledge Graph and the Document Chunks. When a sentence uses one, "
     "end it with its id exactly as written (note#N). If a note contradicts the context, state "
-    "both."
+    "both. " + NOTE_WEIGHT_RULE
 )
 
 

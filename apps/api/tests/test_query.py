@@ -361,7 +361,8 @@ async def test_docs_path_puts_named_notes_in_the_prompt_and_cites_them():
 
     prompt = rag.params[0].user_prompt
     assert "Team notes (note#N) rank above both." in prompt
-    assert 'note#1 [verified] "Mira led the 1987 team." (on entity Mira Okafor)' in prompt
+    line = 'note#1 [technical, verified] "Mira led the 1987 team." (on entity Mira Okafor)'
+    assert line in prompt
     assert "note#2" not in prompt
     human = result.sources[-1]
     assert (human.ref, human.origin, human.citation) == (

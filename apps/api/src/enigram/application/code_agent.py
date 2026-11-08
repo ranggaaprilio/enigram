@@ -44,7 +44,12 @@ from enigram.application.ports import (
 from enigram.application.repo_store import GitTools, store_path
 from enigram.application.repo_sync import check_repo_url
 from enigram.config import Config
-from enigram.domain.annotation import Annotation, note_line, parse_note_citations
+from enigram.domain.annotation import (
+    NOTE_WEIGHT_RULE,
+    Annotation,
+    note_line,
+    parse_note_citations,
+)
 from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult
 from enigram.domain.budget import BudgetExceeded
 from enigram.domain.code import CodeCitation, CodeSymbol
@@ -54,7 +59,7 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.3"  # bump when tool output, the prompt or the guard changes: busts the cache;
+AGENT_VERSION = "3.4"  # bump when tool output, the prompt or the guard changes: busts the cache;
 # 3.3: search_code fuses vector hits
 AGENT_MAX_REPOS = 3
 GRAPH_MAX_HITS = 10  # find_symbol candidates
@@ -131,7 +136,7 @@ def system_prompt(repo_lines: list[str]) -> str:
         "Team notes (note#N) beat summaries; cite one as note#N. If one contradicts the code, "
         "state both. When a note describes behaviour outside the repo (gateway, infra, ops) that "
         "the code does not contradict, take the note's yes or no as the answer and add that the "
-        "code does not implement it."
+        "code does not implement it. " + NOTE_WEIGHT_RULE
     )
 
 
