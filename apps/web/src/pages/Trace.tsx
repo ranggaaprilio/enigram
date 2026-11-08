@@ -117,7 +117,7 @@ export function TraceList() {
 
 // Names open the Annotations page with a new note on that entity prefilled.
 const noteLink = (kind: string, ref: string) => (
-  <WsLink to={`/annotations?target_kind=${kind}&target_ref=${encodeURIComponent(ref)}`}>
+  <WsLink to={`/knowledge?tab=notes&target_kind=${kind}&target_ref=${encodeURIComponent(ref)}`}>
     {ref}
   </WsLink>
 )
@@ -127,11 +127,11 @@ function sourceLink(s: Source) {
   if (s.origin === 'code' && s.target) {
     const at = s.target.indexOf(':')
     const symbol = encodeURIComponent(s.target.slice(at + 1))
-    const to = `/annotations?target_kind=symbol&repo=${s.target.slice(0, at)}&target_ref=${symbol}`
+    const to = `/knowledge?tab=notes&target_kind=symbol&repo=${s.target.slice(0, at)}&target_ref=${symbol}`
     return <WsLink to={to}>Annotate</WsLink>
   }
   if (s.origin === 'human' && s.target) {
-    return <WsLink to={`/annotations?id=${s.target}`}>note#{s.target}</WsLink>
+    return <WsLink to={`/knowledge?tab=notes&id=${s.target}`}>note#{s.target}</WsLink>
   }
   return null
 }

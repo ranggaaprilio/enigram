@@ -332,10 +332,11 @@ Tambahan:
 | A2 | Halaman gabungan: Jelajah, Inbox, Semua note; pengalihan dari `/annotations` | Semua aksi review bisa dilakukan dari Inbox dengan konteks; link lama tetap jalan |
 | A3 | Cek duplikat, pratinjau kutipan, aksi massal di Inbox (verifikasi/tolak beberapa note) | Reviewer memproses antrean tanpa membuka tiap note satu per satu |
 
-**Keputusan yang dibutuhkan.**
-- Nama halaman gabungan dan letaknya di sidebar (item 4).
-- Note pada entity dan dokumen tetap di halaman ini, atau di Graph dan Documents masing-masing.
-- Inbox sebagai tampilan di halaman ini, atau halaman sendiri di kelompok *Tinjau* sidebar.
+**Diputuskan 2026-11-08 (A2).**
+- Nama halaman gabungan: **Knowledge** (tab *Explore* dan *All notes*); kelompok sidebar-nya
+  menjadi *Library* (Documents, Knowledge, Graph) supaya tidak dobel nama.
+- Inbox: **halaman sendiri**, *Review → Inbox*, dengan badge jumlah yang menunggu.
+- Note pada entity dan dokumen tetap di halaman Knowledge (dan Inbox).
 
 **Urutan.** Setelah U1 (item 4). Sesi PM/QA (item 3) paling bermakna bila memakai form baru, jadi
 bisa dijadwalkan setelah A1.

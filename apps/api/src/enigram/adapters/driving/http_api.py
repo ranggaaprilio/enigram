@@ -58,6 +58,7 @@ from enigram.application.ports import Deps
 from enigram.application.querying import answer_question
 from enigram.application.repo_auth import check_token, save_token
 from enigram.application.repo_sync import check_ref, check_repo_url
+from enigram.application.review import review_queue
 from enigram.application.routing import answer_routed, scope_mode
 from enigram.application.targets import find_targets
 from enigram.application.webhooks import parse_push, verify_webhook
@@ -989,6 +990,12 @@ def create_app(
             limit=limit,
         )
         return [_note_json(n, summary=False) for n in notes]
+
+    @app.get("/review")
+    async def review_inbox(ws: Viewer) -> list[dict[str, Any]]:
+        """Notes waiting for a person (proposed, flagged for a re-check, orphaned, verified but
+        conflicting), each with the summary it was written against and the summary now."""
+        return jsonable_encoder(await review_queue(ws.cfg, ws.code_graph, ws.notes))
 
     @app.post("/annotations", status_code=201)
     async def create_annotation_route(

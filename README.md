@@ -316,6 +316,7 @@ write the same index.
 | `POST /repos` `{"url", "ref"?, "token"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL or token; 409 already queued). `token`: a private repository's access token, see [Private repositories](#private-repositories) (needs `admin`) |
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set, whether it is `private` (has an access token) |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50) |
+| `GET /review` | The inbox: notes waiting for a person (proposed, flagged for a re-check, orphaned, verified but conflicting), each with the summary it was written against and the summary now |
 | `GET /targets?q=` | What a note can be about, by what people know: features (route), symbols, graph entities and documents matching `q`, at most 8 of each, with a short summary (the note form's search box) |
 | `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each and whether their summary has a current ✓ (`reviewed`), the first 500 whose route or symbol name contains `q`, plus `total` |
 | `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |
@@ -482,8 +483,8 @@ API keys keep working beside sign-in, for agents and scripts.
 
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
 API. Its sidebar (a drawer on a phone, see [`docs/design.md`](docs/design.md)) groups the pages
-into *Answers* (Ask, Trace), *Knowledge* (Documents, Code, Annotations, Graph) and, for admins,
-*Settings* (Members); the account menu at its foot shows the key's role and picks the light, dark
+into *Answers* (Ask, Trace), *Library* (Documents, Knowledge, Graph), *Review* (Inbox, with the
+number of waiting notes for maintainers) and, for admins, *Settings* (Members); the account menu at its foot shows the key's role and picks the light, dark
 or system theme:
 
 - **Documents**: drop PDF or Markdown files to upload them; the table follows each job until it
@@ -491,13 +492,13 @@ or system theme:
 - **Ask**: a question in `Auto (router)` mode (default: the router picks the documents, the code
   or both), `mix` (GraphRAG) or `naive` (vector only) on the documents, or `Code (agent)` for
   the indexed repositories, answered with sources and per-sentence origin tags.
-- **Code**: an indexed repository by its entry points (routes, pages, jobs, ..., grouped by
+- **Knowledge → Explore** (`/knowledge`; old `/code` links land here): an indexed repository by its entry points (routes, pages, jobs, ..., grouped by
   kind), each with its AI summary, the steps it calls, its code (collapsed) and the notes on it,
   plus a note form with the target
   already set, for people who know the feature but not the symbol. Under each summary: **Looks
   right** (a ✓ that counts as reviewed until the summary changes), **Not right** and **Add
   context** (a note with a question per type). Not right, expected behaviour and known issues are
-  saved as proposals to review on Annotations. A note flagged for re-check shows the summary it was written against (kept on
+  saved as proposals to review in the Inbox. A note flagged for re-check shows the summary it was written against (kept on
   the note, refreshed when it is verified) next to the summary now, with **Still right**, **Code
   is wrong now** (verified, marked as conflicting) and **Note is outdated** (rejected). Views
   are linkable (`/code?repo=1&symbol=…`). **Files** switches the list to every indexed file by
@@ -507,12 +508,16 @@ or system theme:
 - **Trace**: recent queries, and for each one the router's decision, the chunks, entities,
   relations and sources behind the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
   code sources have an `Annotate` link, note sources open the note.
-- **Annotations**: team notes by status, with verify, reject, relink and history (see
+- **Knowledge → All notes** (`/knowledge?tab=notes`; old `/annotations` links land here): team notes by status, with verify, reject, relink and history (see
   [Annotations](#annotations)), and **Add a note**: one search box finds what the note is about
   by route, name, entity or document (no symbol ids), then the kind of note as plain-language
   cards, each with its question; owner, a re-check date (1, 3 or 6 months) and when to ask for a
   re-check sit under *More options*. The Code page's *Not right* and *Add context* open the same
   form on the symbol on screen. ⌘/Ctrl+Enter saves.
+- **Review → Inbox** (`/review`): every note that waits for a person, oldest first per reason
+  (proposals, re-checks, orphans, conflicts), each with what the code does now; a re-check shows
+  the summary it was written against next to it. Maintainers verify, reject, relink or settle a
+  conflict in place; others see the queue without the decisions.
 
 The **Graph** page (`/graph`) finds entities and relations
 whose name or description contains a phrase, then edits, merges or deletes them (see [Correcting

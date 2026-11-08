@@ -1,16 +1,17 @@
+import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 import {
   BookOpen,
   Check,
   ChevronsUpDown,
-  Code2,
+  BookMarked,
   FileText,
   History,
   MessageSquareText,
   Monitor,
   Moon,
   Network,
-  StickyNote,
+  Inbox,
   Sun,
   LogOut,
   Users,
@@ -34,13 +35,14 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar'
 import { useAccess } from '../access'
-import { logout, type Me, type Role, type Workspace } from '../api'
+import { getReview, logout, type Me, type Role, type Workspace } from '../api'
 import { useTheme, type Theme } from '../theme'
 import { useWorkspacePath } from '../workspace'
 
@@ -51,7 +53,7 @@ interface Page {
   minimum?: Role // shown only to this role and above (docs/rbac.md)
 }
 
-// docs/design.md: Review and Monitor join as their pages land.
+// docs/design.md: Monitor (the dashboard) joins when its page lands.
 export const NAV: { label: string; pages: Page[] }[] = [
   {
     label: 'Answers',
@@ -61,13 +63,16 @@ export const NAV: { label: string; pages: Page[] }[] = [
     ],
   },
   {
-    label: 'Knowledge',
+    label: 'Library',
     pages: [
       { to: '/documents', label: 'Documents', icon: FileText },
-      { to: '/code', label: 'Code', icon: Code2 },
-      { to: '/annotations', label: 'Annotations', icon: StickyNote },
+      { to: '/knowledge', label: 'Knowledge', icon: BookMarked },
       { to: '/graph', label: 'Graph', icon: Network },
     ],
+  },
+  {
+    label: 'Review',
+    pages: [{ to: '/review', label: 'Inbox', icon: Inbox }],
   },
   {
     label: 'Settings',
@@ -85,6 +90,7 @@ export default function AppSidebar(props: {
   const { pathname } = useLocation()
   const { isMobile, setOpenMobile } = useSidebar()
   const access = useAccess()
+  const waiting = useWaiting(access.can('maintainer'), pathname)
   const groups = NAV.map((g) => ({
     ...g,
     pages: g.pages.filter((p) => !p.minimum || access.can(p.minimum)),
@@ -136,6 +142,11 @@ export default function AppSidebar(props: {
                           <span>{label}</span>
                         </Link>
                       </SidebarMenuButton>
+                      {to === '/review' && waiting > 0 && (
+                        <SidebarMenuBadge aria-label={`${waiting} waiting`}>
+                          {waiting}
+                        </SidebarMenuBadge>
+                      )}
                     </SidebarMenuItem>
                   )
                 })}
@@ -150,6 +161,23 @@ export default function AppSidebar(props: {
       <SidebarRail />
     </Sidebar>
   )
+}
+
+// How many notes wait in the inbox, for the maintainers who decide them; checked again on every
+// page change so it drops as they work through it.
+function useWaiting(enabled: boolean, pathname: string): number {
+  const [waiting, setWaiting] = useState(0)
+  useEffect(() => {
+    if (!enabled) return
+    let current = true
+    getReview()
+      .then((items) => current && setWaiting(items.length))
+      .catch(() => current && setWaiting(0))
+    return () => {
+      current = false
+    }
+  }, [enabled, pathname])
+  return enabled ? waiting : 0
 }
 
 const THEMES: { value: Theme; label: string; icon: LucideIcon }[] = [

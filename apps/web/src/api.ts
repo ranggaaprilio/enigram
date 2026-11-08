@@ -513,6 +513,20 @@ export function listAnnotations(params: {
 
 export const createAnnotation = (body: NewAnnotation) => sendJson<Annotation>('/annotations', body)
 
+// GET /review: notes waiting for a person (plan item 5, A2), with their context.
+export type ReviewReason = 'proposed' | 'needs_verification' | 'orphaned' | 'conflict'
+
+export interface ReviewItem {
+  reason: ReviewReason
+  note: Annotation
+  repo_name: string | null
+  summary_then: string | null // the summary the note was written against
+  summary_now: string | null
+  summary_now_kind: 'flow' | 'symbol' | null
+}
+
+export const getReview = () => request<ReviewItem[]>('/review')
+
 // GET /targets: what a note can be about, found by what people know (plan item 5, A1).
 export interface Target {
   kind: 'feature' | 'symbol' | 'entity' | 'document' // how the form groups it

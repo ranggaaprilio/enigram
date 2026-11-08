@@ -63,7 +63,8 @@ function readName(): string {
 // symbols: the selected symbol's summary, steps, callers and code in the middle, with "looks
 // right" / "not right" / "add context" under the summary; its notes and the guided note form on
 // the right. Repository, mode, symbol and filter live in the URL, so a view can be linked.
-export default function Code() {
+// `embedded`: inside the Knowledge page, which has the header (plan item 5, A2).
+export default function Code({ embedded = false }: { embedded?: boolean }) {
   const [params, setParams] = useSearchParams()
   const [repos, setRepos] = useState<RepoRow[] | null>(null)
   const [features, setFeatures] = useState<FeatureList | null>(null)
@@ -187,7 +188,7 @@ export default function Code() {
     }
   }
 
-  const header = (
+  const header = embedded ? null : (
     <PageHeader
       title="Code"
       description="Browse an indexed repository by its entry points or its files, read what each one does, and leave a note on it."
