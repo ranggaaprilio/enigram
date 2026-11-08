@@ -96,3 +96,11 @@ async def test_prompt_asks_for_facts_before_the_conclusion(cfg, graph):
     assert code_query.CODE_IS_THE_TRUTH in prompt
     assert "facts first and the conclusion last" in prompt
     assert prompt.index(code_query.CODE_IS_THE_TRUTH) < prompt.index("Context:")
+
+
+async def test_fake_callers_include_calls_through_an_interface_like_postgres():
+    graph = FakeCodeGraph(fixture_graph())
+
+    callers = await graph.callers(1, "src/repo.ts#SqlUserRepo.load")
+
+    assert [s.qualified_name for s in callers] == ["AppService.find"]

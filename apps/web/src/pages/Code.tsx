@@ -360,6 +360,23 @@ const KIND_LABELS: [string, string][] = [
   ['root', 'Functions'],
 ]
 
+// A linked or newly opened symbol may sit below the fold of a long list: centre its row
+// (aria-current="true") in the list. Only the list scrolls; scrollIntoView would move the page
+// as well. A row already in view leaves the list where it is.
+function useScrollToCurrent(selected: string | null, items: unknown) {
+  const scroller = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const list = scroller.current
+    const open = list?.querySelector<HTMLElement>('[aria-current="true"]')
+    if (!list || !open) return
+    const box = list.getBoundingClientRect()
+    const row = open.getBoundingClientRect()
+    if (row.top >= box.top && row.bottom <= box.bottom) return
+    list.scrollTop += row.top - box.top - (box.height - row.height) / 2
+  }, [selected, items])
+  return scroller
+}
+
 function byKind(features: Feature[]): [string, Feature[]][] {
   const known = new Map(KIND_LABELS)
   const groups = new Map<string, Feature[]>(
@@ -377,6 +394,7 @@ function Features(props: {
   onPick: (symbolId: string) => void
 }) {
   const { list } = props
+  const scroller = useScrollToCurrent(props.selected, list)
   return (
     <div className={listCard}>
       <Input
@@ -398,7 +416,7 @@ function Features(props: {
             {list.features.some((f) => f.kind === 'root') &&
               ' · no framework adapter: showing top-level functions'}
           </p>
-          <div className={listScroll}>
+          <div ref={scroller} className={listScroll}>
             {list.features.length === 0 ? (
               <p className={cn('px-2 py-4', muted)}>
                 {props.q ? 'No features match.' : 'No entry points found in this repository.'}
@@ -420,6 +438,7 @@ function Features(props: {
                             'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary',
                             f.symbol_id === props.selected && 'bg-secondary',
                           )}
+                          aria-current={f.symbol_id === props.selected ? 'true' : undefined}
                           onClick={() => props.onPick(f.symbol_id)}
                         >
                           {f.reviewed ? (
@@ -492,18 +511,7 @@ function Files(props: {
   )
   const symbolCount = (tree ?? []).reduce((n, f) => n + f.symbols.length, 0)
 
-  // A linked or newly opened symbol may sit below the fold of a long list: centre it in the
-  // list. Only the list scrolls; scrollIntoView would move the page as well.
-  const scroller = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const list = scroller.current
-    const open = list?.querySelector<HTMLElement>('[aria-current="true"]')
-    if (!list || !open) return
-    const box = list.getBoundingClientRect()
-    const row = open.getBoundingClientRect()
-    if (row.top >= box.top && row.bottom <= box.bottom) return
-    list.scrollTop += row.top - box.top - (box.height - row.height) / 2
-  }, [props.selected, tree])
+  const scroller = useScrollToCurrent(props.selected, tree)
 
   function toggle(path: string, open: boolean) {
     setToggled((prev) => new Map(prev).set(path, !open))

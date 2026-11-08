@@ -85,6 +85,15 @@ async def test_callers_are_the_resolved_symbols_that_call_one(graph):
     assert await graph.callers(repo_id, "src/app.controller.ts#AppController.find") == []
 
 
+async def test_callers_of_an_implementation_include_calls_through_its_interface(graph):
+    repo_id = await graph.replace_repo(URL, None, SHA, [], fixture_graph())
+
+    via_interface = await graph.callers(repo_id, "src/repo.ts#SqlUserRepo.load")
+
+    assert [s.id for s in via_interface] == [SERVICE]
+    assert [s.id for s in await graph.callers(repo_id, "src/repo.ts#UserRepo.load")] == [SERVICE]
+
+
 async def test_search_matches_summary_words_and_names(graph):
     repo_id = await graph.replace_repo(URL, None, SHA, [], fixture_graph())
     await graph.save_summaries(
