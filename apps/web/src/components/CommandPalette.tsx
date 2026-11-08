@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { Code2, FileText, Layers, Network, Search } from 'lucide-react'
 import { useAccess } from '../access'
@@ -45,6 +45,8 @@ export default function CommandPalette(props: { workspace: string; workspaces: W
   const [query, setQuery] = useState('')
   const [found, setFound] = useState<Target[]>([])
   const [error, setError] = useState<string | null>(null)
+  // Opened by a shortcut, not a DialogTrigger: give focus back to what had it (U4).
+  const opener = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -111,7 +113,19 @@ export default function CommandPalette(props: { workspace: string; workspaces: W
         </kbd>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="overflow-hidden p-0" showCloseButton={false}>
+        <DialogContent
+          className="overflow-hidden p-0"
+          showCloseButton={false}
+          onOpenAutoFocus={() => {
+            opener.current = document.activeElement as HTMLElement | null
+          }}
+          onCloseAutoFocus={(event) => {
+            if (opener.current?.isConnected && opener.current !== document.body) {
+              event.preventDefault()
+              opener.current.focus()
+            }
+          }}
+        >
           <DialogTitle className="sr-only">Go to</DialogTitle>
           <DialogDescription className="sr-only">
             A page, a workspace, or something in the code and graph

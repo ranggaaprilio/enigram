@@ -134,6 +134,13 @@ function WorkspaceShell({ home }: { home: string }) {
   return (
     <AccessProvider value={accessOf(me, workspace)}>
       <SidebarProvider>
+        {/* The first Tab stop: past the sidebar and the top bar, straight to the page (U4). */}
+        <a
+          href="#content"
+          className="sr-only z-50 rounded-md bg-background px-3 py-2 text-sm focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:ring-[3px] focus:ring-ring/50"
+        >
+          Skip to content
+        </a>
         <AppSidebar
           me={me}
           workspace={workspace}
@@ -177,7 +184,11 @@ function WorkspaceShell({ home }: { home: string }) {
             </nav>
             <CommandPalette workspace={workspace} workspaces={workspaces ?? []} />
           </header>
-          <div className="w-full max-w-[1140px] px-4 pt-6 pb-20 md:px-8">
+          <div
+            id="content"
+            tabIndex={-1}
+            className="w-full max-w-[1140px] px-4 pt-6 pb-20 outline-none md:px-8"
+          >
             {workspaces === undefined ? null : !known ? (
               <Empty>
                 No workspace “{workspace}”. <Link to={`/w/${home}/documents`}>Open {home}</Link>

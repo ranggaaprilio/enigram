@@ -168,6 +168,9 @@ function Sidebar({
   collapsible?: 'offcanvas' | 'icon' | 'none'
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  // The drawer has no trigger of its own (SidebarTrigger toggles state), so Radix cannot give
+  // focus back on close: keep what had focus when it opened and return it there (U4).
+  const opener = React.useRef<HTMLElement | null>(null)
 
   if (collapsible === 'none') {
     return (
@@ -198,6 +201,15 @@ function Sidebar({
             } as React.CSSProperties
           }
           side={side}
+          onOpenAutoFocus={() => {
+            opener.current = document.activeElement as HTMLElement | null
+          }}
+          onCloseAutoFocus={(event) => {
+            if (opener.current?.isConnected) {
+              event.preventDefault()
+              opener.current.focus()
+            }
+          }}
         >
           <SheetHeader className="sr-only">
             <SheetTitle>Sidebar</SheetTitle>

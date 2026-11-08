@@ -102,7 +102,8 @@ export default function AppSidebar(props: {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="gap-3 p-3">
+      {/* A landmark for the app name and the workspace switch, as the pages below have theirs. */}
+      <SidebarHeader role="region" aria-label="App and workspace" className="gap-3 p-3">
         <div className="flex items-center gap-2 px-1">
           <BookOpen className="size-4 shrink-0" aria-hidden />
           <span className="font-semibold tracking-[-0.2px] group-data-[collapsible=icon]:hidden">
@@ -127,7 +128,7 @@ export default function AppSidebar(props: {
         <nav aria-label="Pages">
           {groups.map((group) => (
             <SidebarGroup key={group.label}>
-              <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+              <SidebarGroupLabel className="text-muted-foreground">{group.label}</SidebarGroupLabel>
               <SidebarMenu>
                 {group.pages.map(({ to, label, icon: Icon }) => {
                   const href = path(to)
@@ -211,7 +212,8 @@ function UserMenu({ me, workspace }: { me: Me | null | undefined; workspace: str
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <DropdownMenu>
+        {/* Not modal: a menu need not hide the page from screen readers while it is open. */}
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton size="lg" aria-label="Account and theme" tooltip={name}>
               <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-sidebar-accent text-xs font-semibold uppercase">

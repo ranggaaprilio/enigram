@@ -80,6 +80,7 @@ function inMonths(months: number): string {
 // (a route, a name, an entity, a document), pick the kind of note, answer its question.
 export default function AddNoteForm(props: {
   title: string
+  level?: 2 | 3 // the title's heading level under the page's own headings; 3 by default
   target?: Target | null // set: the note is about this (the Code page's symbol, a link)
   fixedTarget?: boolean // the target cannot be changed (the symbol on screen)
   mode?: NoteMode
@@ -206,7 +207,11 @@ export default function AddNoteForm(props: {
       className="mt-3 flex flex-col gap-4 rounded-md border bg-background p-4"
       onSubmit={submit}
     >
-      <h3 className="m-0 text-sm font-semibold">{props.title}</h3>
+      {props.level === 2 ? (
+        <h2 className="m-0 text-sm font-semibold">{props.title}</h2>
+      ) : (
+        <h3 className="m-0 text-sm font-semibold">{props.title}</h3>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="note-about" className={label}>

@@ -458,3 +458,26 @@ describe('Command palette (U3)', () => {
     )
   })
 })
+
+describe('Keyboard (U4)', () => {
+  it('starts with a link past the sidebar to the page', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/documents')
+    await screen.findByRole('navigation', { name: 'Pages' })
+    await userEvent.tab()
+    const skip = screen.getByRole('link', { name: 'Skip to content' })
+    expect(skip).toHaveFocus()
+    expect(skip).toHaveAttribute('href', '#content')
+    expect(document.getElementById('content')).toHaveAttribute('tabindex', '-1')
+  })
+
+  it('gives focus back to Search when the palette closes', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/documents')
+    const search = await screen.findByRole('button', { name: /Search and go to/ })
+    await userEvent.click(search)
+    await screen.findByPlaceholderText(/A page, a workspace/)
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(search).toHaveFocus())
+  })
+})

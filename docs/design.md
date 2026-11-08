@@ -41,8 +41,9 @@ Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spe
   pages, other workspaces, and the code, entities and documents (`GET /targets`).
 - **Numbers** (Dashboard, D2): a tile is a label, one number and a line of context, and links to
   the page that lists what it counts. A daily chart is one series of thin bars from the baseline
-  in the foreground colour, every day of the period shown (quiet days empty); hover or focus a
-  bar to read it, otherwise the line above the chart gives the period's total. No chart library.
+  in the foreground colour, every day of the period shown (quiet days empty); hover a bar, or
+  focus the chart (one Tab stop) and use the arrow keys, Home and End, to read a day; otherwise
+  the line above the chart gives the period's total. No chart library.
 - **Outcome of an action**: a toast at the bottom right (saved, deleted, queued); work that runs
   on (jobs) also keeps its row on the page.
 
@@ -93,3 +94,16 @@ shadcn CLI, then imports point at `@/lib/utils` and versions stay pinned in `pac
 
 Light and dark, 1360px and 390px wide, no horizontal scroll, keyboard reaches every control with a
 visible focus ring.
+
+## Accessibility (U4)
+
+- **WCAG 2.2 AA**, checked with axe-core on every page in both themes, and on the states that
+  open on demand (palette, note form, account menu, new workspace, phone drawer, sign-in).
+- **Contrast**: secondary text uses `muted-foreground` (AA on `background`, `card` and `sidebar`),
+  never a lighter opacity of the foreground. A link inside a sentence of muted text is underlined.
+- **Landmarks**: the sidebar's app name and workspace switch are a labelled region, the pages a
+  `nav`, the page `main`; every page has one `h1` and headings go down one level at a time (an
+  answer's own markdown headings start at `h3`, under a hidden "Answer" `h2`).
+- **Keyboard**: *Skip to content* is the first Tab stop. Every Tab stop shows the focus ring. A
+  dialog, drawer or menu gives focus back to what opened it when it closes. A chart is one Tab
+  stop, read with the arrow keys. Menus are not modal: the page stays readable behind them.

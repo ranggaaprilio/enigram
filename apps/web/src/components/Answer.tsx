@@ -46,12 +46,20 @@ export default function Answer({ result }: { result: QueryResult }) {
           <AlertDescription>The indexed documents do not answer this question.</AlertDescription>
         </Alert>
       )}
+      {/* The answer's own headings sit below this one, whatever level the model wrote. */}
+      <h2 className="sr-only">Answer</h2>
       <div className="markdown">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
             p: ({ children }) => <p>{badgify(children)}</p>,
             li: ({ children }) => <li>{badgify(children)}</li>,
+            h1: ({ children }) => <h3>{children}</h3>,
+            h2: ({ children }) => <h3>{children}</h3>,
+            h3: ({ children }) => <h3>{children}</h3>,
+            h4: ({ children }) => <h4>{children}</h4>,
+            h5: ({ children }) => <h4>{children}</h4>,
+            h6: ({ children }) => <h4>{children}</h4>,
           }}
         >
           {result.answer}

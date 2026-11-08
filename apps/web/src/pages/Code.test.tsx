@@ -281,7 +281,7 @@ describe('Code', () => {
     renderAt('/code')
 
     expect(await screen.findByText('/dashboard')).toBeInTheDocument()
-    const headings = screen.getAllByRole('heading', { level: 4 }).map((h) => h.textContent)
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings).toEqual(['Routes', 'Pages', 'Cron'])
   })
 
@@ -303,7 +303,7 @@ describe('Code', () => {
         '1 feature · 0 reviewed · no framework adapter: showing top-level functions',
       ),
     ).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { level: 4 })).toBeNull()
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull()
   })
 
   it('shows the summary, steps and notes of a feature, and posts a note on it', async () => {
@@ -705,7 +705,7 @@ describe('Code', () => {
       renderAt('/code?repo=1&view=files')
 
       expect(await screen.findByText('4 files · 4 symbols')).toBeInTheDocument()
-      const headings = screen.getAllByRole('heading', { level: 4 }).map((h) => h.textContent)
+      const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
       expect(headings).toEqual(['(root)', 'src'])
       expect(screen.getByText('Pick a symbol to see what it does.')).toBeInTheDocument()
       // Closed until opened; a file without symbols cannot be opened.
