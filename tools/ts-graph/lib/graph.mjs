@@ -5,7 +5,7 @@ import { buildEdges, edgeContext } from "./edges.mjs";
 import * as generic from "./entrypoints/generic.mjs";
 import * as nest from "./entrypoints/nest.mjs";
 import * as next from "./entrypoints/next.mjs";
-import { openProject, relPath } from "./project.mjs";
+import { findProjects, openProject, relPath } from "./project.mjs";
 import { fileSymbols } from "./symbols.mjs";
 
 const ADAPTERS = { nest, next };
@@ -38,39 +38,48 @@ function diagnosticsSample(root, project, files) {
 
 /**
  * Static analysis of one repository. Never runs, imports or installs anything from it.
+ * Without `tsconfig`, every TypeScript project in it (findProjects) is analysed and the results
+ * are merged: a monorepo's `apps/web/tsconfig.json` counts as much as a root one. Paths stay
+ * relative to the repository root.
  * @param {string} root absolute repository path
  * @param {{tsconfig?: string, diagnostics?: boolean}} options
  */
-export function buildGraph(root, { tsconfig = "tsconfig.json", diagnostics = true } = {}) {
+export function buildGraph(root, { tsconfig, diagnostics = true } = {}) {
   const start = performance.now();
-  const { project, files, skipped } = openProject(root, tsconfig);
-  const symbols = files.flatMap((sf) => fileSymbols(root, sf));
-  const ctx = edgeContext(root, symbols);
-  const { edges, local } = buildEdges(ctx, symbols, files);
-
-  const deps = dependencyNames(root);
-  const entrypoints = [];
-  const adapters = {};
-  for (const [name, adapter] of Object.entries(ADAPTERS)) {
-    const found = adapter.detect({ project, root, symbols, deps });
-    if (found.matched) adapters[name] = found.matched;
-    entrypoints.push(...found.entrypoints);
-  }
-  // No framework recognised: exported functions nothing calls, so the repository still has flows.
-  let fallback = null;
-  if (!Object.keys(adapters).length) {
-    const found = generic.roots({ symbols, edges });
-    if (found.matched) {
-      adapters.generic = found.matched;
-      entrypoints.push(...found.entrypoints);
-      fallback = "generic";
+  const configs = tsconfig ? [tsconfig] : findProjects(root);
+  if (!configs.length) throw new Error(`no tsconfig.json in ${root}`);
+  const taken = new Set(); // files a shallower project analyses already
+  const parts = [];
+  for (const config of configs) {
+    try {
+      parts.push(openPart(root, config, taken));
+    } catch (e) {
+      if (tsconfig) throw e; // the one asked for
+      parts.push({ config, error: e.message });
     }
   }
+  const done = parts.filter((p) => !p.error);
+  if (!done.length) throw new Error(parts.map((p) => `${p.config}: ${p.error}`).join("; "));
+  // One context over every project's symbols: a call into a file another project analyses
+  // (a relative import, a `paths` alias) still lands on its symbol. declKey is a path and an
+  // offset, the same in every project that includes the file.
+  const ctx = edgeContext(root, done.flatMap((p) => p.symbols));
+  for (const part of done) finishPart(root, ctx, part, diagnostics);
+
+  const symbols = done.flatMap((p) => p.symbols);
+  const edges = done.flatMap((p) => p.edges);
+  const entrypoints = done.flatMap((p) => p.entrypoints);
+  const adapters = {};
+  for (const p of done) {
+    for (const [name, n] of Object.entries(p.adapters)) adapters[name] = (adapters[name] ?? 0) + n;
+  }
+  const skipped = { test: 0, dts: 0, generated: 0, outside: 0, other_project: 0 };
+  for (const p of done) for (const [k, n] of Object.entries(p.skipped)) skipped[k] += n;
 
   const count = (kind) => edges.filter((e) => e.kind === kind).length;
   const calls = edges.filter((e) => e.kind === "calls" || e.kind === "calls_external");
   const report = {
-    files: files.length,
+    files: done.reduce((n, p) => n + p.files, 0),
     files_skipped: skipped,
     symbols: symbols.length,
     edges: Object.fromEntries(
@@ -83,13 +92,72 @@ export function buildGraph(root, { tsconfig = "tsconfig.json", diagnostics = tru
     // are names nothing declares, typically package APIs without node_modules.
     calls_resolved_share: calls.length ? Number((calls.filter((e) => e.resolved).length / calls.length).toFixed(3)) : null,
     calls_in_repo_share: calls.length ? Number((count("calls") / calls.length).toFixed(3)) : null,
-    calls_local: local,
+    calls_local: done.reduce((n, p) => n + p.local, 0),
     entrypoints: entrypoints.length,
     adapters,
-    fallback,
-    unmatched_frameworks: KNOWN_FRAMEWORKS.filter((f) => deps.has(f) && !adapters[f]),
-    diagnostics_sample: diagnostics ? diagnosticsSample(root, project, files) : [],
+    fallback: done.some((p) => p.fallback) ? "generic" : null,
+    unmatched_frameworks: [...new Set(done.flatMap((p) => p.unmatched))],
+    // Each project analysed: its tsconfig, and what it gave (or why it could not be read).
+    projects: parts.map((p) =>
+      p.error
+        ? { tsconfig: p.config, error: p.error }
+        : { tsconfig: p.config, files: p.files, symbols: p.symbols.length, entrypoints: p.entrypoints.length, adapters: p.adapters },
+    ),
+    diagnostics_sample: done.flatMap((p) => p.diagnostics).slice(0, MAX_DIAGNOSTICS),
     secs: Number(((performance.now() - start) / 1000).toFixed(1)),
   };
   return { symbols: symbols.map((s) => s.row), edges, entrypoints, report };
+}
+
+/**
+ * One TypeScript project of the repository: its files and symbols. Files `taken` by an earlier
+ * project are left out (and added to it otherwise).
+ * @param {string} root absolute repository path
+ * @param {string} config tsconfig path relative to root
+ * @param {Set<string>} taken absolute paths of files already analysed
+ */
+function openPart(root, config, taken) {
+  const { project, files: all, skipped } = openProject(root, config);
+  const files = all.filter((sf) => !taken.has(sf.getFilePath()));
+  skipped.other_project = all.length - files.length;
+  for (const sf of files) taken.add(sf.getFilePath());
+  return { config, project, files: files.length, sourceFiles: files, skipped, symbols: files.flatMap((sf) => fileSymbols(root, sf)) };
+}
+
+/**
+ * A project's edges and entry points. Framework adapters look at the project's own folder: its
+ * `app/` or `src/main.ts`, its package.json (and the root one).
+ */
+function finishPart(root, ctx, part, diagnostics) {
+  const { project, symbols, sourceFiles } = part;
+  const { edges, local } = buildEdges(ctx, symbols, sourceFiles);
+  const dir = path.dirname(path.join(root, part.config));
+  const prefix = dir === root ? "" : `${relPath(root, dir)}/`;
+  const deps = new Set([...dependencyNames(root), ...dependencyNames(dir)]);
+  const entrypoints = [];
+  const adapters = {};
+  for (const [name, adapter] of Object.entries(ADAPTERS)) {
+    const found = adapter.detect({ project, root: dir, prefix, symbols, deps });
+    if (found.matched) adapters[name] = found.matched;
+    entrypoints.push(...found.entrypoints);
+  }
+  // No framework recognised: exported functions nothing calls, so the project still has flows.
+  let fallback = false;
+  if (!Object.keys(adapters).length) {
+    const found = generic.roots({ symbols, edges });
+    if (found.matched) {
+      adapters.generic = found.matched;
+      entrypoints.push(...found.entrypoints);
+      fallback = true;
+    }
+  }
+  Object.assign(part, {
+    edges,
+    local,
+    entrypoints,
+    adapters,
+    fallback,
+    unmatched: KNOWN_FRAMEWORKS.filter((f) => deps.has(f) && !adapters[f]),
+    diagnostics: diagnostics && sourceFiles.length ? diagnosticsSample(root, project, sourceFiles) : [],
+  });
 }

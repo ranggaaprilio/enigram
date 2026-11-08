@@ -316,7 +316,7 @@ write the same index.
 | `POST /documents` (multipart `file`) | Save a PDF/Markdown file and queue it (202). 200 if already indexed unchanged; 409 if a different version is indexed or queued |
 | `GET /documents` | Indexed and queued documents with status |
 | `DELETE /documents/{book}` | Queue deleting a document: its index entries, parsed files and uploaded file (202; 404 unknown; 409 while it has a job) |
-| `POST /repos` `{"url", "ref"?, "token"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL or token; 409 already queued). `token`: a private repository's access token, see [Private repositories](#private-repositories) (needs `admin`) |
+| `POST /repos` `{"url", "ref"?, "token"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a `tsconfig.json` (at the root or in a subfolder), its code graph (202; 422 bad URL or token; 409 already queued). `token`: a private repository's access token, see [Private repositories](#private-repositories) (needs `admin`) |
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set, whether it is `private` (has an access token) |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50) |
 | `GET /memories?q=&mode=text\|semantic&key=&limit=50` | Agent memories, newest first: the caller's own, or every key's for a `maintainer` (`key` narrows to one); `q` filters by words, or with `mode=semantic` ranks by meaning with a `score` as `search_memory` does. Each row has its key, embedding model and `stale_model` (an older model: never found by meaning) |
@@ -629,7 +629,7 @@ The UI needs Node 22.22 or newer (`.node-version`).
 ### Index a Git repository
 
 The Documents page (or `POST /repos`) indexes the Markdown files (`.md`, `.markdown`) of a
-Git repository and, when it has a root `tsconfig.json`, its code graph (below): the worker makes a shallow clone of the default branch or the given branch or tag
+Git repository and, when it has a `tsconfig.json`, its code graph (below): the worker makes a shallow clone of the default branch or the given branch or tag
 (names only, not commit SHAs), copies each file to `data/books` as `<repo>--<path>.md` (e.g.
 `org-handbook--docs--onboarding`) and indexes them like uploads. Documents from a repository say
 so in the list.
@@ -644,8 +644,14 @@ bitbucket.org, codeberg.org`). A private repository needs an access token, see b
 Symlinks, files over 1 MB and anything in `.git` are skipped; a repository with more than 500
 Markdown files is refused. The image installs `git`; without Docker, `git` must be on the `PATH`.
 
-A repository with a `tsconfig.json` at its root also gets a code graph (needs
-`STORAGE_BACKEND=postgres`): the `tools/ts-graph` sidecar (Node 22, ts-morph) reads its symbols,
+A repository with a `tsconfig.json` also gets a code graph (needs
+`STORAGE_BACKEND=postgres`). In a monorepo every project counts: each `tsconfig.json` outside
+`node_modules`, `dist`, `build` and test folders, and the configs their `references` name
+(`apps/web/tsconfig.json`, `packages/*/tsconfig.json`, Vite's `tsconfig.app.json`), merged into
+one graph with paths from the repository root; framework entry points are found per project
+folder, and a call between projects resolves when it goes through a relative import or a `paths`
+alias (not a package name: there is no `node_modules`). The job result's `code.projects` lists
+them. The `tools/ts-graph` sidecar (Node 22, ts-morph) reads its symbols,
 calls, injections, environment reads and entry points (Nest routes, `@Cron`, events, jobs,
 `bootstrap`; Next.js App Router pages, route handlers, middleware and server actions; with no
 framework recognised, the exported functions nothing in the repository calls, marked `root`)

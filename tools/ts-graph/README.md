@@ -1,7 +1,7 @@
 # ts-graph
 
 Static code graph of a TypeScript repository for enigram, built with
-[ts-morph](https://ts-morph.com). It reads the repository's `tsconfig.json` and source files and
+[ts-morph](https://ts-morph.com). It reads the repository's `tsconfig.json` files and source files and
 writes JSONL; it never installs, imports or runs anything from the repository, and it runs without
 the repository's `node_modules` (package types stay unresolved, repository types resolve).
 
@@ -11,12 +11,24 @@ replace it by writing the same files.
 
 ```bash
 npm ci
-node index.mjs --repo <dir> --out <dir> [--tsconfig tsconfig.json]
+node index.mjs --repo <dir> --out <dir> [--tsconfig <path>]
 npm test          # node --test on test/fixture, a small Nest-like project
 ```
 
-Exit code 2 when the arguments are wrong or `tsconfig.json` is missing or unparsable; the
+Exit code 2 when the arguments are wrong, the repository has no `tsconfig.json`, or none of its
+projects can be read; the
 message is on stderr. On success stdout is one JSON line: the report without `diagnostics_sample`.
+
+## Projects
+
+Without `--tsconfig`, every TypeScript project of the repository is parsed: each `tsconfig.json`
+outside `node_modules/`, `dist/`, `build/`, `.git/`, `coverage/`, `test/` and `__tests__/`, plus
+the configs their `references` name (a solution-style tsconfig lists no files of its own), at most
+50, shallowest first. A file two projects include belongs to the first. Paths stay relative to
+the repository root. Framework adapters look at each project's own folder: Next's `app/` and
+`middleware.ts`, Nest's `src/main.ts`, and its `package.json` with the root one; a project no
+adapter matches gets the generic `root` entry points. Calls between projects through a package
+name (`@acme/ui`) stay unresolved: there is no `node_modules`.
 
 ## Files analysed
 
@@ -89,10 +101,13 @@ and that call at least one repository symbol.
  "symbols": 390, "edges": {"calls": 232, "calls_external": 729, "...": 0},
  "calls_resolved_share": 0.395, "calls_in_repo_share": 0.241, "calls_local": 0,
  "entrypoints": 25, "adapters": {"nest": 25}, "fallback": null, "unmatched_frameworks": [],
+ "projects": [{"tsconfig": "tsconfig.json", "files": 171, "symbols": 390, "entrypoints": 25, "adapters": {"nest": 25}}],
  "diagnostics_sample": ["<file>:<line> <message>", "... at most 10"], "secs": 0.3}
 ```
 
 `calls_resolved_share` is the share of call sites whose callee has a declaration (repository or
 TypeScript lib); `calls_in_repo_share` the share that lands on a repository symbol.
 `unmatched_frameworks` lists frameworks in the repository's `package.json` dependencies (parsed,
-never run) that have no adapter yet. `fallback` is `"generic"` when the `root` rows were used, else `null`.
+never run) that have no adapter yet. `fallback` is `"generic"` when a project used the `root` rows, else `null`.
+`projects` lists each project parsed (or `{tsconfig, error}` for one that could not be read);
+`files_skipped.other_project` counts files an earlier project already took.

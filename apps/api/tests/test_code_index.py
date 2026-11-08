@@ -157,5 +157,12 @@ async def test_second_index_reports_the_diff_and_symbol_changes(cfg, deps, tmp_p
 
 def test_is_ts_repo(tmp_path):
     assert not code_index.is_ts_repo(tmp_path)
-    (tmp_path / "tsconfig.json").write_text("{}")
+    # Only in node_modules or a test folder: a package's or a fixture's, not the repository's.
+    for folder in ("node_modules/pkg", "tools/x/test/fixture"):
+        (tmp_path / folder).mkdir(parents=True)
+        (tmp_path / folder / "tsconfig.json").write_text("{}")
+    assert not code_index.is_ts_repo(tmp_path)
+    # A monorepo's project counts (plan item 9), as does a root one.
+    (tmp_path / "apps/web").mkdir(parents=True)
+    (tmp_path / "apps/web/tsconfig.json").write_text("{}")
     assert code_index.is_ts_repo(tmp_path)

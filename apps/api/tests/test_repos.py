@@ -252,7 +252,7 @@ async def test_index_repo_markdown_only_skips_the_code_graph(cfg, deps, fake_syn
 
     result = await repos.index_repo(cfg, deps, URL)
 
-    assert result["code"] == {"skipped": "no tsconfig.json at the repository root"}
+    assert result["code"] == {"skipped": "no tsconfig.json in the repository"}
     assert fake_sync.code == []
 
 

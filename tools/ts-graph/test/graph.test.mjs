@@ -9,7 +9,7 @@ import { buildGraph } from "../lib/graph.mjs";
 import { joinRoute } from "../lib/entrypoints/nest.mjs";
 import { defaultExportSymbol } from "../lib/entrypoints/common.mjs";
 import { appRoute } from "../lib/entrypoints/next.mjs";
-import { openProject } from "../lib/project.mjs";
+import { findProjects, openProject } from "../lib/project.mjs";
 import { fileSymbols } from "../lib/symbols.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -253,4 +253,51 @@ test("fallback: never runs when an adapter matched", () => {
   assert.equal(graph.report.fallback, null);
   assert.ok(!graph.entrypoints.some((e) => e.kind === "root"));
   assert.equal(nextGraph.report.fallback, null);
+});
+
+const MONO = path.join(HERE, "fixture-mono");
+const mono = buildGraph(MONO, { diagnostics: false });
+
+test("monorepo: every project, references followed, test folders left out, shallowest first", () => {
+  assert.deepEqual(findProjects(MONO), [
+    "tsconfig.json",
+    "apps/site/tsconfig.app.json", // only through the root's references
+    "packages/lib/tsconfig.json",
+  ]);
+  assert.deepEqual(
+    mono.report.projects.map((p) => [p.tsconfig, p.files, p.entrypoints]),
+    [
+      ["tsconfig.json", 0, 0], // solution-style: no files of its own
+      ["apps/site/tsconfig.app.json", 3, 2],
+      ["packages/lib/tsconfig.json", 1, 1], // format.ts is apps/site's already
+    ],
+  );
+  assert.equal(mono.report.files_skipped.other_project, 1);
+  assert.equal(mono.symbols.filter((s) => s.qualified_name === "format").length, 1);
+});
+
+test("monorepo: adapters per project folder, paths from the repository root", () => {
+  const rows = (symbol, kind, route, framework) => ({ symbol, kind, route, framework, version: "" });
+  assert.deepEqual(mono.entrypoints, [
+    rows("apps/site/app/page.tsx#Home", "page", "/", "next"),
+    rows("apps/site/middleware.ts#middleware", "middleware", "middleware", "next"),
+    rows("packages/lib/src/index.ts#run", "root", "run", "generic"), // no framework there
+  ]);
+  assert.deepEqual(mono.report.adapters, { next: 2, generic: 1 });
+  assert.equal(mono.report.fallback, "generic");
+});
+
+test("monorepo: a call into a file another project analyses still resolves", () => {
+  const calls = mono.edges.filter((e) => e.kind === "calls").map((e) => `${e.src} -> ${e.dst}`);
+  assert.deepEqual(calls.sort(), [
+    "apps/site/app/page.tsx#Home -> packages/lib/src/format.ts#format",
+    "packages/lib/src/index.ts#clean -> packages/lib/src/format.ts#format",
+    "packages/lib/src/index.ts#run -> packages/lib/src/index.ts#clean",
+  ]);
+});
+
+test("monorepo: --tsconfig still parses only the project asked for", () => {
+  const one = buildGraph(MONO, { tsconfig: "packages/lib/tsconfig.json", diagnostics: false });
+  assert.deepEqual(one.report.projects.map((p) => p.tsconfig), ["packages/lib/tsconfig.json"]);
+  assert.equal(one.report.files, 2);
 });
