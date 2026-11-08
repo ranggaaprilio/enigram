@@ -51,7 +51,7 @@ describe('App workspaces', () => {
   it('redirects / to the process workspace', async () => {
     mockFetch(ROUTES)
     renderAt('/')
-    await waitFor(() => expect(where()).toBe('/w/default/documents'))
+    await waitFor(() => expect(where()).toBe('/w/default/dashboard'))
   })
 
   it('redirects old links into the process workspace with their query', async () => {
@@ -73,7 +73,7 @@ describe('App workspaces', () => {
       'GET /api/workspaces': { body: [{ name: 'main', created_at: '2026-11-07T00:00:00Z' }] },
     })
     renderAt('/')
-    await waitFor(() => expect(where()).toBe('/w/main/documents'))
+    await waitFor(() => expect(where()).toBe('/w/main/dashboard'))
   })
 
   it("sends the URL's workspace and keeps it in links and the title", async () => {
@@ -145,7 +145,7 @@ describe('App workspaces', () => {
     expect(await screen.findByText(/No workspace “nope”/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open default' })).toHaveAttribute(
       'href',
-      '/w/default/documents',
+      '/w/default/dashboard',
     )
     expect(headersOf(fetch, '/api/documents')).toEqual([])
   })
@@ -172,6 +172,7 @@ describe('App frame', () => {
     const nav = await screen.findByRole('navigation', { name: 'Pages' })
     const links = within(nav).getAllByRole('link')
     expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
+      ['Dashboard', '/w/ws-a/dashboard'],
       ['Ask', '/w/ws-a/ask'],
       ['Trace', '/w/ws-a/trace'],
       ['Documents', '/w/ws-a/documents'],
@@ -179,7 +180,6 @@ describe('App frame', () => {
       ['Graph', '/w/ws-a/graph'],
       ['Memory', '/w/ws-a/memory'],
       ['Inbox', '/w/ws-a/review'],
-      ['Dashboard', '/w/ws-a/dashboard'],
       ['Members', '/w/ws-a/members'], // no /me here: the API alone decides
     ])
     expect(within(nav).getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
@@ -346,7 +346,7 @@ describe('Page patterns (U2)', () => {
     const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' })
     expect(within(crumbs).getByRole('link', { name: 'ws-a' })).toHaveAttribute(
       'href',
-      '/w/ws-a/documents',
+      '/w/ws-a/dashboard',
     )
     expect(within(crumbs).getByRole('link', { name: 'Trace' })).toHaveAttribute(
       'href',

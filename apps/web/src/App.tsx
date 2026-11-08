@@ -83,7 +83,7 @@ export default function App() {
 function ToWorkspace({ home }: { home: string | undefined }) {
   const { pathname, search } = useLocation()
   if (home === undefined) return null
-  const page = pathname === '/' ? '/documents' : pathname
+  const page = pathname === '/' ? '/dashboard' : pathname
   return <Navigate replace to={`/w/${home}${page}${search}`} />
 }
 
@@ -155,7 +155,7 @@ function WorkspaceShell({ home }: { home: string }) {
             <nav aria-label="Breadcrumb" className="min-w-0 text-sm">
               <ol className="m-0 flex min-w-0 list-none items-center gap-1.5 p-0 text-muted-foreground">
                 <li className="shrink-0">
-                  <Link to={`/w/${workspace}/documents`} className="text-muted-foreground">
+                  <Link to={`/w/${workspace}/dashboard`} className="text-muted-foreground">
                     {workspace}
                   </Link>
                 </li>
@@ -192,12 +192,12 @@ function WorkspaceShell({ home }: { home: string }) {
           >
             {workspaces === undefined ? null : !known ? (
               <Empty>
-                No workspace “{workspace}”. <Link to={`/w/${home}/documents`}>Open {home}</Link>
+                No workspace “{workspace}”. <Link to={`/w/${home}/dashboard`}>Open {home}</Link>
               </Empty>
             ) : (
               // Keyed: a switch remounts every page, so none keeps the old workspace's data.
               <Routes key={workspace}>
-                <Route index element={<Navigate to="documents" replace />} />
+                <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="documents" element={<Documents />} />
                 <Route path="ask" element={<Ask />} />
                 <Route path="knowledge" element={<Knowledge />} />
