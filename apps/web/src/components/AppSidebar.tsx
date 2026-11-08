@@ -12,6 +12,7 @@ import {
   Moon,
   Network,
   Inbox,
+  LayoutDashboard,
   Sun,
   LogOut,
   Users,
@@ -53,7 +54,6 @@ interface Page {
   minimum?: Role // shown only to this role and above (docs/rbac.md)
 }
 
-// docs/design.md: Monitor (the dashboard) joins when its page lands.
 export const NAV: { label: string; pages: Page[] }[] = [
   {
     label: 'Answers',
@@ -73,6 +73,10 @@ export const NAV: { label: string; pages: Page[] }[] = [
   {
     label: 'Review',
     pages: [{ to: '/review', label: 'Inbox', icon: Inbox }],
+  },
+  {
+    label: 'Monitor',
+    pages: [{ to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
   },
   {
     label: 'Settings',

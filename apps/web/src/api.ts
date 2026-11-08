@@ -574,3 +574,61 @@ export const unreviewSymbol = (repoId: number, symbolId: string) =>
 
 export const deleteRepo = (id: number) =>
   request<{ repo: number; job: Job }>(`/repos/${id}`, { method: 'DELETE' })
+
+// GET /stats: the Dashboard's numbers (plan item 6, D1). Days are UTC days ("2026-11-08"); the
+// daily series hold only days with data.
+export interface Stats {
+  workspace: string
+  days: number
+  since: string
+  tokens: {
+    budget: number | null // null: unlimited
+    per_key_budget: number | null
+    today: number
+    left_today: number | null
+    by_day: { day: string; source: string; tokens: number }[]
+    by_key: { day: string; api_key: string; tokens: number }[] | null // admin only
+  }
+  questions: {
+    asked: number
+    unanswered: number
+    errors: number
+    p50_secs: number | null
+    p95_secs: number | null
+    by_day: { day: string; asked: number; unanswered: number; errors: number }[]
+  }
+  answers: {
+    routes: { targets: string; method: string; count: number }[]
+    origins: Partial<Record<'code' | 'summary' | 'human' | 'document' | 'unsupported', number>>
+  }
+  knowledge: {
+    documents: Record<string, number>
+    repos: {
+      id: number
+      name: string
+      url: string
+      ref: string | null
+      indexed_sha: string
+      indexed_at: string
+      files: number
+      symbols: number
+      entrypoints: number
+    }[]
+  }
+  review: {
+    entrypoints: { entrypoints: number; reviewed: number; current: number }
+    notes: { note_type: NoteType; status: string; count: number }[]
+  }
+  attention: {
+    proposed: number
+    needs_verification: number
+    orphaned: number
+    note_conflicts: number
+    doc_conflicts: number
+    failed_jobs: number
+    budget_exceeded_jobs: number
+    jobs_since_days: number
+  }
+}
+
+export const getStats = (days: number) => request<Stats>(`/stats?days=${days}`)

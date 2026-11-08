@@ -66,12 +66,12 @@ const QUEUE: ReviewItem[] = [
   item('conflict', note(4, { status: 'verified', conflict: true })),
 ]
 
-function renderAs(role: Role, routes: Record<string, Reply> = {}, name = 'me') {
+function renderAs(role: Role, routes: Record<string, Reply> = {}, name = 'me', url = '/review') {
   const fetch = mockFetch({ 'GET /api/review': { body: QUEUE }, ...routes })
   render(
     asRole(
       role,
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[url]}>
         <Review />
       </MemoryRouter>,
       name,
@@ -100,6 +100,16 @@ describe('Review inbox', () => {
     await userEvent.click(screen.getByRole('button', { name: /Conflicts\s*1/ }))
     expect(screen.queryByText('Note 1 text.')).toBeNull()
     expect(screen.getByText('Note 4 text.')).toBeInTheDocument()
+  })
+
+  it('opens one filter from ?show= (the Dashboard links)', async () => {
+    renderAs('maintainer', {}, 'me', '/review?show=orphaned')
+    expect(await screen.findByText('Note 3 text.')).toBeInTheDocument()
+    expect(screen.queryByText('Note 1 text.')).toBeNull()
+    expect(screen.getByRole('button', { name: /Orphaned\s*1/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 
   it('decides in place and reloads', async () => {
