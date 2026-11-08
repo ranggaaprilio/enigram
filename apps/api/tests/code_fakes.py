@@ -178,6 +178,7 @@ class FakeCodeGraph:
                 "url": "https://github.com/org/app",
                 "ref": None,
                 "indexed_sha": SHA,
+                "indexed_at": self.now,
                 "report": graph.report,
             }
             self.graphs[1] = graph
@@ -195,6 +196,7 @@ class FakeCodeGraph:
             "url": url,
             "ref": ref,
             "indexed_sha": commit_sha,
+            "indexed_at": self.now,
             "report": graph.report,
         }
         self.graphs[repo_id] = graph
@@ -910,3 +912,48 @@ class FakePrincipals:
 
     async def delete_session(self, token_hash):
         self.sessions.pop(token_hash, None)
+
+
+class FakeStats:
+    """DashboardStats with fixed numbers: one token row per key, nothing else counted."""
+
+    async def tokens_by_source(self, since):
+        return [{"day": datetime.now(UTC).date(), "source": "query", "tokens": 120}]
+
+    async def tokens_by_key(self, since):
+        return [{"day": datetime.now(UTC).date(), "api_key": "web", "tokens": 120}]
+
+    async def questions_by_day(self, since):
+        return []
+
+    async def questions(self, since):
+        return {"asked": 0, "unanswered": 0, "errors": 0, "p50_secs": None, "p95_secs": None}
+
+    async def routes(self, since):
+        return []
+
+    async def origins(self, since):
+        return {}
+
+    async def repo_sizes(self):
+        return {}
+
+    async def entrypoint_reviews(self):
+        return {"entrypoints": 0, "reviewed": 0, "current": 0}
+
+    async def notes(self):
+        return []
+
+    async def attention(self, since):
+        return dict.fromkeys(
+            (
+                "proposed",
+                "needs_verification",
+                "orphaned",
+                "note_conflicts",
+                "doc_conflicts",
+                "failed_jobs",
+                "budget_exceeded_jobs",
+            ),
+            0,
+        )

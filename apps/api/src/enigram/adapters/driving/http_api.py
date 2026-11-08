@@ -44,6 +44,7 @@ from enigram.application.code_browse import (
     tree_view,
     unreview_symbol,
 )
+from enigram.application.dashboard import dashboard
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
@@ -990,6 +991,18 @@ def create_app(
             limit=limit,
         )
         return [_note_json(n, summary=False) for n in notes]
+
+    @app.get("/stats")
+    async def stats(
+        request: Request, ws: Viewer, days: Annotated[int, Query(ge=1, le=90)] = 30
+    ) -> dict[str, Any]:
+        """The Dashboard's numbers for the last `days` UTC days (plan item 6): tokens against
+        the budget, questions, answer routes and origins, knowledge, review coverage and what
+        needs attention. Tokens per key only for an admin."""
+        found = await dashboard(
+            ws.cfg, await ws.deps.new_stats(ws.store), ws.code_graph, ws.store, _role(request), days
+        )
+        return jsonable_encoder(found)
 
     @app.get("/review")
     async def review_inbox(ws: Viewer) -> list[dict[str, Any]]:

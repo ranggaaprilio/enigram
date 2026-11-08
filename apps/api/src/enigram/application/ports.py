@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -569,6 +569,56 @@ class ConflictRepository(Protocol):
         ...
 
 
+class DashboardStats(Protocol):
+    """Read-only totals for the Dashboard (plan item 6), counted in the database from the tables
+    other repositories write, for one workspace. `since` is a UTC day, included; days are UTC
+    days, as the token budget's."""
+
+    async def tokens_by_source(self, since: date) -> list[dict[str, Any]]:
+        """{"day", "source", "tokens"} per day and source ("query", "job:<kind>")."""
+        ...
+
+    async def tokens_by_key(self, since: date) -> list[dict[str, Any]]:
+        """{"day", "api_key", "tokens"} per day and key name ("" = no key)."""
+        ...
+
+    async def questions_by_day(self, since: date) -> list[dict[str, Any]]:
+        """{"day", "asked", "unanswered", "errors"}; only days with a question."""
+        ...
+
+    async def questions(self, since: date) -> dict[str, Any]:
+        """{"asked", "unanswered", "errors", "p50_secs", "p95_secs"}; the latencies are None
+        without a timed question."""
+        ...
+
+    async def routes(self, since: date) -> list[dict[str, Any]]:
+        """{"targets" ("code", "docs", "code+docs"), "method", "count"} of the routed answers."""
+        ...
+
+    async def origins(self, since: date) -> dict[str, int]:
+        """Answer sentences per origin label (domain.origin.ORIGINS)."""
+        ...
+
+    async def repo_sizes(self) -> dict[int, dict[str, int]]:
+        """Repo id -> {"files", "symbols", "entrypoints"}."""
+        ...
+
+    async def entrypoint_reviews(self) -> dict[str, int]:
+        """{"entrypoints", "reviewed", "current"}: entry point symbols, those with a "looks
+        right" marker, and those whose marker still matches the summary shown now."""
+        ...
+
+    async def notes(self) -> list[dict[str, Any]]:
+        """{"note_type", "status", "count"}."""
+        ...
+
+    async def attention(self, since: datetime) -> dict[str, int]:
+        """What waits for a person: notes by inbox reason ("proposed", "needs_verification",
+        "orphaned", "note_conflicts"), "doc_conflicts", and the jobs that ended "failed" or
+        "budget_exceeded" since `since`."""
+        ...
+
+
 class PrincipalRepository(Protocol):
     """API keys (later users) and their role per workspace; global, not scoped to a workspace."""
 
@@ -667,6 +717,8 @@ class Deps:
     new_conflicts: Callable[[JobRepository], Awaitable[ConflictRepository]]
     # new_principals(store): API keys and roles (RBAC), sharing the store's pool like new_memory.
     new_principals: Callable[[JobRepository], Awaitable[PrincipalRepository]]
+    # new_stats(store): the Dashboard's totals, read-only over the store's pool.
+    new_stats: Callable[[JobRepository], Awaitable[DashboardStats]]
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)

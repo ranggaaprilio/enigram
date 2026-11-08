@@ -10,6 +10,7 @@ from code_fakes import (
     FakeDecider,
     FakeEmbedder,
     FakePrincipals,
+    FakeStats,
     choice,
 )
 from fastapi.testclient import TestClient
@@ -68,6 +69,11 @@ def _deps(cfg, store, built):
     deps.new_annotations, deps.new_conflicts = new_annotations, new_conflicts
     deps.decider = FakeDecider
     deps.code_embedder = FakeEmbedder
+
+    async def new_stats(store):
+        return FakeStats()
+
+    deps.new_stats = new_stats
     return deps
 
 
