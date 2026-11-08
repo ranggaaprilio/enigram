@@ -17,6 +17,7 @@ import Empty from './components/Empty'
 import SignIn from './components/SignIn'
 import { Separator } from './components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar'
+import Agents from './pages/Agents'
 import Chat from './pages/Chat'
 import Dashboard from './pages/Dashboard'
 import Documents from './pages/Documents'
@@ -218,6 +219,7 @@ function WorkspaceShell({ home }: { home: string }) {
                 <Route path="dashboard/repos/:id" element={<RepoDetail />} />
                 <Route path="memory" element={<Memory />} />
                 <Route path="members" element={<Members />} />
+                <Route path="agents" element={<Agents />} />
                 <Route path="*" element={<Empty>Not found.</Empty>} />
               </Routes>
             )}

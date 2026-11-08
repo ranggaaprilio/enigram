@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 import {
   BookOpen,
+  Bot,
   Check,
   ChevronsUpDown,
   BookMarked,
@@ -83,7 +84,10 @@ export const NAV: { label: string; pages: Page[] }[] = [
   },
   {
     label: 'Settings',
-    pages: [{ to: '/members', label: 'Members', icon: Users, minimum: 'admin' }],
+    pages: [
+      { to: '/members', label: 'Members', icon: Users, minimum: 'admin' },
+      { to: '/agents', label: 'Agents', icon: Bot, minimum: 'admin' },
+    ],
   },
 ]
 

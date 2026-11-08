@@ -38,13 +38,19 @@ from enigram.application.annotations import (
 )
 from enigram.application.budget import daily_exhausted, query_allowance
 from enigram.application.chat import (
+    add_agent,
+    agent_json,
+    agents_of,
     answer_as,
     ask,
+    change_agent,
     change_session,
     check_question,
     delete_session,
+    list_agents,
     new_session,
     owned,
+    remove_agent,
     session_detail,
     session_json,
 )
@@ -93,7 +99,6 @@ from enigram.domain.access import OPEN, Caller, at_least
 from enigram.domain.annotation import ANNOTATION_MAX_CHARS, Annotation
 from enigram.domain.answer import QUERY_MODE, QueryResult
 from enigram.domain.budget import BudgetExceeded, metered
-from enigram.domain.chat import AGENTS
 from enigram.domain.chunk import SOURCE_SUFFIXES, book_name
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
 
@@ -189,7 +194,7 @@ class AnnotationCreate(BaseModel):
 
 
 class ChatSessionCreate(BaseModel):
-    agent: str | None = None  # the default agent (Technical) when missing
+    agent: str | None = None  # the default agent (Auto) when missing
     title: str | None = None  # the first question when missing
 
 
@@ -201,6 +206,27 @@ class ChatSessionChange(BaseModel):
 
 class ChatMessageCreate(BaseModel):
     text: str = Field(min_length=1)
+
+
+class ChatAgentCreate(BaseModel):
+    """An admin's custom agent (C4); domain/chat.py check_custom_agent checks the fields."""
+
+    name: str
+    label: str
+    description: str = ""
+    route: Literal["auto", "code"] = "auto"
+    focus: str = ""
+    note_types: list[str] = []
+
+
+class ChatAgentChange(BaseModel):
+    """Only the given fields change; the name stays."""
+
+    label: str | None = None
+    description: str | None = None
+    route: Literal["auto", "code"] | None = None
+    focus: str | None = None
+    note_types: list[str] | None = None
 
 
 class MemoryNoteCreate(BaseModel):
@@ -1331,11 +1357,38 @@ def create_app(
 
     @app.get("/chat/agents")
     async def chat_agents(ws: Viewer) -> list[dict[str, Any]]:
-        """The agents for the UI: name, label, description and its other @names (aliases)."""
-        return [
-            {"name": a.name, "label": a.label, "description": a.description, "aliases": a.aliases}
-            for a in AGENTS.values()
-        ]
+        """The agents for the UI: name, label, description, other @names (aliases) and whether
+        an admin made it (`custom`, C4; then also its route, focus and note types)."""
+        return jsonable_encoder(await list_agents(ws.chat))
+
+    # C4: custom agents, an admin's (docs/rbac.md); the built-in ones cannot be changed.
+    @app.post("/chat/agents", status_code=201)
+    async def new_chat_agent(ws: Admin, request: Request, body: ChatAgentCreate) -> dict[str, Any]:
+        fields = body.model_dump() | {"note_types": tuple(body.note_types)}
+        try:
+            made = await add_agent(ws.chat, _key_name(request), fields)
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return jsonable_encoder(agent_json(made.as_agent(), made))
+
+    @app.patch("/chat/agents/{name}")
+    async def change_chat_agent(ws: Admin, name: str, body: ChatAgentChange) -> dict[str, Any]:
+        fields = body.model_dump()
+        if body.note_types is not None:
+            fields["note_types"] = tuple(body.note_types)
+        try:
+            changed = await change_agent(ws.chat, name, fields)
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        return jsonable_encoder(agent_json(changed.as_agent(), changed))
+
+    @app.delete("/chat/agents/{name}", status_code=204)
+    async def delete_chat_agent(ws: Admin, name: str) -> None:
+        """Its sessions move to Auto; their answers keep its name."""
+        try:
+            await remove_agent(ws.chat, name)
+        except EnigramError as e:
+            raise _raise_http(e) from e
 
     @app.get("/chat/sessions")
     async def chat_sessions(ws: Viewer, request: Request) -> list[dict[str, Any]]:
@@ -1402,7 +1455,7 @@ def create_app(
         owner = _key_name(request)
         try:
             session = await owned(ws.chat, session_id, owner)
-            check_question(body.text)
+            check_question(body.text, await agents_of(ws.chat))
         except EnigramError as e:
             raise _raise_http(e) from e
 

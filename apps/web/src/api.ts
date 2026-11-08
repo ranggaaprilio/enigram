@@ -785,6 +785,23 @@ export interface ChatAgent {
   label: string
   description: string
   aliases: string[] // other @names
+  custom?: boolean // an admin's (C4); then also the fields below
+  route?: AgentRoute
+  focus?: string
+  note_types?: NoteType[]
+  created_by?: string | null
+  updated_at?: string
+}
+
+// Where a custom agent looks: the router picks code, documents or both; or the code only.
+export type AgentRoute = 'auto' | 'code'
+
+export interface AgentFields {
+  label: string
+  description: string
+  route: AgentRoute
+  focus: string
+  note_types: NoteType[]
 }
 
 // The events of one turn (POST /chat/sessions/{id}/messages, server-sent events).
@@ -816,6 +833,20 @@ export const updateChatSession = (
 
 export const deleteChatSession = (id: number) =>
   request<null>(`/chat/sessions/${id}`, { method: 'DELETE' })
+
+// C4: an admin's custom agents.
+export const createChatAgent = (body: AgentFields & { name: string }) =>
+  sendJson<ChatAgent>('/chat/agents', body)
+
+export const updateChatAgent = (name: string, body: Partial<AgentFields>) =>
+  request<ChatAgent>(`/chat/agents/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+export const deleteChatAgent = (name: string) =>
+  request<null>(`/chat/agents/${encodeURIComponent(name)}`, { method: 'DELETE' })
 
 // One turn: each event as it arrives. Refusals before the stream (an empty question, someone
 // else's session) throw ApiError like any request.

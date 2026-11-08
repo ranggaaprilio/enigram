@@ -323,7 +323,10 @@ write the same index.
 | `GET /memories/{id}` | One memory and the notes made from it; another key's is 404 below `maintainer` |
 | `DELETE /memories/{id}` | Your own memory, or any key's for a `maintainer` (204); notes made from it stay, with its `memory_id` |
 | `POST /memories/{id}/note` `{target_kind, target_ref, repo?, text?, note_type?}` | A note made from the memory: always a proposal, its text the memory's unless given |
-| `GET /chat/agents` | The chat agents: `auto` (the default: the router picks the documents, the code or both, with no focus; also `@ask`), `technical` (the graph-first code agent as `/query` uses it), `business` (plain-language rules, routed to the documents, the code or both), `qa` (test scenarios over the code), `overview` (a short summary, routed); with their labels, descriptions and other @names |
+| `GET /chat/agents` | The chat agents: `auto` (the default: the router picks the documents, the code or both, with no focus; also `@ask`), `technical` (the graph-first code agent as `/query` uses it), `business` (plain-language rules, routed to the documents, the code or both), `qa` (test scenarios over the code), `overview` (a short summary, routed), then the workspace's custom agents (`custom: true`, with their `route`, `focus` and `note_types`); with their labels, descriptions and other @names |
+| `POST /chat/agents` `{name, label, description?, route?, focus?, note_types?}` | Admin: a custom agent (201). `name` is its @name (2-24 lowercase letters, digits or `-`, not a built-in agent's name or other @name; fixed once made); `route` is `auto` (default) or `code`; `focus` (at most 1000 characters) goes into the answer prompt, and each ticked note type adds "Lean on ... notes." to it. At most 20 per workspace; 422 otherwise |
+| `PATCH /chat/agents/{name}` | Admin: change a custom agent's other fields; a built-in agent is 404 |
+| `DELETE /chat/agents/{name}` | Admin: delete a custom agent (204); the chats it answered for move to Auto, its earlier answers keep its name |
 | `GET /chat/sessions` | Your chat sessions and the ones others shared (`mine` false), newest activity first |
 | `POST /chat/sessions` `{agent?, title?}` | A new session (201); the title becomes the first question unless given |
 | `GET /chat/sessions/{id}` | The session and its messages; each answer has its `sources`, `origins` and `query_id` (its trace). Another person's private session is 404 |
@@ -528,7 +531,7 @@ URL on port 5173 instead. The passwords and client secret are fixed: never publi
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
 API. Its sidebar (a drawer on a phone, see [`docs/design.md`](docs/design.md)) groups the pages
 into *Overview* (Dashboard, the home page), *Answers* (Chat, Trace), *Library* (Documents, Knowledge, Graph, and Memory for contributors), *Review* (Inbox, with the
-number of waiting notes for maintainers) and, for admins, *Settings* (Members); the account menu at its foot shows the key's role and picks the light, dark
+number of waiting notes for maintainers) and, for admins, *Settings* (Members, Agents); the account menu at its foot shows the key's role and picks the light, dark
 or system theme. **⌘K / Ctrl+K** (or *Search* in the top bar) opens a palette that goes to any
 page, switches workspace on the same page, or finds a feature, symbol, entity or document and
 opens it, all from the keyboard:
@@ -582,6 +585,10 @@ opens it, all from the keyboard:
   answer has its sources, its tokens and a link to its trace. The owner renames, shares (every
   member may then read it, not write in it) or deletes a chat; Enter sends, Shift+Enter is a new
   line.
+- **Settings → Agents** (`/agents`, admins, plan item 8 C4): the workspace's custom agents next
+  to the built-in ones (which cannot change). *New agent* sets its @name, label, description,
+  sources (Auto or Code only), the note types it leans on and its focus; every member can then
+  pick it in Chat or name it with `@name`. *Delete* asks first and moves its chats to Auto.
 - **Overview → Dashboard** (`/dashboard`, `GET /stats`), the page `/` and a workspace open: one workspace over the last 7, 30 or 90
   days, in this order: what needs a person (proposals, re-checks, orphaned or conflicting notes,
   failed jobs; each opens its page), questions (asked, not answered, typical and slowest answer

@@ -16,7 +16,7 @@ Per 2026-11-08 malam.
 | 5 Note A1–A3 (form baru, Knowledge + Inbox, duplikat dan bulk) | Selesai | #38, #40, #42 |
 | 6 Dashboard D1–D3; Dashboard jadi halaman awal | Selesai | #44–#47, #52, #53 |
 | 7 Memory M1–M2 (M3 tercakup test M1) | Selesai | #49, #50 |
-| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); Ask digabung ke Chat (agent Auto, #58); C3 panel; berikutnya C4 agent kustom | #55–#58 |
+| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); Ask digabung ke Chat (agent Auto, #58); C3 panel (#59); C4 agent kustom | #55–#59 |
 | 9 Monorepo | Belum (bisa diuji pada `apps/web` repo ini) | — |
 | 10 Hapus note | Selesai | #29 |
 | 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |
@@ -625,6 +625,15 @@ agentnya ("QA answer: ..."). Halaman: berdampingan di layar lebar (`lg`), satu t
 bawahnya, total token panel di bawahnya. **Belum:** tiap agent menulis ulang pertanyaan mandiri
 sendiri (satu panggilan LLM kecil per agent, bisa dibagi); panel belum dicoba di browser dengan
 model sungguhan.
+
+**C4 selesai 2026-11-08.** Keputusan owner: admin mengatur hal yang sama dengan agent bawaan
+(`@nama`, label, deskripsi, sumber `auto`/`code`, teks fokus) plus tipe note yang diutamakan,
+yang menjadi satu kalimat di fokus ("Lean on known issue notes."), tidak mengubah pencarian.
+Agent bawaan tetap. Hapus agent kustom memindahkan sesinya ke Auto (satu transaksi); jawaban
+lama tetap bernama agent itu. Tabel `chat_agents` (workspace, nama), maks. 20 per workspace,
+nama tidak boleh sama dengan nama atau alias agent bawaan. Halaman Settings → Agents (admin);
+Chat memakai daftar per workspace untuk pilihan agent, `@nama` dan panel. **Belum terukur:**
+mutu jawaban agent kustom (bergantung pada teks fokus dari admin).
 
 **Keputusan awal (sudah dijawab di atas).**
 - Interaksi utama: pilih satu agent per percakapan, panel, atau keduanya sejak awal.
