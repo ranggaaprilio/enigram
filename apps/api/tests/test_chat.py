@@ -75,3 +75,28 @@ async def test_a_follow_up_is_rewritten_to_stand_alone_for_the_guard():
     # No history: no call. An empty rewrite: the question itself.
     assert await standalone_question(model, [], "Q") == "Q" and len(model.prompts) == 1
     assert await standalone_question(_Rewriter(" "), history, "Q") == "Q"
+
+
+def test_a_mention_picks_an_agent_by_name_or_alias():
+    from enigram.domain.chat import AGENTS, split_mention
+
+    assert split_mention("@qa make scenarios") == ("qa", "make scenarios")
+    assert split_mention("@Rules, which rule?") == ("business", "which rule?")
+    assert split_mention("@tech: walk through it") == ("technical", "walk through it")
+    # Not an agent, or nothing after it: the text as typed.
+    assert split_mention("@Roles decorator, where?") == (None, "@Roles decorator, where?")
+    assert split_mention("@qa") == (None, "@qa")
+    assert split_mention("ask @qa later") == (None, "ask @qa later")
+    # Technical keeps the code agent's own prompt; the others add a focus.
+    assert AGENTS["technical"].focus is None
+    assert all(AGENTS[n].focus for n in ("business", "qa", "overview"))
+    assert {a.route for a in AGENTS.values()} == {"code", "auto"}
+
+
+def test_a_focus_comes_last_in_the_code_agent_prompt():
+    from enigram.application.code_agent import system_prompt
+
+    plain = system_prompt(["org-app 70ae60dbb609"])
+    assert system_prompt(["org-app 70ae60dbb609"], "Answer for a tester.") == (
+        plain + "\nAnswer for a tester."
+    )

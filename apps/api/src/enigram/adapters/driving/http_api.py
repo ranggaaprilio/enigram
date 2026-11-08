@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
@@ -37,6 +38,7 @@ from enigram.application.annotations import (
 )
 from enigram.application.budget import daily_exhausted, query_allowance
 from enigram.application.chat import (
+    answer_as,
     ask,
     change_session,
     check_question,
@@ -45,7 +47,6 @@ from enigram.application.chat import (
     owned,
     session_detail,
     session_json,
-    standalone_question,
 )
 from enigram.application.code_agent import answer_with_agent, repo_name
 from enigram.application.code_browse import (
@@ -78,7 +79,7 @@ from enigram.application.memory import (
     memory_detail,
     memory_note,
 )
-from enigram.application.ports import Deps
+from enigram.application.ports import Deps, KnowledgeEngine
 from enigram.application.querying import answer_question
 from enigram.application.repo_auth import check_token, save_token
 from enigram.application.repo_sync import check_ref, check_repo_url
@@ -195,6 +196,7 @@ class ChatSessionCreate(BaseModel):
 class ChatSessionChange(BaseModel):
     title: str | None = None
     shared: bool | None = None  # every member of the workspace may read it (read-only)
+    agent: str | None = None  # answers when a message names no @agent
 
 
 class ChatMessageCreate(BaseModel):
@@ -1328,8 +1330,12 @@ def create_app(
     # one is read-only for the others; another person's private session looks missing.
 
     @app.get("/chat/agents")
-    async def chat_agents(ws: Viewer) -> list[dict[str, str]]:
-        return [asdict(a) for a in AGENTS.values()]
+    async def chat_agents(ws: Viewer) -> list[dict[str, Any]]:
+        """The agents for the UI: name, label, description and its other @names (aliases)."""
+        return [
+            {"name": a.name, "label": a.label, "description": a.description, "aliases": a.aliases}
+            for a in AGENTS.values()
+        ]
 
     @app.get("/chat/sessions")
     async def chat_sessions(ws: Viewer, request: Request) -> list[dict[str, Any]]:
@@ -1365,7 +1371,12 @@ def create_app(
         owner = _key_name(request)
         try:
             session = await change_session(
-                ws.chat, session_id, owner, title=body.title, shared=body.shared
+                ws.chat,
+                session_id,
+                owner,
+                title=body.title,
+                shared=body.shared,
+                agent=body.agent,
             )
         except EnigramError as e:
             raise _raise_http(e) from e
@@ -1395,21 +1406,23 @@ def create_app(
         except EnigramError as e:
             raise _raise_http(e) from e
 
-        async def answer(question, history, on_tool):  # the Technical agent: the code agent
-            model = ws.deps.generator()
-            return await answer_with_agent(
-                ws.cfg,
-                model,
-                ws.code_graph,
-                question,
-                model=ws.cfg.llm_model,
-                notes=ws.notes,
-                decider=ws.decider,
-                embedder=ws.code_embedder,
-                history=history,
-                on_tool=on_tool,
-                guard_question=await standalone_question(model, history, question),
-            )
+        async def repo_names() -> list[str]:
+            return [repo_name(r, ws.cfg.repo_hosts) for r in await ws.code_graph.list_repos()]
+
+        async def engine() -> KnowledgeEngine:  # a workspace's engine opens on first use
+            return await request.app.state.workspaces.engine(ws)
+
+        answer = partial(
+            answer_as,
+            cfg=ws.cfg,
+            model=ws.deps.generator(),
+            graph=ws.code_graph,
+            notes=ws.notes,
+            decider=ws.decider,
+            embedder=ws.code_embedder,
+            engine=engine,
+            repo_names=repo_names,
+        )
 
         events: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
 

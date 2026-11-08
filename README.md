@@ -323,13 +323,13 @@ write the same index.
 | `GET /memories/{id}` | One memory and the notes made from it; another key's is 404 below `maintainer` |
 | `DELETE /memories/{id}` | Your own memory, or any key's for a `maintainer` (204); notes made from it stay, with its `memory_id` |
 | `POST /memories/{id}/note` `{target_kind, target_ref, repo?, text?, note_type?}` | A note made from the memory: always a proposal, its text the memory's unless given |
-| `GET /chat/agents` | The chat agents (C1: `technical`, the graph-first code agent) |
+| `GET /chat/agents` | The chat agents: `technical` (the graph-first code agent as `/query` uses it), `business` (plain-language rules, routed to the documents, the code or both), `qa` (test scenarios over the code), `overview` (a short summary, routed); with their labels, descriptions and other @names |
 | `GET /chat/sessions` | Your chat sessions and the ones others shared (`mine` false), newest activity first |
 | `POST /chat/sessions` `{agent?, title?}` | A new session (201); the title becomes the first question unless given |
 | `GET /chat/sessions/{id}` | The session and its messages; each answer has its `sources`, `origins` and `query_id` (its trace). Another person's private session is 404 |
-| `PATCH /chat/sessions/{id}` `{title?, shared?}` | Rename or share (the owner only); a shared session is read-only for the other members |
+| `PATCH /chat/sessions/{id}` `{title?, shared?, agent?}` | Rename, share, or change the agent that answers (the owner only); a shared session is read-only for the other members |
 | `DELETE /chat/sessions/{id}` | The owner's, or any for an `admin` (204); the traces stay |
-| `POST /chat/sessions/{id}/messages` `{text}` | Ask in your session. The reply is a server-sent event stream: `question` (stored), a `step` per tool call ("Reading a file"), then `answer` (stored; `error` set when it failed, e.g. the budget) or `error`. A follow-up sees the earlier answered turns (at most 6, 3000 tokens); tokens count as source `chat`, and the answer is stored even if the client leaves |
+| `POST /chat/sessions/{id}/messages` `{text}` | Ask in your session; a text starting with `@qa` (or another agent's name) asks that agent for this message only. The reply is a server-sent event stream: `question` (stored), a `step` per tool call ("Reading a file"), then `answer` (stored; `error` set when it failed, e.g. the budget) or `error`. A follow-up sees the earlier answered turns (at most 6, 3000 tokens); tokens count as source `chat`, and the answer is stored even if the client leaves |
 | `GET /review` | The inbox: notes waiting for a person (proposed, flagged for a re-check, orphaned, verified but conflicting), each with the summary it was written against and the summary now |
 | `GET /stats?days=30` | The Dashboard's numbers for the last 1-90 UTC days: tokens per day and source against `DAILY_TOKEN_BUDGET` (per key for an `admin` only), questions per day with unanswered, errors and p50/p95 latency, answer routes and sentence origins, documents per status, repositories with size and last index, entry point ✓ coverage, notes per type and status, and what needs attention (inbox counts, doc-code conflicts, jobs failed or over budget in 7 days) |
 | `GET /stats/workspaces?days=30` | Owners only (403 otherwise): every workspace in one table with tokens today against `DAILY_TOKEN_BUDGET` (which each workspace has), tokens and questions over the period, notes waiting and jobs failed in 7 days, and the totals |
@@ -572,9 +572,12 @@ opens it, all from the keyboard:
   what `search_memory` would find and its score; a memory embedded with an older model is
   marked (a search by meaning never finds it). *Open* shows its full text and the notes made
   from it; *Make a note* turns it into a proposal; *Delete* removes it after a confirmation.
-- **Answers → Chat** (`/chat`, `/chat/<id>`, plan item 8): a conversation with the Technical
-  agent. The first question starts a session and names it; a follow-up sees the answers before
-  it. While an answer is on its way the page shows the agent's steps ("Reading a file…"); each
+- **Answers → Chat** (`/chat`, `/chat/<id>`, plan item 8): a conversation with an agent:
+  Technical (code flows), Business rules (plain language, from team notes, documents and code),
+  QA (test scenarios and edge cases) or Overview (a short summary). Pick one for a new chat or
+  change it in the chat's header; start a message with `@qa` (or `@business`, ...) to ask
+  another agent once, with the conversation so far. The first question starts a session and
+  names it; a follow-up sees the answers before it. While an answer is on its way the page shows the agent's steps ("Reading a file…"); each
   answer has its sources, its tokens and a link to its trace. The owner renames, shares (every
   member may then read it, not write in it) or deletes a chat; Enter sends, Shift+Enter is a new
   line.

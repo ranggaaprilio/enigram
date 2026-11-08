@@ -785,20 +785,33 @@ export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[]
 }
 
+export interface ChatAgent {
+  name: string // in the API and @mentions
+  label: string
+  description: string
+  aliases: string[] // other @names
+}
+
 // The events of one turn (POST /chat/sessions/{id}/messages, server-sent events).
 export type ChatEvent =
-  | { event: 'question'; data: ChatMessage & { title: string } }
+  | { event: 'question'; data: ChatMessage & { title: string; answering: string } }
   | { event: 'step'; data: { tool: string; label: string } }
   | { event: 'answer'; data: ChatMessage }
   | { event: 'error'; data: { detail: string } }
 
 export const listChatSessions = () => request<ChatSession[]>('/chat/sessions')
 
-export const createChatSession = () => sendJson<ChatSession>('/chat/sessions', {})
+export const listChatAgents = () => request<ChatAgent[]>('/chat/agents')
+
+export const createChatSession = (agent?: string) =>
+  sendJson<ChatSession>('/chat/sessions', agent ? { agent } : {})
 
 export const getChatSession = (id: number) => request<ChatSessionDetail>(`/chat/sessions/${id}`)
 
-export const updateChatSession = (id: number, body: { title?: string; shared?: boolean }) =>
+export const updateChatSession = (
+  id: number,
+  body: { title?: string; shared?: boolean; agent?: string },
+) =>
   request<ChatSession>(`/chat/sessions/${id}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },

@@ -6,10 +6,12 @@ import {
   createChatSession,
   deleteChatSession,
   getChatSession,
+  listChatAgents,
   listChatSessions,
   messageOf,
   sendChatMessage,
   updateChatSession,
+  type ChatAgent,
   type ChatMessage,
   type ChatSession,
   type ChatSessionDetail,
@@ -24,23 +26,29 @@ import PageHeader from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { useWorkspacePath, WsLink } from '@/workspace'
 
-// Plan item 8, C1: conversations with the Technical agent. A follow-up sees the turns before
-// it; every answer has a trace. A session is its owner's; shared ones are read-only for others.
+// Plan item 8: conversations with an agent (C2: Technical, Business rules, QA, Overview). A
+// follow-up sees the turns before it, whichever agent gave them; a message starting with @name
+// asks another agent. Every answer has a trace. Shared sessions are read-only for others.
 const EXAMPLES = [
   'Walk through POST /auth/refresh: what is checked?',
   'Who may call the /users endpoints?',
   'Where is the upload size limit set?',
 ]
-const AGENT_LABEL: Record<string, string> = { technical: 'Technical' }
+// Until /chat/agents answers (and for an agent it no longer lists).
+const FALLBACK_AGENTS: ChatAgent[] = [
+  { name: 'technical', label: 'Technical', description: '', aliases: [] },
+]
 const muted = 'text-[13px] text-muted-foreground'
 
 // The question being answered: shown until the API stores it, then only its steps.
 interface Turn {
   question: string
+  agent: string // who answers it
   steps: string[]
 }
 
@@ -53,6 +61,9 @@ export default function Chat() {
   const [session, setSession] = useState<ChatSessionDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [turn, setTurn] = useState<Turn | null>(null)
+  const [agents, setAgents] = useState<ChatAgent[]>(FALLBACK_AGENTS)
+  const [picked, setPicked] = useState('technical') // a new chat's agent
+  const label = (name: string | null) => agents.find((a) => a.name === name)?.label ?? name ?? ''
   const started = useRef<number | null>(null) // a session this page just made: no reload
 
   async function loadSessions() {
@@ -65,6 +76,9 @@ export default function Chat() {
 
   useEffect(() => {
     void loadSessions()
+    listChatAgents()
+      .then(setAgents)
+      .catch(() => {}) // the fallback still chats with Technical
   }, [])
 
   useEffect(() => {
@@ -86,11 +100,11 @@ export default function Chat() {
 
   async function send(text: string) {
     setError(null)
-    setTurn({ question: text, steps: [] })
+    setTurn({ question: text, agent: session?.agent ?? picked, steps: [] })
     try {
       let target = session
       if (!target) {
-        const made = await createChatSession()
+        const made = await createChatSession(picked)
         target = { ...made, messages: [] }
         started.current = made.id
         setSession(target)
@@ -98,7 +112,7 @@ export default function Chat() {
       }
       await sendChatMessage(target.id, text, (e) => {
         if (e.event === 'question') {
-          setTurn({ question: '', steps: [] })
+          setTurn({ question: '', agent: e.data.answering, steps: [] })
           setSession((s) => s && { ...s, title: e.data.title, messages: [...s.messages, e.data] })
         } else if (e.event === 'step') {
           setTurn((t) => t && { ...t, steps: [...t.steps, e.data.label] })
@@ -118,7 +132,7 @@ export default function Chat() {
     }
   }
 
-  async function change(body: { title?: string; shared?: boolean }) {
+  async function change(body: { title?: string; shared?: boolean; agent?: string }) {
     if (!session) return
     try {
       const changed = await updateChatSession(session.id, body)
@@ -147,7 +161,7 @@ export default function Chat() {
     <section>
       <PageHeader
         title="Chat"
-        description="A conversation with the Technical agent: ask, then ask on. Every answer cites the code and has a trace."
+        description="A conversation with an agent: ask, then ask on. Each agent has its own focus; every answer cites its sources and has a trace."
       />
       <div className="grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]">
         <SessionList sessions={sessions} current={id} hidden={id !== null} />
@@ -166,17 +180,23 @@ export default function Chat() {
                 <SessionHeader
                   key={session.id}
                   session={session}
+                  agents={agents}
                   onChange={change}
                   onDelete={remove}
                 />
               )}
               {(session?.messages.length ?? 0) > 0 || turn ? (
-                <Conversation messages={session?.messages ?? []} turn={turn} />
+                <Conversation messages={session?.messages ?? []} turn={turn} label={label} />
               ) : (
-                <Start onPick={(q) => void send(q)} />
+                <Start
+                  agents={agents}
+                  picked={session?.agent ?? picked}
+                  onAgent={session ? (agent) => void change({ agent }) : setPicked}
+                  onPick={(q) => void send(q)}
+                />
               )}
               {writable ? (
-                <Composer busy={turn !== null} onSend={(q) => void send(q)} />
+                <Composer busy={turn !== null} agents={agents} onSend={(q) => void send(q)} />
               ) : (
                 <p className={cn(muted, 'mt-6')}>
                   Shared by {session?.owner ?? 'someone'}: you can read it, not write in it.
@@ -235,7 +255,8 @@ function SessionList(props: {
 
 function SessionHeader(props: {
   session: ChatSessionDetail
-  onChange: (body: { title?: string; shared?: boolean }) => Promise<void>
+  agents: ChatAgent[]
+  onChange: (body: { title?: string; shared?: boolean; agent?: string }) => Promise<void>
   onDelete: () => Promise<void>
 }) {
   const { session } = props
@@ -270,7 +291,25 @@ function SessionHeader(props: {
       ) : (
         <h2 className="m-0 min-w-0 flex-1 truncate text-base">{session.title}</h2>
       )}
-      <Badge variant="outline">{AGENT_LABEL[session.agent] ?? session.agent}</Badge>
+      {session.mine ? (
+        <NativeSelect
+          size="sm"
+          aria-label="Agent"
+          title="Answers every message that names no @agent"
+          value={session.agent}
+          onChange={(e) => void props.onChange({ agent: e.target.value })}
+        >
+          {props.agents.map((a) => (
+            <NativeSelectOption key={a.name} value={a.name}>
+              {a.label}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      ) : (
+        <Badge variant="outline">
+          {props.agents.find((a) => a.name === session.agent)?.label ?? session.agent}
+        </Badge>
+      )}
       {session.shared && (
         <Badge variant="secondary">
           <Share2 aria-hidden /> Shared
@@ -349,7 +388,12 @@ function asResult(m: ChatMessage): QueryResult {
   }
 }
 
-function Conversation({ messages, turn }: { messages: ChatMessage[]; turn: Turn | null }) {
+function Conversation(props: {
+  messages: ChatMessage[]
+  turn: Turn | null
+  label: (agent: string | null) => string
+}) {
+  const { messages, turn, label } = props
   const end = useRef<HTMLLIElement>(null)
   useEffect(() => {
     end.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' })
@@ -365,7 +409,7 @@ function Conversation({ messages, turn }: { messages: ChatMessage[]; turn: Turn 
           </li>
         ) : (
           <li key={m.id} className="min-w-0">
-            <p className={cn(muted, 'm-0 font-medium')}>{AGENT_LABEL[m.agent ?? ''] ?? m.agent}</p>
+            <p className={cn(muted, 'm-0 font-medium')}>{label(m.agent)}</p>
             {m.error ? (
               <ErrorAlert>{m.error}</ErrorAlert>
             ) : (
@@ -389,7 +433,7 @@ function Conversation({ messages, turn }: { messages: ChatMessage[]; turn: Turn 
           )}
           <span className="flex items-center gap-2">
             <Loader2 className="size-4 animate-spin text-ring" aria-hidden />
-            {turn.steps.at(-1) ?? 'Thinking'}…
+            {label(turn.agent)}: {turn.steps.at(-1) ?? 'Thinking'}…
           </span>
         </li>
       )}
@@ -398,36 +442,64 @@ function Conversation({ messages, turn }: { messages: ChatMessage[]; turn: Turn 
   )
 }
 
-function Start({ onPick }: { onPick: (question: string) => void }) {
+function Start(props: {
+  agents: ChatAgent[]
+  picked: string
+  onAgent: (agent: string) => void
+  onPick: (question: string) => void
+}) {
   return (
     <Empty
       action={
-        <div className="flex flex-wrap justify-center gap-2">
-          {EXAMPLES.map((example) => (
-            <Button
-              key={example}
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-auto min-h-8 py-1.5 whitespace-normal"
-              onClick={() => onPick(example)}
-            >
-              {example}
-            </Button>
-          ))}
+        <div className="flex flex-col items-center gap-4">
+          <div role="radiogroup" aria-label="Agent" className="flex flex-wrap justify-center gap-2">
+            {props.agents.map((a) => (
+              <Button
+                key={a.name}
+                type="button"
+                role="radio"
+                aria-checked={props.picked === a.name}
+                variant={props.picked === a.name ? 'default' : 'secondary'}
+                size="sm"
+                title={a.description}
+                onClick={() => props.onAgent(a.name)}
+              >
+                {a.label}
+              </Button>
+            ))}
+          </div>
+          <p className="m-0 max-w-[60ch] text-[13px]">
+            {props.agents.find((a) => a.name === props.picked)?.description}
+          </p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {EXAMPLES.map((example) => (
+              <Button
+                key={example}
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-auto min-h-8 py-1.5 whitespace-normal"
+                onClick={() => props.onPick(example)}
+              >
+                {example}
+              </Button>
+            ))}
+          </div>
         </div>
       }
     >
       <span className="mb-2 flex items-center justify-center gap-2 font-medium text-foreground">
-        <MessagesSquare className="size-4" aria-hidden /> Ask the Technical agent
+        <MessagesSquare className="size-4" aria-hidden /> Pick an agent and ask
       </span>
-      It answers from the indexed code, with a citation for every sentence, and remembers what you
-      asked before in this chat. Try one of these:
+      Each agent answers from the indexed code and documents with its own focus, and remembers what
+      was asked before in this chat. Try one of these:
     </Empty>
   )
 }
 
-function Composer({ busy, onSend }: { busy: boolean; onSend: (text: string) => void }) {
+function Composer(props: { busy: boolean; agents: ChatAgent[]; onSend: (text: string) => void }) {
+  const { busy, onSend } = props
+  const mentions = props.agents.map((a) => `@${a.name}`).join(', ')
   const [text, setText] = useState('')
 
   function submit(event?: FormEvent) {
@@ -455,14 +527,14 @@ function Composer({ busy, onSend }: { busy: boolean; onSend: (text: string) => v
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="Ask about the code, or ask on about the last answer"
+        placeholder="Ask, ask on about the last answer, or start with @qa to ask another agent"
       />
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={busy || !text.trim()}>
           Send
         </Button>
         <span className={cn(muted, 'max-sm:hidden')}>
-          Enter to send · Shift+Enter for a new line
+          Enter to send · Shift+Enter for a new line · {mentions} for one message
         </span>
       </div>
     </form>

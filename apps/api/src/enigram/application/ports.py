@@ -196,7 +196,12 @@ class ChatRepository(Protocol):
     async def session(self, session_id: int) -> "ChatSession | None": ...
 
     async def update_session(
-        self, session_id: int, *, title: str | None = None, shared: bool | None = None
+        self,
+        session_id: int,
+        *,
+        title: str | None = None,
+        shared: bool | None = None,
+        agent: str | None = None,
     ) -> "ChatSession | None": ...
 
     async def delete_session(self, session_id: int) -> bool:
