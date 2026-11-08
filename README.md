@@ -318,6 +318,8 @@ write the same index.
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50) |
 | `GET /review` | The inbox: notes waiting for a person (proposed, flagged for a re-check, orphaned, verified but conflicting), each with the summary it was written against and the summary now |
 | `GET /stats?days=30` | The Dashboard's numbers for the last 1-90 UTC days: tokens per day and source against `DAILY_TOKEN_BUDGET` (per key for an `admin` only), questions per day with unanswered, errors and p50/p95 latency, answer routes and sentence origins, documents per status, repositories with size and last index, entry point ✓ coverage, notes per type and status, and what needs attention (inbox counts, doc-code conflicts, jobs failed or over budget in 7 days) |
+| `GET /stats/repos` | Every repository with its indexed commit and that commit's date, the last index (outcome, duration, tokens), its state against the remote as the worker's last poll saw it (`current`, `behind`, `unreachable`, `unchecked`), how it is kept up to date (webhook, polling, manual) and its size |
+| `GET /stats/repos/{id}` | One repository: the above plus its last 20 index runs, graph quality and summary counts from its index report, and what the last run did to the notes on it |
 | `GET /targets?q=` | What a note can be about, by what people know: features (route), symbols, graph entities and documents matching `q`, at most 8 of each, with a short summary (the note form's search box) |
 | `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each and whether their summary has a current ✓ (`reviewed`), the first 500 whose route or symbol name contains `q`, plus `total` |
 | `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |
@@ -531,6 +533,9 @@ opens it, all from the keyboard:
   to), review coverage (entry points with a current ✓, notes per type and status), knowledge
   (documents per status, each repository's commit, index time and size), then token usage
   against the daily budget, per key for admins. Hover or focus a day's bar to read it.
+  A repository's name opens its page (`/dashboard/repos/<id>`): the indexed commit and its date,
+  whether the remote has commits not indexed yet, the index history, graph quality, summaries,
+  what the last run did to the notes, and *Re-index now* for maintainers.
 
 The **Graph** page (`/graph`) finds entities and relations
 whose name or description contains a phrase, then edits, merges or deletes them (see [Correcting

@@ -44,7 +44,7 @@ from enigram.application.code_browse import (
     tree_view,
     unreview_symbol,
 )
-from enigram.application.dashboard import dashboard
+from enigram.application.dashboard import dashboard, repo_detail, repo_rows
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
@@ -1003,6 +1003,21 @@ def create_app(
             ws.cfg, await ws.deps.new_stats(ws.store), ws.code_graph, ws.store, _role(request), days
         )
         return jsonable_encoder(found)
+
+    @app.get("/stats/repos")
+    async def stats_repos(ws: Viewer) -> list[dict[str, Any]]:
+        """Every repository with its indexed commit and its date, the last index, the status
+        against the remote (from the worker's poll), how it is kept up to date and its size."""
+        stats = await ws.deps.new_stats(ws.store)
+        return jsonable_encoder(await repo_rows(ws.cfg, ws.code_graph, stats))
+
+    @app.get("/stats/repos/{repo_id}")
+    async def stats_repo(ws: Viewer, repo_id: int) -> dict[str, Any]:
+        """One repository's row, its last index runs, graph quality, summaries and what the
+        last run did to the notes on it."""
+        repo = await _repo_or_404(ws, repo_id)
+        stats = await ws.deps.new_stats(ws.store)
+        return jsonable_encoder(await repo_detail(ws.cfg, ws.code_graph, stats, repo))
 
     @app.get("/review")
     async def review_inbox(ws: Viewer) -> list[dict[str, Any]]:

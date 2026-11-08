@@ -475,6 +475,11 @@ class CodeGraphRepository(Protocol):
 
     async def set_webhook_secret(self, repo_id: int, secret: str) -> None: ...
 
+    async def set_remote(self, repo_id: int, sha: str | None, error: str | None) -> None:
+        """Record a poll of the remote: the head it saw (None keeps the last one seen, as when
+        the check failed) and the error, if any; the check time is now."""
+        ...
+
     async def repo_token(self, url: str) -> str | None:
         """The encrypted access token of a private repository URL (repo_auth), or None. Kept
         by URL, not repo id: a repository has none before its first index."""
@@ -601,6 +606,11 @@ class DashboardStats(Protocol):
 
     async def repo_sizes(self) -> dict[int, dict[str, int]]:
         """Repo id -> {"files", "symbols", "entrypoints"}."""
+        ...
+
+    async def index_jobs(self, url: str, ref: str | None, limit: int) -> list[dict[str, Any]]:
+        """The repository's index_repo jobs, newest first: {"id", "status", "trigger",
+        "created_at", "started_at", "finished_at", "error", "result"} (result as stored)."""
         ...
 
     async def entrypoint_reviews(self) -> dict[str, int]:

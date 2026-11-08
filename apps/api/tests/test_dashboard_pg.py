@@ -325,3 +325,48 @@ async def test_the_numbers_match_the_raw_rows_of_existing_workspaces(pool, world
 
         notes = await pool.fetch("SELECT status FROM annotations WHERE workspace = $1", ws)
         assert sum(r["count"] for r in await stats.notes()) == len(notes), ws
+
+
+async def test_the_poll_result_is_kept_on_the_repository(pool, world):
+    ws, graph = world
+    repo_id = await graph.replace_repo("https://github.com/org/app", None, SHA, [], fixture_graph())
+    assert (await graph.get_repo_by_id(repo_id))["remote_checked_at"] is None
+
+    await graph.set_remote(repo_id, "f" * 40, None)
+    seen = await graph.get_repo_by_id(repo_id)
+    assert (seen["remote_sha"], seen["remote_error"]) == ("f" * 40, None)
+    assert seen["remote_checked_at"] is not None
+
+    await graph.set_remote(repo_id, None, "unreachable")  # a failed check keeps the last head
+    failed = await graph.get_repo_by_id(repo_id)
+    assert (failed["remote_sha"], failed["remote_error"]) == ("f" * 40, "unreachable")
+    assert failed["remote_checked_at"] >= seen["remote_checked_at"]
+
+
+async def test_index_jobs_of_one_repository_and_ref_newest_first(pool, world):
+    ws, _ = world
+    url = "https://github.com/org/app"
+    jobs = [
+        ({"url": url}, "done", {"code": {"commit_sha": "a"}}),
+        ({"url": url, "ref": "dev"}, "done", None),  # another ref
+        ({"url": "https://github.com/org/other"}, "done", None),
+        ({"url": url, "trigger": "poll"}, "failed", None),
+    ]
+    for payload, status, result in jobs:
+        await pool.execute(
+            "INSERT INTO enigram_jobs (workspace, kind, payload, status, result) "
+            "VALUES ($1, 'index_repo', $2::jsonb, $3, $4::jsonb)",
+            ws,
+            json.dumps(payload),
+            status,
+            json.dumps(result) if result else None,
+        )
+    stats = PostgresStats(pool, ws)
+
+    found = await stats.index_jobs(url, None, 10)
+    assert [(j["status"], j["trigger"], j["result"]) for j in found] == [
+        ("failed", "poll", None),
+        ("done", None, {"code": {"commit_sha": "a"}}),
+    ]
+    assert [j["status"] for j in await stats.index_jobs(url, "dev", 10)] == ["done"]
+    assert len(await stats.index_jobs(url, None, 1)) == 1

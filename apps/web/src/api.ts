@@ -632,3 +632,63 @@ export interface Stats {
 }
 
 export const getStats = (days: number) => request<Stats>(`/stats?days=${days}`)
+
+// GET /stats/repos and /stats/repos/{id} (plan item 6, D2b).
+export type RemoteStatus = 'current' | 'behind' | 'unreachable' | 'unchecked'
+
+export interface IndexRun {
+  job_id: number
+  status: string // queued | running | done | failed | budget_exceeded
+  trigger: string | null // manual | poll | webhook
+  created_at: string
+  finished_at: string | null
+  secs: number | null
+  commit_sha: string | null
+  commit_at: string | null
+  tokens: number | null
+  files_changed: number | null
+  symbols_changed: number | null
+  staleness: Record<string, number> | null
+  error: string | null
+}
+
+export interface RepoStat {
+  id: number
+  name: string
+  url: string
+  ref: string | null
+  indexed_sha: string
+  commit_at: string | null // the indexed commit's date; null when no job recorded it
+  indexed_at: string
+  remote: {
+    status: RemoteStatus
+    sha: string | null
+    checked_at: string | null
+    error: string | null
+  }
+  updates: 'webhook' | 'poll' | 'manual'
+  last_run: IndexRun | null
+  files: number
+  symbols: number
+  entrypoints: number
+  documents: number
+}
+
+export interface RepoStatDetail extends RepoStat {
+  runs: IndexRun[]
+  quality: {
+    adapters: Record<string, number> | null
+    fallback: string | null
+    unmatched_frameworks: string[] | null
+    files_skipped: Record<string, number> | null
+    calls_resolved_share: number | null
+    calls_in_repo_share: number | null
+    diagnostics_sample: string[] | null
+    secrets_redacted: number | null
+  }
+  summaries: Record<string, number> | null
+  staleness: Record<string, number> | null
+}
+
+export const getRepoStats = () => request<RepoStat[]>('/stats/repos')
+export const getRepoStat = (id: number) => request<RepoStatDetail>(`/stats/repos/${id}`)

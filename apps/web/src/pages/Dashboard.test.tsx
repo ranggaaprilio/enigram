@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import type { Stats } from '../api'
+import { REPO } from '../test/fixtures'
 import { mockFetch } from '../test/mockFetch'
 import Dashboard from './Dashboard'
 
@@ -71,7 +72,7 @@ function stats(days = 30): Stats {
 }
 
 function renderPage(routes: Parameters<typeof mockFetch>[0], url = '/dashboard') {
-  const fetch = mockFetch(routes)
+  const fetch = mockFetch({ 'GET /api/stats/repos': { body: [REPO] }, ...routes })
   render(
     <MemoryRouter initialEntries={[url]}>
       <Dashboard />
@@ -113,9 +114,13 @@ describe('Dashboard', () => {
     expect(within(questions).getAllByRole('listitem')).toHaveLength(30) // quiet days included
 
     expect(within(panel('Review coverage')).getByText('14%')).toBeInTheDocument() // 2 of 14
-    expect(
-      within(panel('Knowledge')).getByRole('link', { name: 'org-white-board' }),
-    ).toHaveAttribute('href', '/knowledge?repo=4')
+    const knowledge = panel('Knowledge')
+    expect(await within(knowledge).findByRole('link', { name: 'org-white-board' })).toHaveAttribute(
+      'href',
+      '/dashboard/repos/4',
+    )
+    expect(within(knowledge).getByText('Behind')).toBeInTheDocument()
+    expect(within(knowledge).getByText('Polling updates')).toBeInTheDocument()
     expect(within(panel('Token usage')).getByText('750')).toBeInTheDocument()
   })
 
@@ -146,10 +151,8 @@ describe('Dashboard', () => {
       'aria-pressed',
       'true',
     )
-    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-      '/api/stats?days=7',
-      '/api/stats?days=30',
-    ])
+    const periods = fetch.mock.calls.map(([url]) => url).filter((url) => url.includes('days='))
+    expect(periods).toEqual(['/api/stats?days=7', '/api/stats?days=30'])
   })
 
   it('lists tokens per key when the API sends them (admins only)', async () => {

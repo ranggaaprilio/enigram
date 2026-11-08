@@ -17,6 +17,10 @@ const TONES: Record<string, string> = {
   orphaned: 'bg-danger-bg text-destructive',
   rejected: 'bg-danger-bg text-destructive',
   budget_exceeded: 'bg-warning-bg text-warning',
+  // a repository against its remote (Dashboard, D2b)
+  current: 'bg-success-bg text-success',
+  behind: 'bg-warning-bg text-warning',
+  unreachable: 'bg-danger-bg text-destructive',
 }
 
 // `status-<status>` stays on the element: the page tests select on it (no stylesheet rule uses it).

@@ -20,6 +20,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/s
 import Ask from './pages/Ask'
 import Dashboard from './pages/Dashboard'
 import Documents from './pages/Documents'
+import RepoDetail from './pages/RepoDetail'
 import Graph from './pages/Graph'
 import Knowledge from './pages/Knowledge'
 import Members from './pages/Members'
@@ -43,6 +44,10 @@ function itemOf(segment: string, pathname: string, search: string): string | nul
   if (segment === 'trace') {
     const id = pathname.split('/')[4]
     return id ? `Query ${id}` : null
+  }
+  if (segment === 'dashboard') {
+    const [, , , , kind, id] = pathname.split('/') // /w/<ws>/dashboard/repos/<id>
+    return kind === 'repos' && id ? `Repository ${id}` : null
   }
   if (segment === 'knowledge') {
     if (params.get('id')) return `Note ${params.get('id')}`
@@ -192,6 +197,7 @@ function WorkspaceShell({ home }: { home: string }) {
                 <Route path="trace/:id" element={<TraceDetail />} />
                 <Route path="graph" element={<Graph />} />
                 <Route path="dashboard" element={<Dashboard />} />
+                <Route path="dashboard/repos/:id" element={<RepoDetail />} />
                 <Route path="members" element={<Members />} />
                 <Route path="*" element={<Empty>Not found.</Empty>} />
               </Routes>

@@ -2,6 +2,7 @@
 annotation tables (plan item 6, D1). Writes nothing and owns no table: the repositories that
 write those tables create them."""
 
+import json
 from datetime import date, datetime
 from typing import Any
 
@@ -98,6 +99,22 @@ class PostgresStats:
             self.workspace,
         )
         return {r["id"]: {k: r[k] for k in ("files", "symbols", "entrypoints")} for r in rows}
+
+    async def index_jobs(self, url: str, ref: str | None, limit: int) -> list[dict[str, Any]]:
+        # The API and the poller put "ref" in the payload only for a branch or tag.
+        rows = await self.pool.fetch(
+            "SELECT id, status, payload->>'trigger' AS trigger, created_at, started_at, "
+            "finished_at, error, result FROM enigram_jobs "
+            "WHERE workspace = $1 AND kind = 'index_repo' AND payload->>'url' = $2 "
+            "AND coalesce(payload->>'ref', '') = $3 ORDER BY id DESC LIMIT $4",
+            self.workspace,
+            url,
+            ref or "",
+            limit,
+        )
+        return [
+            {**dict(r), "result": json.loads(r["result"]) if r["result"] else None} for r in rows
+        ]
 
     async def entrypoint_reviews(self) -> dict[str, int]:
         # A marker is current when its hash matches the summary shown now: the flow summary,

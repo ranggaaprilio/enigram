@@ -490,7 +490,7 @@ async def test_delete_repo_job_needs_the_code_graph(cfg, store, deps):
 
 
 async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplog):
-    from code_fakes import SHA, FakeCodeGraph, fixture_graph
+    from code_fakes import REMOTE_UNCHECKED, SHA, FakeCodeGraph, fixture_graph
 
     graph = FakeCodeGraph(fixture_graph())
     for i, (url, ref) in enumerate(
@@ -502,7 +502,14 @@ async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplo
         ],
         start=2,
     ):
-        graph.repos[i] = {"id": i, "url": url, "ref": ref, "indexed_sha": SHA, "report": {}}
+        graph.repos[i] = {
+            "id": i,
+            "url": url,
+            "ref": ref,
+            "indexed_sha": SHA,
+            "report": {},
+            **REMOTE_UNCHECKED,
+        }
     await store.enqueue("index_repo", {"url": "https://github.com/org/busy"})
     heads = {
         "https://github.com/org/app": None,  # nothing matches the ref any more
@@ -527,6 +534,16 @@ async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplo
     )
     assert (job.payload["trigger"], job.payload["expected_sha"]) == ("poll", "f" * 40)
     assert "unreachable" in caplog.text
+    # What each poll saw, for the Dashboard (D2b); a repository with a job running is skipped.
+    remote = {
+        r["url"].rsplit("/", 1)[1]: (r["remote_sha"], r["remote_error"], r["remote_checked_at"])
+        for r in graph.repos.values()
+    }
+    assert remote["same"] == (SHA, None, graph.now)
+    assert remote["moved"] == ("f" * 40, None, graph.now)
+    assert remote["down"] == (None, "git ls-remote failed: unreachable", graph.now)
+    assert remote["app"] == (None, "ref not found on the remote", graph.now)
+    assert remote["busy"] == (None, None, None)
 
 
 async def test_repo_job_records_trigger_metadata(cfg, store, deps, monkeypatch):

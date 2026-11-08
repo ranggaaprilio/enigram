@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS code_index_runs (
     at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS code_index_runs_repo ON code_index_runs (repo_id, sha);
+-- Dashboard D2b: the remote head the worker's poll last saw (git ls-remote), when, and why it
+-- could not see it; NULL until the first poll.
+ALTER TABLE code_repos ADD COLUMN IF NOT EXISTS remote_sha TEXT;
+ALTER TABLE code_repos ADD COLUMN IF NOT EXISTS remote_checked_at TIMESTAMPTZ;
+ALTER TABLE code_repos ADD COLUMN IF NOT EXISTS remote_error TEXT;
 """
 
 
@@ -221,6 +226,9 @@ def _repo(row: asyncpg.Record) -> dict[str, Any]:
         "report": _loads(row["report"]),
         # The secret itself only through webhook_secret().
         "webhook": row["webhook_secret"] is not None,
+        "remote_sha": row["remote_sha"],
+        "remote_checked_at": row["remote_checked_at"],
+        "remote_error": row["remote_error"],
     }
 
 
@@ -323,6 +331,16 @@ class PostgresCodeGraph:
             self.workspace,
             repo_id,
             json.dumps(report),
+        )
+
+    async def set_remote(self, repo_id: int, sha: str | None, error: str | None) -> None:
+        await self.pool.execute(
+            "UPDATE code_repos SET remote_sha = coalesce($3, remote_sha), remote_error = $4, "
+            "remote_checked_at = now() WHERE workspace = $1 AND id = $2",
+            self.workspace,
+            repo_id,
+            sha,
+            error,
         )
 
     async def get_repo(self, url: str, ref: str | None) -> dict[str, Any] | None:

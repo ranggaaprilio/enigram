@@ -153,6 +153,10 @@ def agent_graph() -> ParsedGraph:
     return ParsedGraph(symbols, [*base.edges, *edges], base.entrypoints, base.report)
 
 
+# What a repository row says before the worker's first poll (postgres_code_graph._repo).
+REMOTE_UNCHECKED = {"remote_sha": None, "remote_checked_at": None, "remote_error": None}
+
+
 class FakeCodeGraph:
     """CodeGraphRepository in memory, with the same callee/implementation rules as Postgres."""
 
@@ -180,6 +184,7 @@ class FakeCodeGraph:
                 "indexed_sha": SHA,
                 "indexed_at": self.now,
                 "report": graph.report,
+                **REMOTE_UNCHECKED,
             }
             self.graphs[1] = graph
 
@@ -198,10 +203,17 @@ class FakeCodeGraph:
             "indexed_sha": commit_sha,
             "indexed_at": self.now,
             "report": graph.report,
+            **REMOTE_UNCHECKED,
         }
         self.graphs[repo_id] = graph
         self.blobs[repo_id] = files
         return repo_id
+
+    async def set_remote(self, repo_id, sha, error):
+        repo = self.repos[repo_id]
+        repo["remote_sha"] = sha or repo["remote_sha"]
+        repo["remote_error"] = error
+        repo["remote_checked_at"] = self.now
 
     async def set_report(self, repo_id, report):
         self.repos[repo_id]["report"] = report
@@ -940,6 +952,9 @@ class FakeStats:
 
     async def entrypoint_reviews(self):
         return {"entrypoints": 0, "reviewed": 0, "current": 0}
+
+    async def index_jobs(self, url, ref, limit):
+        return []
 
     async def notes(self):
         return []
