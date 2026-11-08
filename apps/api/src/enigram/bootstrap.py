@@ -18,6 +18,7 @@ from enigram.adapters.driven.postgres_code_graph import PostgresCodeGraph
 from enigram.adapters.driven.postgres_conflicts import PostgresConflicts
 from enigram.adapters.driven.postgres_jobs import PostgresJobStore, open_store
 from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
+from enigram.adapters.driven.postgres_principals import PostgresPrincipals
 from enigram.adapters.driven.ragas_scorer import RagasScorer
 from enigram.adapters.driven.ts_graph_sidecar import TsGraphSidecar
 from enigram.adapters.driven.voyage_embedding import VoyageCodeEmbedder, make_embedding_func
@@ -30,6 +31,7 @@ from enigram.application.ports import (
     Deps,
     JobRepository,
     MemoryRepository,
+    PrincipalRepository,
 )
 from enigram.config import Config
 
@@ -61,6 +63,14 @@ async def _new_annotations(cfg: Config, store: JobRepository) -> AnnotationRepos
     return notes
 
 
+async def _new_principals(cfg: Config, store: JobRepository) -> PrincipalRepository:
+    # Like _new_memory, but global: the same principals serve every workspace.
+    assert isinstance(store, PostgresJobStore)
+    principals = PostgresPrincipals(store.pool)
+    await principals.ensure_schema()
+    return principals
+
+
 async def _new_conflicts(cfg: Config, store: JobRepository) -> ConflictRepository:
     # Like _new_memory; the tables reference code_repos, so call it after _new_code_graph.
     assert isinstance(store, PostgresJobStore)
@@ -88,6 +98,7 @@ def build_deps(cfg: Config) -> Deps:
         code_parser=partial(TsGraphSidecar, cfg),
         new_code_graph=partial(_new_code_graph, cfg),
         new_annotations=partial(_new_annotations, cfg),
+        new_principals=partial(_new_principals, cfg),
         new_conflicts=partial(_new_conflicts, cfg),
         judge=partial(OpenAIChatModel, cfg.judge),
         answer_scorer=partial(RagasScorer, cfg),

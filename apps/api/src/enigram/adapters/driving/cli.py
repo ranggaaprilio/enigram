@@ -108,6 +108,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out", type=Path, default=Path("eval/regression.yaml"), help="output YAML"
     )
 
+    principals = sub.add_parser(
+        "principals", help="API keys and their roles per workspace (docs/rbac.md)"
+    )
+    psub = principals.add_subparsers(dest="principals_command", required=True)
+    psub.add_parser("list", help="every principal with its roles")
+    add_key = psub.add_parser("add-key", help="make a key; it is printed once")
+    add_key.add_argument("name")
+    add_key.add_argument("--workspace", help="its workspace and default (WORKSPACE if not set)")
+    add_key.add_argument("--role", default="viewer", help="viewer (default), contributor, ...")
+    role = psub.add_parser("role", help="set a role in a workspace, or `none` to remove it")
+    role.add_argument("name")
+    role.add_argument("workspace")
+    role.add_argument("role", help="viewer, contributor, maintainer, admin or none")
+    owner = psub.add_parser("owner", help="make a principal owner (admin everywhere)")
+    owner.add_argument("name")
+    owner.add_argument("--off", action="store_true", help="take the owner flag away")
+    revoke = psub.add_parser("revoke", help="the key stops working at once")
+    revoke.add_argument("name")
+
     sub.add_parser("mcp", help="run the MCP server on stdio (for Claude Code)")
     sub.add_parser(
         "repo-key", help="print a new REPO_CREDENTIALS_KEY (encrypts private repository tokens)"
@@ -450,6 +469,44 @@ async def _conflicts_detect(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+async def _principals(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.application import access
+    from enigram.bootstrap import build_deps
+
+    deps = build_deps(cfg)
+    store = await deps.open_store()
+    try:
+        principals = await deps.new_principals(store)
+        known = {w["name"] for w in await store.list_workspaces()}
+        command = args.principals_command
+        workspace = getattr(args, "workspace", None) or cfg.workspace
+        if command in ("add-key", "role") and workspace not in known:
+            raise EnigramError(f"No workspace {workspace!r}")
+        if command == "list":
+            for p, revoked, roles in await principals.list():
+                flags = [f for f, on in (("owner", p.owner), ("revoked", revoked)) if on]
+                shown = ", ".join(f"{w}={r}" for w, r in sorted(roles.items())) or "no workspace"
+                extra = f" [{', '.join(flags)}]" if flags else ""
+                print(f"{p.name} ({p.kind}){extra}: {shown}")
+        elif command == "add-key":
+            key = await access.add_key(principals, args.name, workspace, args.role)
+            print(f"{args.name}: {args.role} in {workspace}. The key, shown only now:")
+            print(key)
+        elif command == "role":
+            role = None if args.role == "none" else args.role
+            await access.set_role(principals, args.name, workspace, role)
+            print(f"{args.name}: {args.role} in {workspace}")
+        elif command == "owner":
+            await access.set_owner(principals, args.name, not args.off)
+            print(f"{args.name}: {'no longer ' if args.off else ''}owner")
+        elif command == "revoke":
+            await access.revoke(principals, args.name)
+            print(f"{args.name}: revoked")
+    finally:
+        await store.close()
+    return 0
+
+
 async def _regression_export(cfg: Config, out: Path) -> int:
     import yaml
 
@@ -723,6 +780,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_conflicts_detect(cfg, args))
         if args.command == "regression":
             return asyncio.run(_regression_export(cfg, args.out))
+        if args.command == "principals":
+            return asyncio.run(_principals(cfg, args))
         if args.command == "mcp":
             from enigram.adapters.driving.mcp_server import create_server
 

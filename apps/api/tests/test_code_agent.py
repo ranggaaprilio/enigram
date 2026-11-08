@@ -448,7 +448,7 @@ async def test_notes_appear_in_search_and_find_symbol(cfg, graph):
     notes = FakeAnnotations()
     await _note(cfg, graph, notes, target=CONTROLLER, text="Route is admin only.")
     await _note(cfg, graph, notes, text="The class is behind RolesGuard.")
-    await _note(cfg, graph, notes, target=CONTROLLER, text="A proposal.", owner="bob")
+    await _note(cfg, graph, notes, target=CONTROLLER, text="A proposal.", proposed=True)
     tools = _tools(cfg, graph, notes=notes)
 
     search_out = await tools.run("search_code", {"query": "users"})

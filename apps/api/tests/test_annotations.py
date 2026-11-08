@@ -43,19 +43,18 @@ def note(**kw) -> Annotation:
     return Annotation(**{**values, **kw})
 
 
-def test_may_verify():
+def test_may_verify_needs_a_maintainer():
     n = note(owner="alice")
-    assert may_verify("alice", n, ())
-    assert may_verify("bob", n, ("bob",))
-    assert not may_verify("bob", n, ("carol",))
+    assert may_verify("bob", n, "maintainer") and may_verify("bob", n, "admin")
+    assert not may_verify("alice", n, "contributor")  # owning the note is not enough
+    assert not may_verify("alice", n, None)  # no member
 
 
-def test_may_verify_an_agent_proposal_needs_another_verifier():
+def test_may_verify_an_agent_proposal_needs_another_maintainer():
     n = note(via="mcp", author="laptop-a", owner="laptop-a", status="proposed")
-    assert not may_verify("laptop-a", n, ())  # the proposer, even as owner
-    assert not may_verify("laptop-a", n, ("laptop-a",))  # ... and even as a verifier
-    assert may_verify("web", n, ("web",))
-    assert not may_verify("bob", n, ("web",))
+    assert not may_verify("laptop-a", n, "admin")  # the proposer, even as admin
+    assert may_verify("web", n, "maintainer")
+    assert not may_verify("bob", n, "contributor")
 
 
 def test_deps_hash_is_order_independent():
@@ -128,7 +127,7 @@ async def test_fake_annotations_log_events_and_filter():
 SERVICE = "src/app.service.ts#AppService.find"
 
 
-async def _new(cfg, actor="alice", **kw):
+async def _new(cfg, actor="alice", role="admin", **kw):
     from code_fakes import fixture_graph
 
     from enigram.application.annotations import NewAnnotation, create_annotation
@@ -140,7 +139,8 @@ async def _new(cfg, actor="alice", **kw):
         "text": "Note.",
         "repo_id": 1,
     }
-    note = await create_annotation(cfg, graph, notes, NewAnnotation(**{**fields, **kw}), actor)
+    new = NewAnnotation(**{**fields, **kw})
+    note = await create_annotation(cfg, graph, notes, new, actor, role=role)
     return graph, notes, note
 
 
@@ -157,8 +157,8 @@ async def test_create_by_the_owner_is_verified_with_hashes(cfg):
     assert note.verify_by > note.verified_at  # default: 90 days
 
 
-async def test_create_for_another_owner_is_proposed(cfg):
-    _, _, note = await _new(cfg, owner="bob")
+async def test_create_by_a_contributor_is_proposed(cfg):
+    _, _, note = await _new(cfg, role="contributor")
     assert (note.status, note.verified_by) == ("proposed", None)
 
 
@@ -215,26 +215,35 @@ async def test_resolve_symbol_wants_exactly_one(cfg):
         await resolve_symbol(graph, 1, "Nope")
 
 
-async def test_verify_needs_the_owner_or_a_verifier(cfg):
+async def test_verify_needs_a_maintainer(cfg):
     import pytest
 
     from enigram.application.annotations import change_annotation
     from enigram.domain.errors import Forbidden
 
-    graph, notes, note = await _new(cfg, owner="bob")
-    for changes in ({"status": "verified"}, {"status": "rejected"}, {"owner": "x"}):
+    graph, notes, note = await _new(cfg, role="contributor")
+    for changes in (
+        {"status": "verified"},
+        {"status": "rejected"},
+        {"owner": "x"},
+        {"verify_by": "2030-01-01T00:00:00+00:00"},
+        {"conflict": True},
+    ):
         with pytest.raises(Forbidden):
-            await change_annotation(cfg, graph, notes, note.id, changes, "stranger")
+            await change_annotation(
+                cfg, graph, notes, note.id, changes, "alice", role="contributor"
+            )
 
-    verified = await change_annotation(cfg, graph, notes, note.id, {"status": "verified"}, "bob")
+    verified = await change_annotation(
+        cfg, graph, notes, note.id, {"status": "verified"}, "bob", role="maintainer"
+    )
     assert (verified.status, verified.verified_by, verified.target_hash) == (
         "verified",
         "bob",
         "h-AppService.find",
     )
-    trusted = dataclasses.replace(cfg, annotation_verifiers=("carol",))
     rejected = await change_annotation(
-        trusted, graph, notes, note.id, {"status": "rejected"}, "carol"
+        cfg, graph, notes, note.id, {"status": "rejected"}, "carol", role="maintainer"
     )
     assert rejected.status == "rejected"
 
@@ -348,15 +357,26 @@ async def test_verify_during_a_reindex_keeps_the_last_summary(cfg):
     )
 
 
-async def test_text_edit_by_a_stranger_becomes_a_proposal(cfg):
+async def test_text_edits_by_the_author_or_a_maintainer(cfg):
+    import pytest
+
     from enigram.application.annotations import change_annotation
+    from enigram.domain.errors import Forbidden
 
     graph, notes, note = await _new(cfg)
-    edited = await change_annotation(cfg, graph, notes, note.id, {"text": "Changed."}, "bob")
+    with pytest.raises(Forbidden, match="author"):
+        await change_annotation(
+            cfg, graph, notes, note.id, {"text": "Changed."}, "bob", role="contributor"
+        )
+    edited = await change_annotation(
+        cfg, graph, notes, note.id, {"text": "Changed."}, "alice", role="contributor"
+    )
     assert (edited.text, edited.status) == ("Changed.", "proposed")
 
-    again = await change_annotation(cfg, graph, notes, note.id, {"text": "Mine."}, "alice")
-    assert (again.status, again.verified_by) == ("verified", "alice")
+    again = await change_annotation(
+        cfg, graph, notes, note.id, {"text": "Fixed."}, "bob", role="maintainer"
+    )
+    assert (again.status, again.verified_by) == ("verified", "bob")
 
 
 async def test_relink_conflict_and_owner(cfg):
@@ -459,7 +479,7 @@ async def test_create_proposal_or_entity_note_asks_no_decider(cfg):
 
     graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
     decider = FakeDecider({"conflict": noul(0.95)})
-    proposal = NewAnnotation("symbol", "AppService.find", "x", repo_id=1, owner="bob")
+    proposal = NewAnnotation("symbol", "AppService.find", "x", repo_id=1, proposed=True)
     entity = NewAnnotation("entity", "Login", "y")
 
     a = await create_annotation(cfg, graph, notes, proposal, "alice", decider=decider)

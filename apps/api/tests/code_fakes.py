@@ -808,3 +808,78 @@ class FakeEmbedder:
             norm = math.sqrt(sum(x * x for x in v)) or 1.0
             out.append([x / norm for x in v])
         return out
+
+
+class FakePrincipals:
+    """PrincipalRepository in memory, with the same name/hash uniqueness as Postgres."""
+
+    def __init__(self):
+        from enigram.domain.access import Principal
+
+        self._Principal = Principal
+        self.rows: dict[int, dict] = {}  # id -> fields
+        self.members: dict[tuple[str, int], str] = {}  # (workspace, id) -> role
+
+    async def ensure_schema(self):
+        pass
+
+    def _out(self, row):
+        return self._Principal(
+            row["id"], row["name"], row["kind"], row["owner"], row["default_workspace"]
+        )
+
+    async def by_key_hash(self, key_hash):
+        for row in self.rows.values():
+            if row["key_hash"] == key_hash and not row["revoked"]:
+                return self._out(row)
+        return None
+
+    async def by_name(self, name):
+        return next((self._out(r) for r in self.rows.values() if r["name"] == name), None)
+
+    async def create(self, name, kind, key_hash, default_workspace, *, owner=False):
+        from enigram.domain.errors import EnigramError
+
+        if any(
+            r["name"] == name or (key_hash and r["key_hash"] == key_hash)
+            for r in self.rows.values()
+        ):
+            raise EnigramError(f"A principal named {name!r} (or that key) already exists")
+        row = {
+            "id": len(self.rows) + 1,
+            "name": name,
+            "kind": kind,
+            "key_hash": key_hash,
+            "owner": owner,
+            "default_workspace": default_workspace,
+            "revoked": False,
+        }
+        self.rows[row["id"]] = row
+        return self._out(row)
+
+    async def set_key_hash(self, principal_id, key_hash):
+        self.rows[principal_id]["key_hash"] = key_hash
+
+    async def set_owner(self, principal_id, owner):
+        self.rows[principal_id]["owner"] = owner
+
+    async def set_default_workspace(self, principal_id, workspace):
+        self.rows[principal_id]["default_workspace"] = workspace
+
+    async def revoke(self, principal_id):
+        self.rows[principal_id]["revoked"] = True
+
+    async def roles(self, principal_id):
+        return {w: r for (w, pid), r in self.members.items() if pid == principal_id}
+
+    async def set_role(self, workspace, principal_id, role):
+        from enigram.domain.access import check_role
+
+        self.members[(workspace, principal_id)] = check_role(role)
+
+    async def remove_member(self, workspace, principal_id):
+        return self.members.pop((workspace, principal_id), None) is not None
+
+    async def list(self):
+        rows = sorted(self.rows.values(), key=lambda r: r["name"])
+        return [(self._out(r), r["revoked"], await self.roles(r["id"])) for r in rows]

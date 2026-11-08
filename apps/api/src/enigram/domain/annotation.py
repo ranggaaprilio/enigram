@@ -9,6 +9,7 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Any
 
+from enigram.domain.access import at_least
 from enigram.domain.answer import Source
 
 TARGET_KINDS = ("symbol", "entity", "document")
@@ -93,12 +94,12 @@ def summary_hash(kind: str, text: str) -> str:
     return sha256(f"{kind}\0{text}".encode()).hexdigest()[:16]
 
 
-def may_verify(actor: str, note: Annotation, verifiers: tuple[str, ...]) -> bool:
-    """Who may verify, reject or change the owner of a note: its owner or a verifier; an agent
-    proposal (via "mcp") only a verifier other than the proposing key, even when it owns it."""
-    if note.via == "mcp":
-        return actor in verifiers and actor != note.author
-    return actor == note.owner or actor in verifiers
+def may_verify(actor: str, note: Annotation, role: str | None) -> bool:
+    """Who may verify or reject a note (docs/rbac.md): a maintainer; an agent proposal (via
+    "mcp") only a maintainer other than the proposing key."""
+    if not at_least(role, "maintainer"):
+        return False
+    return not (note.via == "mcp" and actor == note.author)
 
 
 def deps_hash_of(callee_hashes: Iterable[str]) -> str:

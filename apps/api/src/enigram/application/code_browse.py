@@ -7,6 +7,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from enigram.domain.access import at_least
 from enigram.domain.annotation import SymbolReview, summary_hash
 from enigram.domain.code import CodeSymbol, FlowSummary, code_citation, shown_summary
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
@@ -196,13 +197,13 @@ async def unreview_symbol(
     repo_id: int,
     symbol_id: str,
     actor: str,
-    verifiers: tuple[str, ...] = (),
+    role: str = "admin",
 ) -> None:
-    """Remove the marker; only the key that set it or a verifier may."""
+    """Remove the marker; only the key that set it or a maintainer may."""
     review = (await notes.reviews(repo_id)).get(symbol_id)
     if review is None:
         raise NotFound(f"No review on {symbol_id!r} in repository {repo_id}")
-    if actor != review.actor and actor not in verifiers:
-        raise Forbidden(f"Only {review.actor} or a key in ANNOTATION_VERIFIERS may remove it")
+    if actor != review.actor and not at_least(role, "maintainer"):
+        raise Forbidden(f"Only {review.actor} or a maintainer may remove it")
     await notes.delete_review(repo_id, symbol_id)
     log.info("[reviews] %s removed %s", actor, symbol_id)

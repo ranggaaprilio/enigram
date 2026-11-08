@@ -133,7 +133,7 @@ async def test_proposals_are_not_checked(cfg):
         cfg,
         graph,
         notes,
-        NewAnnotation("symbol", SERVICE, "x", 1, owner="someone-else"),
+        NewAnnotation("symbol", SERVICE, "x", 1, proposed=True),
         "a",
     )
     graph.graphs[1] = _swap(graph.graphs[1], SERVICE, body_hash="changed")
@@ -151,7 +151,7 @@ async def test_expire_verify_by_flips_only_verified_notes_past_the_date(cfg):
 
     past = await make(now - timedelta(days=1))
     future = await make(now + timedelta(days=1))
-    proposed = await make(now - timedelta(days=1), owner="b")
+    proposed = await make(now - timedelta(days=1), proposed=True)
 
     assert await expire_verify_by(notes, now) == 1
     assert ((await notes.get(past.id)).status, (await notes.get(past.id)).reason) == (

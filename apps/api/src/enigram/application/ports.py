@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     import networkx as nx
 
+    from enigram.domain.access import Principal
     from enigram.domain.annotation import Annotation, AnnotationEvent, SymbolReview
     from enigram.domain.answer import QueryResult
     from enigram.domain.chunk import ParsedBook
@@ -568,6 +569,52 @@ class ConflictRepository(Protocol):
         ...
 
 
+class PrincipalRepository(Protocol):
+    """API keys (later users) and their role per workspace; global, not scoped to a workspace."""
+
+    async def ensure_schema(self) -> None: ...
+
+    async def by_key_hash(self, key_hash: str) -> "Principal | None":
+        """The principal of a key, unless revoked."""
+        ...
+
+    async def by_name(self, name: str) -> "Principal | None": ...
+
+    async def create(
+        self,
+        name: str,
+        kind: str,
+        key_hash: str | None,
+        default_workspace: str | None,
+        *,
+        owner: bool = False,
+    ) -> "Principal":
+        """Raises EnigramError when the name is taken."""
+        ...
+
+    async def set_key_hash(self, principal_id: int, key_hash: str) -> None: ...
+
+    async def set_owner(self, principal_id: int, owner: bool) -> None: ...
+
+    async def set_default_workspace(self, principal_id: int, workspace: str) -> None: ...
+
+    async def revoke(self, principal_id: int) -> None:
+        """The key stops working; the row, its name and its memberships stay for the record."""
+        ...
+
+    async def roles(self, principal_id: int) -> dict[str, str]:
+        """Workspace -> role."""
+        ...
+
+    async def set_role(self, workspace: str, principal_id: int, role: str) -> None: ...
+
+    async def remove_member(self, workspace: str, principal_id: int) -> bool: ...
+
+    async def list(self) -> list[tuple["Principal", bool, dict[str, str]]]:
+        """Every principal with whether it is revoked and its roles, by name."""
+        ...
+
+
 @dataclass
 class Deps:
     """The driven side, as factories: each use case opens what it needs when it needs it (no
@@ -590,6 +637,8 @@ class Deps:
     new_annotations: Callable[[JobRepository], Awaitable[AnnotationRepository]]
     # new_conflicts(store): docs-vs-code results; open it after new_code_graph (FK to code_repos).
     new_conflicts: Callable[[JobRepository], Awaitable[ConflictRepository]]
+    # new_principals(store): API keys and roles (RBAC), sharing the store's pool like new_memory.
+    new_principals: Callable[[JobRepository], Awaitable[PrincipalRepository]]
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)

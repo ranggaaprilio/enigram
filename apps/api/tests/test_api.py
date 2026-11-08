@@ -9,6 +9,7 @@ from code_fakes import (
     FakeConflicts,
     FakeDecider,
     FakeEmbedder,
+    FakePrincipals,
     choice,
 )
 from fastapi.testclient import TestClient
@@ -56,7 +57,14 @@ def _deps(cfg, store, built):
     async def new_conflicts(store):
         return FakeConflicts()
 
+    async def new_principals(store):
+        # One set per job store, like one database: tests read it as store.principals.
+        if not hasattr(store, "principals"):
+            store.principals = FakePrincipals()
+        return store.principals
+
     deps.open_store, deps.new_memory, deps.new_code_graph = open_store, new_memory, new_code_graph
+    deps.new_principals = new_principals
     deps.new_annotations, deps.new_conflicts = new_annotations, new_conflicts
     deps.decider = FakeDecider
     deps.code_embedder = FakeEmbedder
@@ -772,6 +780,16 @@ def notes_env(pg_cfg, clean_env, fake_memory, monkeypatch):
         yield client, store, graph, notes, build
 
 
+def _grant(store, name, role, workspace="default"):
+    """Set a principal's role (the env keys are imported at app start); "owner" sets the flag."""
+    principals = store.principals
+    pid = next(r["id"] for r in principals.rows.values() if r["name"] == name)
+    if role == "owner":
+        principals.rows[pid]["owner"] = True
+    else:
+        principals.members[(workspace, pid)] = role
+
+
 SYMBOL_NOTE = {
     "target_kind": "symbol",
     "target_ref": "AppService.find",
@@ -795,11 +813,11 @@ def test_annotation_create_list_patch_and_history(notes_env):
     )
     assert note["target_ref"] == "src/app.service.ts#AppService.find"
     assert note["note_type"] == "technical"
-    # another owner, so it is a proposal and stays out of the verified list below
-    rule = {"target_kind": "entity", "target_ref": "Pricing", "text": "x", "owner": "laptop-a"}
+    # proposals, so they stay out of the verified list below
+    rule = {"target_kind": "entity", "target_ref": "Pricing", "text": "x", "proposed": True}
     typed = client.post("/annotations", json={**rule, "note_type": "business_rule"}, headers=web)
     assert typed.json()["note_type"] == "business_rule"
-    entity = {"target_kind": "entity", "target_ref": "Login", "text": "x", "owner": "laptop-a"}
+    entity = {"target_kind": "entity", "target_ref": "Login", "text": "x", "proposed": True}
     assert client.post("/annotations", json=entity, headers=web).json()["status"] == "proposed"
 
     listed = client.get("/annotations", params={"status": "verified"}, headers=web).json()
@@ -829,20 +847,27 @@ def test_annotation_create_rejects(notes_env, body, status):
     assert client.post("/annotations", json=body, headers=_bearer(WEB_KEY)).status_code == status
 
 
-def test_verifier_rule_per_api_key(notes_env):
-    client, _, _, _, build = notes_env
-    body = {**SYMBOL_NOTE, "owner": "laptop-a"}
-    note = client.post("/annotations", json=body, headers=_bearer(WEB_KEY)).json()
+def test_a_contributor_proposes_and_a_maintainer_verifies(notes_env):
+    client, store, _, _, _ = notes_env
+    _grant(store, "laptop-a", "contributor")
+    laptop, web = _bearer(LAPTOP_KEY), _bearer(WEB_KEY)
+    note = client.post("/annotations", json=SYMBOL_NOTE, headers=laptop).json()
     path = f"/annotations/{note['id']}"
+    assert note["status"] == "proposed"
 
-    refused = client.patch(path, json={"status": "verified"}, headers=_bearer(WEB_KEY))
-    assert refused.status_code == 403 and "ANNOTATION_VERIFIERS" in refused.json()["detail"]
-    ok = client.patch(path, json={"status": "verified"}, headers=_bearer(LAPTOP_KEY))
-    assert ok.status_code == 200 and ok.json()["verified_by"] == "laptop-a"
-
-    with build("web") as trusted:
-        again = trusted.patch(path, json={"status": "rejected"}, headers=_bearer(WEB_KEY))
-        assert again.status_code == 200 and again.json()["status"] == "rejected"
+    refused = client.patch(path, json={"status": "verified"}, headers=laptop)
+    assert refused.status_code == 403 and "maintainer" in refused.json()["detail"]
+    managed = client.patch(path, json={"conflict": True}, headers=laptop)
+    assert managed.status_code == 403 and "conflict" in managed.json()["detail"]
+    edited = client.patch(path, json={"text": "Find also logs."}, headers=laptop)
+    assert edited.status_code == 200 and edited.json()["status"] == "proposed"
+    ok = client.patch(path, json={"status": "verified"}, headers=web)
+    assert ok.status_code == 200 and ok.json()["verified_by"] == "web"
+    stranger = client.post("/annotations", json=SYMBOL_NOTE, headers=web).json()
+    not_mine = client.patch(f"/annotations/{stranger['id']}", json={"text": "y"}, headers=laptop)
+    assert not_mine.status_code == 403 and "author" in not_mine.json()["detail"]
+    flagged = client.patch(path, json={"status": "needs_verification"}, headers=laptop)
+    assert flagged.status_code == 200 and flagged.json()["status"] == "needs_verification"
 
     assert (
         client.patch(
@@ -854,23 +879,24 @@ def test_verifier_rule_per_api_key(notes_env):
     assert client.get("/annotations/99", headers=_bearer(WEB_KEY)).status_code == 404
 
 
-def test_delete_annotation_by_author_or_verifier(notes_env):
-    client, _, _, notes, build = notes_env
+def test_delete_annotation_by_author_or_maintainer(notes_env):
+    client, store, _, notes, _ = notes_env
+    _grant(store, "web", "contributor")
     web, laptop = _bearer(WEB_KEY), _bearer(LAPTOP_KEY)
     mine = client.post("/annotations", json=SYMBOL_NOTE, headers=web).json()
     other = client.post("/annotations", json=SYMBOL_NOTE, headers=laptop).json()
 
     refused = client.delete(f"/annotations/{other['id']}", headers=web)
-    assert refused.status_code == 403 and "ANNOTATION_VERIFIERS" in refused.json()["detail"]
+    assert refused.status_code == 403 and "maintainer" in refused.json()["detail"]
     assert client.delete(f"/annotations/{mine['id']}", headers=web).status_code == 204
     assert client.get(f"/annotations/{mine['id']}", headers=web).status_code == 404
     assert client.delete(f"/annotations/{mine['id']}", headers=web).status_code == 404
     assert [n["id"] for n in client.get("/annotations", headers=web).json()] == [other["id"]]
     assert not [e for e in notes.events_ if e.annotation_id == mine["id"]]
 
-    with build("web") as trusted:
-        assert trusted.delete(f"/annotations/{other['id']}", headers=web).status_code == 204
-        assert trusted.get("/annotations", headers=web).json() == []
+    _grant(store, "web", "maintainer")
+    assert client.delete(f"/annotations/{other['id']}", headers=web).status_code == 204
+    assert client.get("/annotations", headers=web).json() == []
 
 
 def test_private_repo_token_is_stored_sealed_and_never_queued(notes_env, monkeypatch):
@@ -881,13 +907,14 @@ def test_private_repo_token_is_stored_sealed_and_never_queued(notes_env, monkeyp
     url, token = "https://github.com/org/app", "github_pat_11SECRETsecret0123"
     body = {"url": url, "token": token}
 
-    refused = client.post("/repos", json=body, headers=web)
-    assert refused.status_code == 403 and "ANNOTATION_VERIFIERS" in refused.json()["detail"]
-    with build("web") as trusted:
+    refused = client.post("/repos", json=body, headers=web)  # a maintainer
+    assert refused.status_code == 403 and "admin" in refused.json()["detail"]
+    _grant(store, "web", "admin")
+    with build() as trusted:
         no_key = trusted.post("/repos", json=body, headers=web)
         assert no_key.status_code == 422 and "REPO_CREDENTIALS_KEY" in no_key.json()["detail"]
     monkeypatch.setenv("REPO_CREDENTIALS_KEY", new_key())
-    with build("web") as trusted:
+    with build() as trusted:
         bad = trusted.post("/repos", json={"url": url, "token": "abc\r\nX: y"}, headers=web)
         assert bad.status_code == 422 and "X: y" not in bad.text
         assert graph.tokens == {} and store.jobs == []
@@ -902,6 +929,7 @@ def test_private_repo_token_is_stored_sealed_and_never_queued(notes_env, monkeyp
 
 def test_repos_symbols_secret_and_delete(notes_env):
     client, store, _, _, _ = notes_env
+    _grant(store, "web", "admin")  # webhook secrets are for admins
     web = _bearer(WEB_KEY)
 
     (repo,) = client.get("/repos", headers=web).json()
@@ -1112,8 +1140,9 @@ def test_review_marks_a_summary_and_goes_stale_when_it_changes(notes_env):
     assert [f["reviewed"] for f in features] == [False, False]
     assert client.get(url, headers=web).json()["review"]["current"] is False
 
+    _grant(notes_env[1], "laptop-a", "contributor")
     other = client.delete(f"{url}/review", headers=_bearer(LAPTOP_KEY))
-    assert other.status_code == 403  # only the key that marked it, or a verifier
+    assert other.status_code == 403  # only the key that marked it, or a maintainer
     assert client.delete(f"{url}/review", headers=web).status_code == 204
     assert client.delete(f"{url}/review", headers=web).status_code == 404
     assert client.get(url, headers=web).json()["review"] is None
@@ -1170,6 +1199,7 @@ def _signed(body, secret):
 
 def test_webhook_is_open_but_signed(notes_env):
     client, store, graph, _, _ = notes_env
+    _grant(store, "web", "admin")  # webhook secrets are for admins
     assert client.post("/repos/1/webhook", content=_push()).status_code == 404  # no secret yet
     secret = client.post("/repos/1/secret", headers=_bearer(WEB_KEY)).json()["secret"]
     body = _push()
@@ -1209,6 +1239,7 @@ def test_webhook_is_open_but_signed(notes_env):
 
 def test_webhook_ignores_another_branch(notes_env):
     client, store, graph, _, _ = notes_env
+    _grant(store, "web", "admin")  # webhook secrets are for admins
     graph.repos[1]["ref"] = "main"
     secret = client.post("/repos/1/secret", headers=_bearer(WEB_KEY)).json()["secret"]
     body = _push(ref="refs/heads/feature")
@@ -1287,6 +1318,7 @@ def test_per_key_cap_and_mcp_429(pg_cfg, clean_env, fake_memory, monkeypatch):
 
 def test_webhook_answers_429_when_the_daily_budget_is_gone(notes_env):
     client, store, _, _, build = notes_env
+    _grant(store, "web", "admin")  # webhook secrets are for admins
     secret = client.post("/repos/1/secret", headers=_bearer(WEB_KEY)).json()["secret"]
     store.tokens.append(("job:index_repo", None, 10**9))
     body = _push()
@@ -1311,7 +1343,7 @@ def _query_and_verify(client, web):
     assert answered.status_code == 200
     assert answered.json()["extra"]["abstain_guard"] == {"answerable": 0.95, "action": "none"}
 
-    body = {**SYMBOL_NOTE, "owner": "laptop-a"}
+    body = {**SYMBOL_NOTE, "proposed": True}
     note = client.post("/annotations", json=body, headers=web).json()
     assert (note["status"], note["conflict"]) == ("proposed", False)
     path = f"/annotations/{note['id']}"
