@@ -108,7 +108,7 @@ memang diizinkan.
 | `admin` | Pemilik workspace | + kelola anggota dan peran, kredensial repo private, secret webhook, budget workspace |
 
 Ditambah satu peran global `owner` (buat workspace, kelola semua). Matriks lengkap per endpoint
-ditulis di PRD/plan saat dikerjakan; `ANNOTATION_VERIFIERS` digantikan oleh `maintainer`.
+dan tool MCP: [`rbac.md`](rbac.md). `ANNOTATION_VERIFIERS` digantikan oleh `maintainer`.
 
 ### API key untuk banyak workspace
 
@@ -148,9 +148,9 @@ ditulis di PRD/plan saat dikerjakan; `ANNOTATION_VERIFIERS` digantikan oleh `mai
 | R4 | Login per orang lewat OIDC menggantikan `ENIGRAM_WEB_KEY` | Note dan review mencatat user yang login; tidak ada lagi aktor `web` bersama |
 
 **Migrasi dan kompatibilitas.**
-- Key di `ENIGRAM_API_KEYS` diimpor sebagai principal dengan peran `admin` di semua workspace yang
-  ada, supaya tidak ada yang rusak saat deploy; peran dipersempit sesudahnya.
-- `ANNOTATION_VERIFIERS` diimpor sebagai `maintainer`.
+- Key di `ENIGRAM_API_KEYS` diimpor sebagai principal di semua workspace yang ada: key di
+  `ANNOTATION_VERIFIERS` sebagai `admin`, key lain sebagai `maintainer`, supaya tidak ada yang rusak
+  saat deploy; peran dipersempit sesudahnya (rincian di [`rbac.md`](rbac.md)).
 - Tanpa key sama sekali (mode lokal), API tetap terbuka seperti sekarang.
 
 **Diputuskan 2026-11-08.**
