@@ -37,6 +37,8 @@ Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spe
 - **Loading** (`Loading`): skeleton rows where the content will come, never a bare "Loading…".
 - **Empty** (`Empty`): what is missing and, when there is one, the next step as a button.
 - **Errors** (`ErrorAlert`) stay where they happened, next to what failed.
+- **Go anywhere** (U3): ⌘K / Ctrl+K, or *Search* in the top bar, opens the command palette:
+  pages, other workspaces, and the code, entities and documents (`GET /targets`).
 - **Outcome of an action**: a toast at the bottom right (saved, deleted, queued); work that runs
   on (jobs) also keeps its row on the page.
 

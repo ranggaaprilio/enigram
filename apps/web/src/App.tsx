@@ -12,6 +12,7 @@ import {
   type Workspace,
 } from './api'
 import AppSidebar, { NAV } from './components/AppSidebar'
+import CommandPalette from './components/CommandPalette'
 import Empty from './components/Empty'
 import SignIn from './components/SignIn'
 import { Separator } from './components/ui/separator'
@@ -168,6 +169,7 @@ function WorkspaceShell({ home }: { home: string }) {
                 )}
               </ol>
             </nav>
+            <CommandPalette workspace={workspace} workspaces={workspaces ?? []} />
           </header>
           <div className="w-full max-w-[1140px] px-4 pt-6 pb-20 md:px-8">
             {workspaces === undefined ? null : !known ? (

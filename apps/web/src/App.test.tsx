@@ -406,3 +406,54 @@ describe('Knowledge and Review (A2)', () => {
     expect(await screen.findByLabelText('3 waiting')).toHaveTextContent('3')
   })
 })
+
+describe('Command palette (U3)', () => {
+  it('opens with Ctrl+K and goes to a page from the keyboard', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/documents')
+    await screen.findByRole('navigation', { name: 'Pages' })
+    await userEvent.keyboard('{Control>}k{/Control}')
+    const input = await screen.findByPlaceholderText(/A page, a workspace/)
+    await userEvent.type(input, 'grap')
+    expect(screen.queryByRole('option', { name: /Documents/ })).toBeNull()
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(where()).toBe('/w/ws-a/graph'))
+    expect(screen.queryByPlaceholderText(/A page, a workspace/)).toBeNull()
+  })
+
+  it('switches workspace on the same page', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/trace')
+    await userEvent.click(await screen.findByRole('button', { name: /Search and go to/ }))
+    await userEvent.type(screen.getByPlaceholderText(/A page, a workspace/), 'default')
+    await userEvent.click(await screen.findByRole('option', { name: /default/ }))
+    await waitFor(() => expect(where()).toBe('/w/default/trace'))
+  })
+
+  it('finds a feature by its route and opens it on Knowledge', async () => {
+    mockFetch({
+      ...ROUTES,
+      'GET /api/targets?q=logout': {
+        body: [
+          {
+            kind: 'feature',
+            target_kind: 'symbol',
+            target_ref: 'src/a.ts#AuthController.logout',
+            repo: 1,
+            repo_name: 'org-app',
+            label: 'POST /auth/logout',
+            detail: 'AuthController.logout · src/a.ts:3',
+            summary: null,
+          },
+        ],
+      },
+    })
+    renderAt('/w/ws-a/documents')
+    await userEvent.click(await screen.findByRole('button', { name: /Search and go to/ }))
+    await userEvent.type(screen.getByPlaceholderText(/A page, a workspace/), 'logout')
+    await userEvent.click(await screen.findByRole('option', { name: /POST \/auth\/logout/ }))
+    await waitFor(() =>
+      expect(where()).toBe('/w/ws-a/knowledge?repo=1&symbol=src%2Fa.ts%23AuthController.logout'),
+    )
+  })
+})
