@@ -295,3 +295,18 @@ async def test_repo_workspace_finds_a_repository_of_any_workspace(graph, pool):
 
     assert await other.repo_workspace(repo_id) == graph.workspace
     assert await other.repo_workspace(-1) is None
+
+
+async def test_repo_tokens_are_kept_per_workspace_and_url(graph, pool):
+    other = PostgresCodeGraph(pool, f"test_{uuid4().hex[:8]}")
+    try:
+        await graph.set_repo_token(URL, "sealed-1")
+        await graph.set_repo_token(URL, "sealed-2")  # replaces
+
+        assert await graph.repo_token(URL) == "sealed-2"
+        assert await graph.private_urls() == {URL}
+        assert await other.repo_token(URL) is None and await other.private_urls() == set()
+        await graph.delete_repo_token(URL)
+        assert await graph.repo_token(URL) is None
+    finally:
+        await pool.execute("DELETE FROM repo_credentials WHERE workspace = $1", graph.workspace)

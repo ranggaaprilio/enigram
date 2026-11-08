@@ -98,6 +98,15 @@ ALTER TABLE code_symbols ADD COLUMN IF NOT EXISTS decorators_text JSONB NOT NULL
 CREATE INDEX IF NOT EXISTS code_symbols_fts ON code_symbols
     USING GIN (to_tsvector('english', body));
 ALTER TABLE code_repos ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+-- Access tokens of private repositories, Fernet-encrypted (repo_auth); by URL, so a token
+-- exists before the repository's first index and serves every ref of it.
+CREATE TABLE IF NOT EXISTS repo_credentials (
+    workspace TEXT NOT NULL,
+    url TEXT NOT NULL,
+    sealed TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (workspace, url)
+);
 CREATE TABLE IF NOT EXISTS code_symbol_changes (
     repo_id BIGINT NOT NULL REFERENCES code_repos(id) ON DELETE CASCADE,
     symbol_id TEXT NOT NULL,
@@ -646,6 +655,33 @@ class PostgresCodeGraph:
             repo_id,
             secret,
         )
+
+    async def repo_token(self, url: str) -> str | None:
+        return await self.pool.fetchval(
+            "SELECT sealed FROM repo_credentials WHERE workspace = $1 AND url = $2",
+            self.workspace,
+            url,
+        )
+
+    async def set_repo_token(self, url: str, sealed: str) -> None:
+        await self.pool.execute(
+            "INSERT INTO repo_credentials (workspace, url, sealed) VALUES ($1, $2, $3) "
+            "ON CONFLICT (workspace, url) DO UPDATE SET sealed = $3, updated_at = now()",
+            self.workspace,
+            url,
+            sealed,
+        )
+
+    async def delete_repo_token(self, url: str) -> None:
+        await self.pool.execute(
+            "DELETE FROM repo_credentials WHERE workspace = $1 AND url = $2", self.workspace, url
+        )
+
+    async def private_urls(self) -> set[str]:
+        rows = await self.pool.fetch(
+            "SELECT url FROM repo_credentials WHERE workspace = $1", self.workspace
+        )
+        return {r["url"] for r in rows}
 
     async def delete_repo(self, repo_id: int) -> None:
         await self.pool.execute(

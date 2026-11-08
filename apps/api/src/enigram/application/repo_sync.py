@@ -1,6 +1,7 @@
-"""Index a public Git repository: shallow clone; its Markdown files are copied into books_dir as
-<repo>--<path>.md and go through the normal index pipeline, and a TypeScript repository
-(tsconfig.json at the root) also gets a code graph. Re-running re-syncs the repository."""
+"""Index a Git repository (public, or private with an access token: repo_auth): shallow clone;
+its Markdown files are copied into books_dir as <repo>--<path>.md and go through the normal
+index pipeline, and a TypeScript repository (tsconfig.json at the root) also gets a code graph.
+Re-running re-syncs the repository."""
 
 import asyncio
 import logging
@@ -22,6 +23,7 @@ from enigram.application.ports import (
     DecisionProvider,
     Deps,
 )
+from enigram.application.repo_auth import auth_env, scrub
 from enigram.application.staleness import WORKER_ACTOR, expire_verify_by
 from enigram.config import Config
 from enigram.domain.chunk import MARKDOWN_SUFFIXES, book_name
@@ -102,23 +104,39 @@ def collect_markdown(root: Path, repo: str) -> dict[str, Path]:
     return files
 
 
-def git_env(home: Path) -> dict[str, str]:
-    """Environment for git: no user config (HOME is `home`), credentials, prompts or LFS."""
+def git_env(home: Path, token: str | None = None) -> dict[str, str]:
+    """Environment for git: no user config (HOME is `home`), stored credentials, prompts or LFS;
+    a private repository's access token as an HTTP header (repo_auth.auth_env)."""
     return {
         "PATH": os.environ.get("PATH", ""),
         "HOME": str(home),
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_LFS_SKIP_SMUDGE": "1",
         "GIT_CONFIG_NOSYSTEM": "1",
+        **auth_env(token),
     }
 
 
-def clone(url: str, ref: str | None, dest: Path) -> None:
-    """Shallow clone without the user's git config, credentials or prompts."""
+def git_failure(command: str, stderr: str, url: str, token: str | None) -> EnigramError:
+    """The error for a failed clone, fetch or ls-remote, with the token scrubbed."""
+    if "could not read Username" in stderr or "Authentication failed" in stderr:
+        # GitHub and GitLab ask for credentials instead of answering 404.
+        why = (
+            "the access token is wrong, expired or has no read access to it"
+            if token
+            else "only public repositories can be indexed without an access token"
+        )
+        return EnigramError(f"git {command} failed: {url} does not exist or is private ({why})")
+    lines = scrub(stderr, token).strip().splitlines()
+    return EnigramError(f"git {command} failed: {lines[-1] if lines else 'no output'}")
+
+
+def clone(url: str, ref: str | None, dest: Path, token: str | None = None) -> None:
+    """Shallow clone without the user's git config, stored credentials or prompts."""
     command = ["git", "clone", "--depth", "1", "--single-branch", "--no-tags"]
     if ref:
         command += ["--branch", ref]
-    env = git_env(dest.parent)
+    env = git_env(dest.parent, token)
     try:
         done = subprocess.run(
             [*command, "--", url, str(dest)],
@@ -131,17 +149,10 @@ def clone(url: str, ref: str | None, dest: Path) -> None:
     except subprocess.TimeoutExpired as e:
         raise EnigramError(f"git clone took longer than {REPO_CLONE_TIMEOUT_SECS} s") from e
     if done.returncode != 0:
-        if "could not read Username" in done.stderr:
-            # GitHub and GitLab ask for credentials instead of answering 404.
-            raise EnigramError(
-                f"git clone failed: {url} does not exist or is private "
-                "(only public repositories can be indexed)"
-            )
-        lines = done.stderr.strip().splitlines()
-        raise EnigramError(f"git clone failed: {lines[-1] if lines else done.returncode}")
+        raise git_failure("clone", done.stderr, url, token)
 
 
-def remote_head(url: str, ref: str | None) -> str | None:
+def remote_head(url: str, ref: str | None, token: str | None = None) -> str | None:
     """The commit `ref` points at on the remote (`git ls-remote`, no clone): HEAD for the default
     branch, else the branch, the peeled annotated tag, or the tag. None when nothing matches."""
     refspecs = (
@@ -156,7 +167,7 @@ def remote_head(url: str, ref: str | None) -> str | None:
                 capture_output=True,
                 text=True,
                 timeout=REPO_CLONE_TIMEOUT_SECS,
-                env=git_env(Path(home)),
+                env=git_env(Path(home), token),
                 check=False,
             )
         except subprocess.TimeoutExpired as e:
@@ -164,8 +175,7 @@ def remote_head(url: str, ref: str | None) -> str | None:
     if done.returncode == 2:  # --exit-code: no matching ref
         return None
     if done.returncode != 0:
-        lines = done.stderr.strip().splitlines()
-        raise EnigramError(f"git ls-remote failed: {lines[-1] if lines else done.returncode}")
+        raise git_failure("ls-remote", done.stderr, url, token)
     rows = (line.split("\t", 1) for line in done.stdout.splitlines() if "\t" in line)
     found = {name: sha for sha, name in rows}  # "<sha>\t<ref>" per line
     for spec in refspecs:
@@ -192,6 +202,8 @@ async def delete_repo_job(
     removed = store.exists()
     shutil.rmtree(store, ignore_errors=True)
     await graph.delete_repo(repo_id)
+    if not any(r["url"] == repo["url"] for r in await graph.list_repos()):
+        await graph.delete_repo_token(repo["url"])  # no other ref of it is left
     log.info("[repo] deleted repository %d (%s): %d notes orphaned", repo_id, repo["url"], orphaned)
     return {
         "repo_id": repo_id,
@@ -211,8 +223,10 @@ async def index_repo(
     limit: int | None = None,
     notes: AnnotationRepository | None = None,
     decider: DecisionProvider | None = None,
+    token: str | None = None,
 ) -> dict[str, Any]:
-    """Index (or re-sync) a repository from one clone. Markdown: changed files are deleted and
+    """Index (or re-sync) a repository from one clone (`token`: a private repository's access
+    token, see repo_auth). Markdown: changed files are deleted and
     indexed again, files gone from the repository are deleted, uploaded documents are never
     overwritten. TypeScript: the code graph and flow summaries (`limit`: only the first N entry
     points), which need the Postgres `graph`."""
@@ -224,7 +238,7 @@ async def index_repo(
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         log.info("[repo] cloning %s%s", url, f" ({ref})" if ref else "")
-        await asyncio.to_thread(clone, url, ref, root)
+        await asyncio.to_thread(clone, url, ref, root, token)
         files = collect_markdown(root, repo)
         if is_ts_repo(root):
             if graph is None:
@@ -240,7 +254,7 @@ async def index_repo(
             from enigram.application import repo_store
 
             store = await asyncio.to_thread(
-                repo_store.ensure_store, cfg, url, ref, code["commit_sha"]
+                repo_store.ensure_store, cfg, url, ref, code["commit_sha"], token=token
             )
             code["store"] = str(store)
         else:

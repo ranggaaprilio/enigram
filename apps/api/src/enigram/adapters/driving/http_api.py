@@ -19,7 +19,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
-from pydantic import BaseModel, Field, StringConstraints, model_validator
+from pydantic import BaseModel, Field, SecretStr, StringConstraints, model_validator
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from enigram.adapters.driving.mcp_server import AppContext, create_server
@@ -45,6 +45,7 @@ from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
 from enigram.application.ports import Deps
 from enigram.application.querying import answer_question
+from enigram.application.repo_auth import check_token, save_token
 from enigram.application.repo_sync import check_ref, check_repo_url
 from enigram.application.routing import answer_routed, scope_mode
 from enigram.application.webhooks import parse_push, verify_webhook
@@ -167,6 +168,9 @@ class ConflictDetect(BaseModel):
 class RepoRequest(BaseModel):
     url: Name
     ref: str | None = None  # branch or tag; the repository's default branch when missing
+    # A private repository's personal access token: stored encrypted (repo_auth), never in the
+    # job payload; SecretStr keeps it out of validation errors. Omit it to keep a stored one.
+    token: SecretStr | None = None
 
 
 class WorkspaceCreate(BaseModel):
@@ -436,15 +440,29 @@ def create_app(
 
     @app.post("/repos", status_code=202)
     async def index_repo_route(ws: Scoped, request: Request, body: RepoRequest) -> Any:
+        token = body.token.get_secret_value() if body.token else ""
         try:
             check_repo_url(body.url, ws.cfg.repo_hosts)
             check_ref(body.ref)
+            if token:
+                check_token(token)
         except EnigramError as e:
             raise HTTPException(422, str(e)) from e
+        actor = _actor(request)
+        if token and ws.cfg.api_keys and actor not in ws.cfg.annotation_verifiers:
+            raise HTTPException(
+                403, "Only a key in ANNOTATION_VERIFIERS may add a repository access token"
+            )
         store = ws.store
         await _refuse_when_exhausted(ws)
         if any(j.payload.get("url") == body.url for j in await store.active_jobs()):
             raise HTTPException(409, f"{body.url} is already queued or running")
+        if token:
+            try:
+                await save_token(ws.cfg, ws.code_graph, body.url, token)
+            except EnigramError as e:
+                raise HTTPException(422, str(e)) from e
+            log.info("[api] %s stored an access token for %s", actor, body.url)
         payload = {"url": body.url, "api_key": _key_name(request)}
         if body.ref:
             payload["ref"] = body.ref
@@ -461,6 +479,7 @@ def create_app(
     @app.get("/repos")
     async def list_repos(ws: Scoped) -> list[dict[str, Any]]:
         repos = await ws.code_graph.list_repos()
+        private = await ws.code_graph.private_urls()
         return jsonable_encoder(
             [
                 {
@@ -471,6 +490,7 @@ def create_app(
                     "indexed_sha": r["indexed_sha"],
                     "indexed_at": r.get("indexed_at"),
                     "webhook": bool(r.get("webhook")),
+                    "private": r["url"] in private,
                 }
                 for r in repos
             ]

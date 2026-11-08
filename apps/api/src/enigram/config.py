@@ -116,6 +116,9 @@ class Config:
     annotation_verifiers: tuple[str, ...]
     # Seconds between `git ls-remote` checks of indexed repositories by the worker; 0 = off.
     repo_poll_secs: int
+    # Fernet key that encrypts the access tokens of private repositories (REPO_CREDENTIALS_KEY);
+    # empty: only public repositories can be indexed.
+    repo_credentials_key: str = field(repr=False)
     # Token caps counted from every provider call (0 = off): per worker job, per day for the
     # whole workspace (jobs and queries), and per API key per day on the query path.
     max_tokens_per_job: int
@@ -236,6 +239,7 @@ class Config:
                 if n.strip()
             ),
             repo_poll_secs=repo_poll_secs,
+            repo_credentials_key=os.environ.get("REPO_CREDENTIALS_KEY", "").strip(),
             max_tokens_per_job=caps["MAX_TOKENS_PER_JOB"],
             daily_token_budget=caps["DAILY_TOKEN_BUDGET"],
             per_key_daily_tokens=caps["PER_KEY_DAILY_TOKENS"],

@@ -427,11 +427,15 @@ async def test_delete_job_failure_fails_the_job(cfg, store, deps, fake_graph, mo
 async def test_repo_job_indexes_the_repository(
     cfg, store, deps, monkeypatch, result, status, error
 ):
+    from code_fakes import FakeCodeGraph
+
     calls = []
 
-    graph = object()
+    graph = FakeCodeGraph()  # a public repository: no access token stored
 
-    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None):
+    async def fake_index_repo(
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+    ):
         calls.append((url, ref, graph))
         return result
 
@@ -447,7 +451,9 @@ async def test_repo_job_indexes_the_repository(
 
 
 async def test_repo_job_exception_fails_the_job(cfg, store, deps, monkeypatch):
-    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None):
+    async def fake_index_repo(
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+    ):
         raise EnigramError("git clone failed: repository not found")
 
     monkeypatch.setattr(worker, "index_repo", fake_index_repo)
@@ -504,7 +510,7 @@ async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplo
         "https://github.com/org/moved": "f" * 40,
     }
 
-    def fake_remote_head(url, ref):
+    def fake_remote_head(url, ref, token=None):
         if url.endswith("down"):
             raise EnigramError("git ls-remote failed: unreachable")
         return heads[url]
@@ -524,7 +530,9 @@ async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplo
 
 
 async def test_repo_job_records_trigger_metadata(cfg, store, deps, monkeypatch):
-    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None):
+    async def fake_index_repo(
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+    ):
         return {"failed": []}
 
     monkeypatch.setattr(worker, "index_repo", fake_index_repo)
@@ -640,7 +648,9 @@ async def test_job_under_the_caps_records_its_tokens(cfg, store, deps, monkeypat
 async def test_worker_forwards_the_decider_to_index_repo(cfg, store, deps, monkeypatch):
     seen = []
 
-    async def fake_index_repo(cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None):
+    async def fake_index_repo(
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+    ):
         seen.append(decider)
         return {"failed": []}
 
@@ -648,9 +658,47 @@ async def test_worker_forwards_the_decider_to_index_repo(cfg, store, deps, monke
     await store.enqueue("index_repo", {"url": "https://github.com/org/h"})
     decider = object()
 
-    await worker.process_next(cfg, store, deps, "graph", "notes", decider)
+    from code_fakes import FakeCodeGraph
+
+    await worker.process_next(cfg, store, deps, FakeCodeGraph(), "notes", decider)
 
     assert seen == [decider]
+
+
+async def test_private_repositories_use_their_token_to_index_and_poll(
+    cfg, store, deps, monkeypatch
+):
+    from code_fakes import SHA, FakeCodeGraph
+
+    from enigram.application.repo_auth import new_key, save_token
+
+    cfg = replace(cfg, repo_credentials_key=new_key())
+    url = "https://github.com/org/private"
+    graph = FakeCodeGraph()
+    graph.repos[2] = {"id": 2, "url": url, "ref": None, "indexed_sha": SHA, "report": {}}
+    await save_token(cfg, graph, url, "ghp_secret123")
+    seen = []
+
+    async def fake_index_repo(
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+    ):
+        seen.append(("index", token))
+        return {"failed": []}
+
+    def fake_remote_head(url, ref, token=None):
+        seen.append(("poll", token))
+        return "f" * 40
+
+    monkeypatch.setattr(worker, "index_repo", fake_index_repo)
+    monkeypatch.setattr(worker, "remote_head", fake_remote_head)
+    job = await store.enqueue("index_repo", {"url": url})
+
+    await worker.process_next(cfg, store, deps, graph)
+    assert await worker.poll_repos(cfg, store, graph) == 1
+
+    assert seen == [("index", "ghp_secret123"), ("poll", "ghp_secret123")]
+    assert all("ghp_secret123" not in str(j.payload) for j in store.jobs)
+    assert (await store.get_job(job.id)).status == "done"
 
 
 async def test_detect_conflicts_job_runs_and_reports(cfg, store, deps, monkeypatch):

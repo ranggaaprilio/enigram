@@ -240,6 +240,46 @@ describe('Documents', () => {
     expect(await screen.findByText(/not in REPO_HOSTS/)).toHaveClass('error-box')
   })
 
+  it('sends the access token of a private repository and clears it', async () => {
+    const fetch = mockFetch({
+      'GET /api/documents': { body: [] },
+      'POST /api/repos': {
+        status: 202,
+        body: {
+          repo: 'https://github.com/org/private',
+          job: {
+            id: 42,
+            kind: 'index_repo',
+            payload: {},
+            status: 'queued',
+            result: null,
+            error: null,
+            created_at: '2026-11-08T10:00:00Z',
+            started_at: null,
+            finished_at: null,
+          },
+        },
+      },
+    })
+    render(<Documents />)
+
+    await userEvent.type(
+      await screen.findByLabelText('Index a Git repository'),
+      'https://github.com/org/private',
+    )
+    const token = screen.getByLabelText('Access token')
+    expect(token).toHaveAttribute('type', 'password')
+    await userEvent.type(token, 'github_pat_11ABC')
+    await userEvent.click(screen.getByRole('button', { name: 'Index' }))
+
+    const call = fetch.mock.calls.find(([url]) => url === '/api/repos')
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      url: 'https://github.com/org/private',
+      token: 'github_pat_11ABC',
+    })
+    expect(await screen.findByLabelText('Access token')).toHaveValue('')
+  })
+
   it('labels documents from a repository', async () => {
     mockFetch({
       'GET /api/documents': {

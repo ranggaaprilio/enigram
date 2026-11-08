@@ -474,6 +474,19 @@ class CodeGraphRepository(Protocol):
 
     async def set_webhook_secret(self, repo_id: int, secret: str) -> None: ...
 
+    async def repo_token(self, url: str) -> str | None:
+        """The encrypted access token of a private repository URL (repo_auth), or None. Kept
+        by URL, not repo id: a repository has none before its first index."""
+        ...
+
+    async def set_repo_token(self, url: str, sealed: str) -> None: ...
+
+    async def delete_repo_token(self, url: str) -> None: ...
+
+    async def private_urls(self) -> set[str]:
+        """URLs with an access token, for the `private` flag of GET /repos."""
+        ...
+
     async def delete_repo(self, repo_id: int) -> None:
         """The repo row and, by cascade, its files, symbols, edges, entry points, summaries,
         embeddings and symbol changes."""

@@ -165,6 +165,7 @@ class FakeCodeGraph:
         self.saved_batches: list[int] = []
         self.calls: list[tuple[str, Any]] = []
         self.secrets: dict[int, str] = {}
+        self.tokens: dict[str, str] = {}  # url -> sealed access token
         self.changes: list[tuple[int, str, str, str | None, str | None]] = []
         self.change_at: list[datetime] = []  # parallel to `changes`: when each was recorded
         self.index_runs: list[tuple[int, str, datetime]] = []
@@ -372,6 +373,18 @@ class FakeCodeGraph:
 
     async def set_webhook_secret(self, repo_id, secret):
         self.secrets[repo_id] = secret
+
+    async def repo_token(self, url):
+        return self.tokens.get(url)
+
+    async def set_repo_token(self, url, sealed):
+        self.tokens[url] = sealed
+
+    async def delete_repo_token(self, url):
+        self.tokens.pop(url, None)
+
+    async def private_urls(self):
+        return set(self.tokens)
 
     async def delete_repo(self, repo_id):
         for table in (self.repos, self.graphs, self.blobs, self.secrets):
