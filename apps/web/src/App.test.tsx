@@ -173,7 +173,6 @@ describe('App frame', () => {
     const links = within(nav).getAllByRole('link')
     expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
       ['Dashboard', '/w/ws-a/dashboard'],
-      ['Ask', '/w/ws-a/ask'],
       ['Chat', '/w/ws-a/chat'],
       ['Trace', '/w/ws-a/trace'],
       ['Documents', '/w/ws-a/documents'],
@@ -363,6 +362,16 @@ describe('Page patterns (U2)', () => {
     // The old /code link opens Knowledge with the same symbol.
     await waitFor(() => expect(crumbs).toHaveTextContent('ws-a / Knowledge / AuthService.logout'))
     expect(where()).toBe('/w/ws-a/knowledge?repo=1&symbol=src%2Fa.ts%23AuthService.logout')
+  })
+
+  it('opens an old Ask link on Chat', async () => {
+    mockFetch({
+      ...ROUTES,
+      'GET /api/chat/sessions': { body: [] },
+      'GET /api/chat/agents': { body: [] },
+    })
+    renderAt('/w/ws-a/ask')
+    await waitFor(() => expect(where()).toBe('/w/ws-a/chat'))
   })
 
   it('confirms an action with a toast', async () => {

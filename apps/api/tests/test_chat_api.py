@@ -87,7 +87,8 @@ def _start(client, headers=LAPTOP, **body):
 
 def test_a_turn_streams_its_steps_and_stores_the_answer_with_its_trace(chat_env):
     client, store, asked = chat_env
-    session = _start(client)
+    assert _start(client)["agent"] == "auto"  # a session names no agent: Auto, as Ask was
+    session = _start(client, agent="technical")
     assert (session["title"], session["agent"], session["mine"]) == ("New chat", "technical", True)
 
     events = _events(
@@ -123,7 +124,7 @@ def test_a_turn_streams_its_steps_and_stores_the_answer_with_its_trace(chat_env)
 
 def test_a_follow_up_sees_the_answered_turns_before_it(chat_env):
     client, _, asked = chat_env
-    sid = _start(client)["id"]
+    sid = _start(client, agent="technical")["id"]
     for text in ("Who may call /users?", "break", "And what does a normal user get?"):
         client.post(f"/chat/sessions/{sid}/messages", json={"text": text}, headers=LAPTOP)
     # The failed turn is stored with its error and left out of the history.
@@ -193,8 +194,8 @@ def test_bad_input_is_refused_before_the_stream(chat_env):
     )
     assert asked == []
     agents = client.get("/chat/agents", headers=LAPTOP).json()
-    assert [a["name"] for a in agents] == ["technical", "business", "qa", "overview"]
-    assert {"label", "description"} <= set(agents[1]) and "focus" not in agents[1]
+    assert [a["name"] for a in agents] == ["auto", "technical", "business", "qa", "overview"]
+    assert {"label", "description"} <= set(agents[2]) and "focus" not in agents[2]
 
 
 def test_a_used_up_budget_is_an_answer_with_an_error(chat_env):

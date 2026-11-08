@@ -52,6 +52,7 @@ const ANSWER = message(2, {
 })
 const QUESTION = message(1, { text: 'Who may call /users?' })
 const AGENTS = [
+  { name: 'auto', label: 'Auto', description: 'Picks for you', aliases: ['ask'] },
   { name: 'technical', label: 'Technical', description: 'Code flows', aliases: ['tech'] },
   { name: 'business', label: 'Business rules', description: 'Plain rules', aliases: [] },
   { name: 'qa', label: 'QA', description: 'Test scenarios', aliases: [] },
@@ -235,10 +236,15 @@ describe('Chat agents', () => {
     )
     renderAt('/chat')
     const group = await screen.findByRole('radiogroup', { name: 'Agent' })
+    // A new chat starts with Auto, what the Ask page did.
+    expect(await within(group).findByRole('radio', { name: 'Auto' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
     await userEvent.click(await within(group).findByRole('radio', { name: 'QA' }))
     expect(within(group).getByRole('radio', { name: 'QA' })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText('Test scenarios')).toBeInTheDocument()
-    expect(screen.getByText(/@technical, @business, @qa, @overview/)).toBeInTheDocument()
+    expect(screen.getByText(/@auto, @technical, @business, @qa, @overview/)).toBeInTheDocument()
 
     await userEvent.type(screen.getByRole('textbox', { name: 'Message' }), 'Scenarios?{Enter}')
     const conversation = await screen.findByRole('list', { name: 'Conversation' })
@@ -257,7 +263,7 @@ describe('Chat agents', () => {
     })
     renderAt('/chat/1')
     const select = await screen.findByRole('combobox', { name: 'Agent' })
-    await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(4))
+    await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(5))
     await userEvent.selectOptions(select, 'business')
     await waitFor(() => expect(select).toHaveValue('business'))
     const patch = fetch.mock.calls.find(([, i]) => i?.method === 'PATCH')!

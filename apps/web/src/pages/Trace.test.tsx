@@ -51,7 +51,7 @@ describe('Trace', () => {
     mockFetch({ 'GET /api/queries?limit=50': { body: [] } })
     renderAt('/trace')
     expect(await screen.findByText(/No queries yet/)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Ask a question' })).toHaveAttribute('href', '/ask')
+    expect(screen.getByRole('link', { name: 'Ask a question' })).toHaveAttribute('href', '/chat')
   })
 
   it('lists queries with their outcome', async () => {

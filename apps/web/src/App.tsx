@@ -17,7 +17,6 @@ import Empty from './components/Empty'
 import SignIn from './components/SignIn'
 import { Separator } from './components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar'
-import Ask from './pages/Ask'
 import Chat from './pages/Chat'
 import Dashboard from './pages/Dashboard'
 import Documents from './pages/Documents'
@@ -204,7 +203,8 @@ function WorkspaceShell({ home }: { home: string }) {
               <Routes key={workspace}>
                 <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="documents" element={<Documents />} />
-                <Route path="ask" element={<Ask />} />
+                {/* The Ask page became the Auto agent of Chat (2026-11-08). */}
+                <Route path="ask" element={<Moved to="chat" />} />
                 <Route path="chat/:id?" element={<Chat />} />
                 <Route path="knowledge" element={<Knowledge />} />
                 {/* Before item 5 A2: Code and Annotations were pages of their own. */}

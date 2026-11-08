@@ -254,7 +254,7 @@ export default function Documents() {
         title="Documents"
         description={
           canEdit
-            ? 'Upload files or index a Git repository. Everything here becomes searchable on the Ask page once it is indexed.'
+            ? 'Upload files or index a Git repository. Everything here becomes searchable on the Chat page once it is indexed.'
             : `The documents and repositories indexed in this workspace. Uploading and indexing need the maintainer role (yours: ${access.role}).`
         }
         action={
