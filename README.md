@@ -317,6 +317,7 @@ write the same index.
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set, whether it is `private` (has an access token) |
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50) |
 | `GET /review` | The inbox: notes waiting for a person (proposed, flagged for a re-check, orphaned, verified but conflicting), each with the summary it was written against and the summary now |
+| `GET /stats?days=30` | The Dashboard's numbers for the last 1-90 UTC days: tokens per day and source against `DAILY_TOKEN_BUDGET` (per key for an `admin` only), questions per day with unanswered, errors and p50/p95 latency, answer routes and sentence origins, documents per status, repositories with size and last index, entry point ✓ coverage, notes per type and status, and what needs attention (inbox counts, doc-code conflicts, jobs failed or over budget in 7 days) |
 | `GET /targets?q=` | What a note can be about, by what people know: features (route), symbols, graph entities and documents matching `q`, at most 8 of each, with a short summary (the note form's search box) |
 | `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each and whether their summary has a current ✓ (`reviewed`), the first 500 whose route or symbol name contains `q`, plus `total` |
 | `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |

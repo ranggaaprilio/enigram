@@ -57,6 +57,7 @@ sama.
 | `POST /documents` | `maintainer` | Upload memakai token (index) |
 | `DELETE /documents/{book}` | `maintainer` | |
 | `GET /jobs/{id}` | `viewer` | Job workspace itu saja |
+| `GET /stats` | `viewer` | Angka Dashboard (item 6); `tokens.by_key` hanya untuk `admin`, peran lain mendapat `null` |
 
 ### Repo dan Code page
 
