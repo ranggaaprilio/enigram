@@ -406,6 +406,14 @@ const sendJson = <T>(path: string, body: unknown) =>
 
 export const listWorkspaces = () => request<Workspace[]>('/workspaces')
 
+// GET /me: the caller and its role per workspace; principal null when the API has no keys.
+export interface Me {
+  principal: { name: string; kind: string; owner: boolean; default_workspace: string | null } | null
+  roles: Record<string, string>
+}
+
+export const getMe = () => request<Me>('/me')
+
 export const createWorkspace = (name: string) => sendJson<Workspace>('/workspaces', { name })
 
 export const ask= (question: string, mode: Mode, scope: Scope = 'auto') =>

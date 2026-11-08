@@ -249,6 +249,8 @@ kontras WCAG AA di terang dan gelap.
 - Sidebar default terbuka; command palette (U3) nanti, setelah U1–U2.
 - Aturan lama (terang sebagai default, satu kartu sorotan) **dibuka lagi**: ditentukan ulang saat
   menulis acuan baru. Pilihan tema terang/gelap/sistem di menu user tetap masuk lingkup.
+- Acuan baru: [`design.md`](design.md) (U1, 2026-11-08). Tema default ikut sistem; kartu sorotan
+  dihapus (netral, warna hanya untuk status); kepadatan rapat, body 14px.
 
 **Urutan.** U1 dikerjakan sebelum Dashboard (item 6) dan Memory (item 7), supaya halaman baru
 langsung dibangun di kerangka baru. U2–U4 bisa berjalan bersamaan dengan item lain.
