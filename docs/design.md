@@ -20,8 +20,8 @@ Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spe
 - Left sidebar, open by default, collapses to icons (⌘B / Ctrl+B or the toggle); its state is kept
   per browser.
   - Top: the workspace picker and *New workspace*.
-  - Middle: page groups. *Answers* (Ask, Trace) and *Knowledge* (Documents, Code, Annotations,
-    Graph) now; *Review*, *Monitor* and *Settings* join as their pages land (items 2, 5, 6, 7).
+  - Middle: page groups. *Answers* (Ask, Trace), *Library* (Documents, Knowledge, Graph),
+    *Review* (Inbox), *Monitor* (Dashboard) and *Settings* (Members).
   - Bottom: the user menu (who is signed in, the role in this workspace, the theme).
 - Below 768px the sidebar is a drawer opened from the menu button; the top bar shows the page
   title.
@@ -39,6 +39,10 @@ Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spe
 - **Errors** (`ErrorAlert`) stay where they happened, next to what failed.
 - **Go anywhere** (U3): ⌘K / Ctrl+K, or *Search* in the top bar, opens the command palette:
   pages, other workspaces, and the code, entities and documents (`GET /targets`).
+- **Numbers** (Dashboard, D2): a tile is a label, one number and a line of context, and links to
+  the page that lists what it counts. A daily chart is one series of thin bars from the baseline
+  in the foreground colour, every day of the period shown (quiet days empty); hover or focus a
+  bar to read it, otherwise the line above the chart gives the period's total. No chart library.
 - **Outcome of an action**: a toast at the bottom right (saved, deleted, queued); work that runs
   on (jobs) also keeps its row on the page.
 

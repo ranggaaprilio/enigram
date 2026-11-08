@@ -178,6 +178,7 @@ describe('App frame', () => {
       ['Knowledge', '/w/ws-a/knowledge'],
       ['Graph', '/w/ws-a/graph'],
       ['Inbox', '/w/ws-a/review'],
+      ['Dashboard', '/w/ws-a/dashboard'],
       ['Members', '/w/ws-a/members'], // no /me here: the API alone decides
     ])
     expect(within(nav).getByRole('link', { name: 'Knowledge' })).toHaveAttribute(

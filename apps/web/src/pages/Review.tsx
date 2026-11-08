@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { useSearchParams } from 'react-router'
 import remarkGfm from 'remark-gfm'
 import { toast } from 'sonner'
 import { useAccess } from '../access'
@@ -40,7 +41,10 @@ const muted = 'text-[13px] text-muted-foreground'
 export default function Review() {
   const [items, setItems] = useState<ReviewItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [shown, setShown] = useState<ReviewReason | 'all'>('all')
+  // ?show=<reason> opens one filter (the Dashboard links here).
+  const [params] = useSearchParams()
+  const asked = REASONS.find((r) => r.key === params.get('show'))?.key
+  const [shown, setShown] = useState<ReviewReason | 'all'>(asked ?? 'all')
   // Bulk decisions (A3): ids picked with the checkboxes.
   const [picked, setPicked] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)

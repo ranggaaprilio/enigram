@@ -18,6 +18,7 @@ import SignIn from './components/SignIn'
 import { Separator } from './components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar'
 import Ask from './pages/Ask'
+import Dashboard from './pages/Dashboard'
 import Documents from './pages/Documents'
 import Graph from './pages/Graph'
 import Knowledge from './pages/Knowledge'
@@ -190,6 +191,7 @@ function WorkspaceShell({ home }: { home: string }) {
                 <Route path="trace" element={<TraceList />} />
                 <Route path="trace/:id" element={<TraceDetail />} />
                 <Route path="graph" element={<Graph />} />
+                <Route path="dashboard" element={<Dashboard />} />
                 <Route path="members" element={<Members />} />
                 <Route path="*" element={<Empty>Not found.</Empty>} />
               </Routes>
