@@ -86,9 +86,15 @@ class FakeJobStore:
         keep = ("id", "source", "question", "mode", "found", "error", "api_key", "created_at")
         return [{k: q[k] for k in keep} for q in reversed(self.queries)][:limit]
 
-    async def search_graph(self, phrase, limit=50):
-        self.searches.append((phrase, limit))
+    async def search_graph(self, phrase="", limit=50, offset=0, entity_type=None):
+        self.searches.append((phrase, limit, offset, entity_type))
         return self.graph
+
+    async def graph_types(self):
+        return [{"type": "concept", "count": 2}]
+
+    async def entity_relations(self, name, limit=100):
+        return [r for r in self.graph["relations"] if name in (r["source"], r["target"])]
 
     async def add_tokens(self, source, api_key, tokens):
         self.tokens.append((source, api_key, tokens))

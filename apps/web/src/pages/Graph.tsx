@@ -7,25 +7,38 @@ import {
   deleteRelation,
   editEntity,
   editRelation,
+  entityRelations,
   getJob,
+  graphTypes,
   mergeEntities,
   messageOf,
   searchGraph,
   type GraphEntity,
   type GraphRelation,
   type GraphSearch,
+  type GraphType,
   type Job,
   type JobAccepted,
 } from '../api'
-import { Merge, Search } from 'lucide-react'
+import { Merge, Search, X } from 'lucide-react'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
+import Loading from '@/components/Loading'
 import PageHeader from '@/components/PageHeader'
 import StatusBadge from '@/components/StatusBadge'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
 import {
   Table,
   TableBody,
@@ -35,8 +48,11 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { WsLink } from '@/workspace'
 
 const POLL_MS = 3000
+const PAGE = 50
+const TYPING_MS = 300
 
 // One row's identity: entities by name, relations by both ends (as in Trace).
 const entityKey = (e: GraphEntity) => `e:${e.name}`
@@ -50,33 +66,65 @@ interface Change {
   error: string | null
 }
 
+// What the side panel shows: one entity or one relation.
+type Panel = { kind: 'entity'; entity: GraphEntity } | { kind: 'relation'; relation: GraphRelation }
+
+type Tab = 'entities' | 'relations'
+
 const isActive = (c: Change) => c.status === 'queued' || c.status === 'running'
+
+function addNew<T>(list: T[], more: T[], key: (item: T) => string): T[] {
+  const seen = new Set(list.map(key))
+  return [...list, ...more.filter((item) => !seen.has(key(item)))]
+}
 
 export default function Graph() {
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
+  const type = params.get('type') ?? ''
+  const tab: Tab = params.get('tab') === 'relations' ? 'relations' : 'entities'
   const [draft, setDraft] = useState(q)
   const [found, setFound] = useState<GraphSearch | null>(null)
+  const [more, setMore] = useState({ entities: false, relations: false })
+  const [types, setTypes] = useState<GraphType[]>([])
   const [error, setError] = useState<string | null>(null)
   const [changes, setChanges] = useState<Change[]>([])
-  const [editing, setEditing] = useState<string | null>(null)
-  const [confirming, setConfirming] = useState<string | null>(null)
+  const [panel, setPanel] = useState<Panel | null>(null)
   const [selected, setSelected] = useState<string[]>([])
   const [mergeTarget, setMergeTarget] = useState('')
   const canEdit = useAccess().can('maintainer') // docs/rbac.md: graph edits
 
+  function update(next: { q?: string; type?: string; tab?: Tab }) {
+    const merged = { q, type, tab, ...next }
+    const kept: Record<string, string> = {}
+    if (merged.q) kept.q = merged.q
+    if (merged.type) kept.type = merged.type
+    if (merged.tab === 'relations') kept.tab = 'relations'
+    setParams(kept, { replace: true })
+  }
+
+  // No phrase: the whole graph, most connected entities first.
   const search = useCallback(async () => {
-    if (!q) {
-      setFound(null)
-      return
-    }
     try {
-      setFound(await searchGraph(q))
+      const page = await searchGraph({ q, type, limit: PAGE })
+      setFound(page)
+      setMore({
+        entities: page.entities.length === PAGE,
+        relations: page.relations.length === PAGE,
+      })
       setError(null)
     } catch (e) {
       setError(messageOf(e))
     }
-  }, [q])
+  }, [q, type])
+
+  const loadTypes = useCallback(async () => {
+    try {
+      setTypes(await graphTypes())
+    } catch {
+      // The filter is a convenience: the list still works without it.
+    }
+  }, [])
 
   useEffect(() => {
     setDraft(q)
@@ -84,6 +132,18 @@ export default function Graph() {
     setMergeTarget('')
     void search()
   }, [q, search])
+
+  useEffect(() => {
+    void loadTypes()
+  }, [loadTypes])
+
+  // Search as you type: the phrase reaches the URL once typing stops.
+  useEffect(() => {
+    if (draft.trim() === q) return
+    const timer = setTimeout(() => update({ q: draft.trim() }), TYPING_MS)
+    return () => clearTimeout(timer)
+    // `update` is rebuilt every render from q, type and tab: those are the real inputs.
+  }, [draft, q, type, tab])
 
   // setTimeout after each poll rather than setInterval, so slow responses never overlap. Every
   // poll replaces `changes`, which schedules the next one even when no status moved.
@@ -101,10 +161,13 @@ export default function Graph() {
           return job ? { ...c, status: job.status, error: job.error } : c
         }),
       )
-      if (settled) void search()
+      if (settled) {
+        void search()
+        void loadTypes()
+      }
     }, POLL_MS)
     return () => clearTimeout(timer)
-  }, [pendingKey, changes, search])
+  }, [pendingKey, changes, search, loadTypes])
 
   const busy = (key: string) => changes.some((c) => isActive(c) && c.keys.includes(key))
 
@@ -117,16 +180,46 @@ export default function Graph() {
       ])
       setError(null)
       toast.success(`Queued: ${label}`)
+      return true
+    } catch (e) {
+      setError(messageOf(e))
+      return false
+    }
+  }
+
+  async function loadMore() {
+    if (!found) return
+    try {
+      if (tab === 'entities') {
+        const page = await searchGraph({ q, type, limit: PAGE, offset: found.entities.length })
+        setFound({ ...found, entities: addNew(found.entities, page.entities, entityKey) })
+        setMore({ ...more, entities: page.entities.length === PAGE })
+      } else {
+        const page = await searchGraph({ q, type, limit: PAGE, offset: found.relations.length })
+        setFound({ ...found, relations: addNew(found.relations, page.relations, relationKey) })
+        setMore({ ...more, relations: page.relations.length === PAGE })
+      }
     } catch (e) {
       setError(messageOf(e))
     }
-    setEditing(null)
-    setConfirming(null)
+  }
+
+  // An entity named elsewhere (a relation end) may not be on the loaded page: look it up.
+  async function openEntity(name: string) {
+    const known = found?.entities.find((e) => e.name === name)
+    if (known) return setPanel({ kind: 'entity', entity: known })
+    try {
+      const hit = (await searchGraph({ q: name, limit: 200 })).entities.find((e) => e.name === name)
+      if (hit) setPanel({ kind: 'entity', entity: hit })
+      else setError(`No entity ${name}`)
+    } catch (e) {
+      setError(messageOf(e))
+    }
   }
 
   function submitSearch(event: FormEvent) {
     event.preventDefault()
-    setParams(draft.trim() ? { q: draft.trim() } : {})
+    update({ q: draft.trim() })
   }
 
   function toggle(name: string) {
@@ -147,26 +240,61 @@ export default function Graph() {
     setSelected([])
   }
 
+  const graphIsEmpty =
+    found !== null && !q && !type && found.entities.length === 0 && found.relations.length === 0
+  const count = (n: number, hasMore: boolean) => `${n}${hasMore ? '+' : ''}`
+
   return (
     <section>
       <PageHeader
         title="Graph"
         description="Fix every entity and relation that still states the old fact: answers follow the graph only when it no longer contradicts itself."
       />
-      <form className="mb-6 flex flex-col gap-2" onSubmit={submitSearch}>
-        <Label htmlFor="graph-q" className="text-muted-foreground">
-          Find entities and relations containing
-        </Label>
-        <div className="flex max-w-xl gap-2">
-          <Input
-            id="graph-q"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="60%"
-          />
-          <Button type="submit" disabled={!draft.trim()}>
-            <Search /> Search
-          </Button>
+      <form className="mb-4 flex flex-wrap items-end gap-2" role="search" onSubmit={submitSearch}>
+        <div className="flex min-w-64 flex-1 flex-col gap-1.5 sm:max-w-xl">
+          <Label htmlFor="graph-q" className="text-muted-foreground">
+            Find entities and relations containing
+          </Label>
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              id="graph-q"
+              className="pr-9 pl-9"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Name or phrase, e.g. 60%"
+            />
+            {draft && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                className="absolute top-1/2 right-3 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setDraft('')
+                  update({ q: '' })
+                }}
+              >
+                <X className="size-4" />
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="graph-type" className="text-muted-foreground">
+            Entity type
+          </Label>
+          <NativeSelect
+            id="graph-type"
+            value={type}
+            onChange={(e) => update({ type: e.target.value })}
+          >
+            <NativeSelectOption value="">All types</NativeSelectOption>
+            {types.map((t) => (
+              <NativeSelectOption key={t.type} value={t.type}>
+                {t.type} ({t.count})
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
         </div>
       </form>
 
@@ -187,189 +315,398 @@ export default function Graph() {
         </ul>
       )}
 
-      {!found && (
-        <Empty>Search for a phrase to list the entities and relations that state it.</Empty>
+      {!found && !error && <Loading />}
+
+      {graphIsEmpty && (
+        <Empty
+          action={
+            <Button asChild variant="secondary" size="sm">
+              <WsLink to="/documents">Upload documents</WsLink>
+            </Button>
+          }
+        >
+          No graph yet. Upload documents to build it.
+        </Empty>
       )}
 
-      {found && (
+      {found && !graphIsEmpty && (
         <>
-          <h2>Entities ({found.entities.length})</h2>
-          {found.entities.length === 0 ? (
-            <Empty>No entity mentions “{q}”.</Empty>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8">
-                    <span className="sr-only">Merge</span>
-                  </TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {found.entities.map((e) => {
-                  const key = entityKey(e)
-                  const isSelected = selected.includes(e.name)
-                  return (
-                    <TableRow key={key} data-state={isSelected ? 'selected' : undefined}>
-                      <TableCell>
-                        {canEdit && (
-                          <Checkbox
-                            aria-label={`Select ${e.name}`}
-                            checked={isSelected}
-                            onCheckedChange={() => toggle(e.name)}
-                          />
-                        )}
-                      </TableCell>
-                      <TableCell className="font-medium">{e.name}</TableCell>
-                      <TableCell className="text-muted-foreground">{e.type}</TableCell>
-                      <TableCell className="min-w-80">
-                        {editing === key ? (
-                          <EditForm
-                            description={e.description ?? ''}
-                            extraLabel="Type"
-                            extra={e.type ?? ''}
-                            onCancel={() => setEditing(null)}
-                            onSave={(description, entity_type) =>
-                              queue([key], `Edit ${e.name}`, () =>
-                                editEntity({ name: e.name, description, entity_type }),
-                              )
-                            }
-                          />
-                        ) : (
-                          e.description
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <RowActions
-                          label={e.name}
-                          disabled={busy(key)}
-                          hidden={editing === key}
-                          confirming={confirming === key}
-                          onEdit={() => setEditing(key)}
-                          onDelete={() => setConfirming(key)}
-                          onCancelDelete={() => setConfirming(null)}
-                          onConfirmDelete={() =>
-                            queue([key], `Delete ${e.name}`, () => deleteEntity(e.name))
-                          }
-                        />
-                      </TableCell>
+          <div role="tablist" aria-label="Graph rows" className="mb-3 flex gap-1.5">
+            {(['entities', 'relations'] as const).map((t) => (
+              <Button
+                key={t}
+                type="button"
+                role="tab"
+                size="sm"
+                aria-selected={tab === t}
+                variant={tab === t ? 'default' : 'secondary'}
+                onClick={() => update({ tab: t })}
+              >
+                {t === 'entities'
+                  ? `Entities (${count(found.entities.length, more.entities)})`
+                  : `Relations (${count(found.relations.length, more.relations)})`}
+              </Button>
+            ))}
+          </div>
+
+          {tab === 'entities' && (
+            <>
+              {found.entities.length === 0 ? (
+                <Empty>{q ? `No entity mentions “${q}”.` : 'No entity of this type.'}</Empty>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8">
+                        <span className="sr-only">Merge</span>
+                      </TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead className="text-right">Relations</TableHead>
+                      <TableHead>Description</TableHead>
                     </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {found.entities.map((e) => {
+                      const isSelected = selected.includes(e.name)
+                      return (
+                        <TableRow
+                          key={entityKey(e)}
+                          className="cursor-pointer"
+                          data-state={isSelected ? 'selected' : undefined}
+                          onClick={() => setPanel({ kind: 'entity', entity: e })}
+                        >
+                          <TableCell onClick={(event) => event.stopPropagation()}>
+                            {canEdit && (
+                              <Checkbox
+                                aria-label={`Select ${e.name}`}
+                                checked={isSelected}
+                                onCheckedChange={() => toggle(e.name)}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell className="font-medium">
+                            <button
+                              type="button"
+                              className="text-left hover:underline"
+                              aria-label={`Open ${e.name}`}
+                            >
+                              {e.name}
+                            </button>
+                          </TableCell>
+                          <TableCell>
+                            {e.type && <Badge variant="secondary">{e.type}</Badge>}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{e.degree}</TableCell>
+                          <TableCell className="min-w-80 whitespace-normal">
+                            <span className="line-clamp-2">{e.description}</span>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+
+              {selected.length > 0 && (
+                <div className="my-4 flex flex-wrap items-center gap-3 rounded-md bg-card px-5 py-4">
+                  <Label htmlFor="merge-target">Merge selected into</Label>
+                  <Input
+                    id="merge-target"
+                    className="w-64"
+                    value={mergeTarget}
+                    onChange={(e) => setMergeTarget(e.target.value)}
+                  />
+                  <Button type="button" disabled={!canMerge} onClick={() => void merge()}>
+                    <Merge /> Merge
+                  </Button>
+                </div>
+              )}
+            </>
           )}
 
-          {selected.length > 0 && (
-            <div className="my-4 flex flex-wrap items-center gap-3 rounded-md bg-card px-5 py-4">
-              <Label htmlFor="merge-target">Merge selected into</Label>
-              <Input
-                id="merge-target"
-                className="w-64"
-                value={mergeTarget}
-                onChange={(e) => setMergeTarget(e.target.value)}
-              />
-              <Button type="button" disabled={!canMerge} onClick={() => void merge()}>
-                <Merge /> Merge
+          {tab === 'relations' &&
+            (found.relations.length === 0 ? (
+              <Empty>{q ? `No relation mentions “${q}”.` : 'No relation yet.'}</Empty>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Source → Target</TableHead>
+                    <TableHead>Keywords</TableHead>
+                    <TableHead>Description</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {found.relations.map((r) => (
+                    <TableRow
+                      key={relationKey(r)}
+                      className="cursor-pointer"
+                      onClick={() => setPanel({ kind: 'relation', relation: r })}
+                    >
+                      <TableCell className="font-medium">
+                        <button
+                          type="button"
+                          className="text-left hover:underline"
+                          aria-label={`Open ${r.source} → ${r.target}`}
+                        >
+                          {r.source} → {r.target}
+                        </button>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{r.keywords}</TableCell>
+                      <TableCell className="min-w-80 whitespace-normal">
+                        <span className="line-clamp-2">{r.description}</span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ))}
+
+          {more[tab] && (
+            <div className="my-4 flex justify-center">
+              <Button type="button" variant="secondary" onClick={() => void loadMore()}>
+                Load more
               </Button>
             </div>
           )}
-
-          <h2>Relations ({found.relations.length})</h2>
-          {found.relations.length === 0 ? (
-            <Empty>No relation mentions “{q}”.</Empty>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Source → Target</TableHead>
-                  <TableHead>Keywords</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {found.relations.map((r) => {
-                  const key = relationKey(r)
-                  const label = `${r.source} → ${r.target}`
-                  return (
-                    <TableRow key={key}>
-                      <TableCell className="font-medium">{label}</TableCell>
-                      <TableCell className="text-muted-foreground">{r.keywords}</TableCell>
-                      <TableCell className="min-w-80">
-                        {editing === key ? (
-                          <EditForm
-                            description={r.description ?? ''}
-                            extraLabel="Keywords"
-                            extra={r.keywords ?? ''}
-                            onCancel={() => setEditing(null)}
-                            onSave={(description, keywords) =>
-                              queue([key], `Edit ${label}`, () =>
-                                editRelation({
-                                  source: r.source,
-                                  target: r.target,
-                                  description,
-                                  keywords,
-                                }),
-                              )
-                            }
-                          />
-                        ) : (
-                          r.description
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <RowActions
-                          label={label}
-                          disabled={busy(key)}
-                          hidden={editing === key}
-                          confirming={confirming === key}
-                          onEdit={() => setEditing(key)}
-                          onDelete={() => setConfirming(key)}
-                          onCancelDelete={() => setConfirming(null)}
-                          onConfirmDelete={() =>
-                            queue([key], `Delete ${label}`, () =>
-                              deleteRelation(r.source, r.target),
-                            )
-                          }
-                        />
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          )}
         </>
       )}
+
+      <Sheet open={panel !== null} onOpenChange={(open) => !open && setPanel(null)}>
+        <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
+          {panel?.kind === 'entity' && (
+            <EntityPanel
+              key={panel.entity.name}
+              entity={found?.entities.find((e) => e.name === panel.entity.name) ?? panel.entity}
+              busy={busy(entityKey(panel.entity))}
+              onOpenEntity={(name) => void openEntity(name)}
+              onOpenRelation={(relation) => setPanel({ kind: 'relation', relation })}
+              onEdit={(description, entity_type) =>
+                queue([entityKey(panel.entity)], `Edit ${panel.entity.name}`, () =>
+                  editEntity({ name: panel.entity.name, description, entity_type }),
+                )
+              }
+              onDelete={async () => {
+                const name = panel.entity.name
+                if (await queue([`e:${name}`], `Delete ${name}`, () => deleteEntity(name)))
+                  setPanel(null)
+              }}
+            />
+          )}
+          {panel?.kind === 'relation' && (
+            <RelationPanel
+              key={relationKey(panel.relation)}
+              relation={
+                found?.relations.find((r) => relationKey(r) === relationKey(panel.relation)) ??
+                panel.relation
+              }
+              busy={busy(relationKey(panel.relation))}
+              onOpenEntity={(name) => void openEntity(name)}
+              onEdit={(description, keywords) => {
+                const { source, target } = panel.relation
+                return queue([relationKey(panel.relation)], `Edit ${source} → ${target}`, () =>
+                  editRelation({ source, target, description, keywords }),
+                )
+              }}
+              onDelete={async () => {
+                const { source, target } = panel.relation
+                const done = await queue(
+                  [relationKey(panel.relation)],
+                  `Delete ${source} → ${target}`,
+                  () => deleteRelation(source, target),
+                )
+                if (done) setPanel(null)
+              }}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </section>
+  )
+}
+
+function EntityPanel(props: {
+  entity: GraphEntity
+  busy: boolean
+  onOpenEntity: (name: string) => void
+  onOpenRelation: (relation: GraphRelation) => void
+  onEdit: (description: string, entityType: string) => Promise<boolean>
+  onDelete: () => void
+}) {
+  const { entity } = props
+  const [editing, setEditing] = useState(false)
+  const [relations, setRelations] = useState<GraphRelation[] | null>(null)
+
+  useEffect(() => {
+    entityRelations(entity.name)
+      .then(setRelations)
+      .catch(() => setRelations([]))
+  }, [entity.name])
+
+  return (
+    <>
+      <SheetHeader className="pr-10">
+        <SheetTitle className="text-lg">{entity.name}</SheetTitle>
+        <SheetDescription className="flex items-center gap-2">
+          {entity.type && <Badge variant="secondary">{entity.type}</Badge>}
+          <span>
+            {entity.degree} relation{entity.degree === 1 ? '' : 's'}
+          </span>
+        </SheetDescription>
+      </SheetHeader>
+      <div className="flex flex-col gap-5 px-4 pb-6">
+        {editing ? (
+          <EditForm
+            description={entity.description ?? ''}
+            extraLabel="Type"
+            extra={entity.type ?? ''}
+            onCancel={() => setEditing(false)}
+            onSave={async (description, entityType) => {
+              if (await props.onEdit(description, entityType)) setEditing(false)
+            }}
+          />
+        ) : (
+          <>
+            <p className="m-0 text-sm whitespace-pre-wrap">
+              {entity.description || <span className="text-muted-foreground">No description.</span>}
+            </p>
+            <RowActions
+              label={entity.name}
+              disabled={props.busy}
+              onEdit={() => setEditing(true)}
+              onConfirmDelete={props.onDelete}
+            />
+          </>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <h3 className="m-0 text-sm font-semibold">Relations</h3>
+          {relations === null ? (
+            <Loading rows={2} />
+          ) : relations.length === 0 ? (
+            <p className="m-0 text-sm text-muted-foreground">No relation.</p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Relations">
+              {relations.map((r) => {
+                const other = r.source === entity.name ? r.target : r.source
+                const arrow = r.source === entity.name ? '→' : '←'
+                return (
+                  <li key={relationKey(r)} className="rounded-md bg-card px-3 py-2 text-sm">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-muted-foreground">{arrow}</span>
+                      <button
+                        type="button"
+                        className="font-medium hover:underline"
+                        onClick={() => props.onOpenEntity(other)}
+                      >
+                        {other}
+                      </button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        className="ml-auto"
+                        aria-label={`Open relation ${r.source} → ${r.target}`}
+                        onClick={() => props.onOpenRelation(r)}
+                      >
+                        Details
+                      </Button>
+                    </div>
+                    {r.description && (
+                      <p className="m-0 mt-1 line-clamp-2 text-muted-foreground">{r.description}</p>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+function RelationPanel(props: {
+  relation: GraphRelation
+  busy: boolean
+  onOpenEntity: (name: string) => void
+  onEdit: (description: string, keywords: string) => Promise<boolean>
+  onDelete: () => void
+}) {
+  const { relation } = props
+  const [editing, setEditing] = useState(false)
+  const label = `${relation.source} → ${relation.target}`
+  return (
+    <>
+      <SheetHeader className="pr-10">
+        <SheetTitle className="flex flex-wrap items-center gap-1.5 text-lg">
+          <button
+            type="button"
+            className="hover:underline"
+            onClick={() => props.onOpenEntity(relation.source)}
+          >
+            {relation.source}
+          </button>
+          <span className="text-muted-foreground">→</span>
+          <button
+            type="button"
+            className="hover:underline"
+            onClick={() => props.onOpenEntity(relation.target)}
+          >
+            {relation.target}
+          </button>
+        </SheetTitle>
+        <SheetDescription>{relation.keywords || 'No keywords'}</SheetDescription>
+      </SheetHeader>
+      <div className="flex flex-col gap-5 px-4 pb-6">
+        {editing ? (
+          <EditForm
+            description={relation.description ?? ''}
+            extraLabel="Keywords"
+            extra={relation.keywords ?? ''}
+            onCancel={() => setEditing(false)}
+            onSave={async (description, keywords) => {
+              if (await props.onEdit(description, keywords)) setEditing(false)
+            }}
+          />
+        ) : (
+          <>
+            <p className="m-0 text-sm whitespace-pre-wrap">
+              {relation.description || (
+                <span className="text-muted-foreground">No description.</span>
+              )}
+            </p>
+            <RowActions
+              label={label}
+              disabled={props.busy}
+              onEdit={() => setEditing(true)}
+              onConfirmDelete={props.onDelete}
+            />
+          </>
+        )}
+      </div>
+    </>
   )
 }
 
 function RowActions(props: {
   label: string
   disabled: boolean
-  hidden: boolean
-  confirming: boolean
   onEdit: () => void
-  onDelete: () => void
-  onCancelDelete: () => void
   onConfirmDelete: () => void
 }) {
   const canEdit = useAccess().can('maintainer')
-  if (props.hidden || !canEdit) return null
-  if (props.confirming) {
+  const [confirming, setConfirming] = useState(false)
+  if (!canEdit) return null
+  if (confirming) {
     return (
       <div className="flex flex-wrap items-center gap-1.5 text-[13px]">
         <span>Delete {props.label}?</span>
         <Button type="button" size="sm" variant="soft-destructive" onClick={props.onConfirmDelete}>
           Yes
         </Button>
-        <Button type="button" size="sm" variant="secondary" onClick={props.onCancelDelete}>
+        <Button type="button" size="sm" variant="secondary" onClick={() => setConfirming(false)}>
           No
         </Button>
       </div>
@@ -393,7 +730,7 @@ function RowActions(props: {
         variant="soft-destructive"
         disabled={props.disabled}
         aria-label={`Delete ${props.label}`}
-        onClick={props.onDelete}
+        onClick={() => setConfirming(true)}
       >
         Delete
       </Button>
@@ -422,7 +759,7 @@ function EditForm(props: {
       <Label className="flex-col items-stretch gap-1.5 text-[13px] text-muted-foreground">
         Description
         <Textarea
-          rows={5}
+          rows={8}
           className="text-foreground"
           value={description}
           onChange={(e) => setDescription(e.target.value)}

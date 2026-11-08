@@ -137,8 +137,16 @@ class JobRepository(Protocol):
     async def list_queries(self, limit: int = 50) -> list[dict[str, Any]]: ...
 
     async def search_graph(
-        self, phrase: str, limit: int = 50
+        self,
+        phrase: str = "",
+        limit: int = 50,
+        offset: int = 0,
+        entity_type: str | None = None,
     ) -> dict[str, list[dict[str, Any]]]: ...
+
+    async def graph_types(self) -> list[dict[str, Any]]: ...
+
+    async def entity_relations(self, name: str, limit: int = 100) -> list[dict[str, Any]]: ...
 
     async def add_tokens(self, source: str, api_key: str | None, tokens: int) -> None:
         """Tokens one job or query spent today (UTC), for the daily budget."""

@@ -308,6 +308,12 @@ export interface GraphEntity {
   name: string
   type: string | null
   description: string | null
+  degree: number // how many relations it has
+}
+
+export interface GraphType {
+  type: string
+  count: number
 }
 
 export interface GraphRelation {
@@ -455,8 +461,25 @@ export const listQueries = (limit = 50) => request<QuerySummary[]>(`/queries?lim
 
 export const getQuery = (id: number) => request<QueryRecord>(`/queries/${id}`)
 
-export const searchGraph = (q: string, limit = 50) =>
-  request<GraphSearch>(`/graph/search?q=${encodeURIComponent(q)}&limit=${limit}`)
+// No phrase lists the whole graph, most connected entities first; `type` narrows entities only.
+export function searchGraph(params: {
+  q?: string
+  type?: string
+  offset?: number
+  limit?: number
+}) {
+  const query = new URLSearchParams()
+  if (params.q) query.set('q', params.q)
+  if (params.type) query.set('type', params.type)
+  query.set('limit', String(params.limit ?? 50))
+  query.set('offset', String(params.offset ?? 0))
+  return request<GraphSearch>(`/graph/search?${query}`)
+}
+
+export const graphTypes = () => request<GraphType[]>('/graph/types')
+
+export const entityRelations = (name: string) =>
+  request<GraphRelation[]>(`/graph/relations?entity=${encodeURIComponent(name)}`)
 
 export const editEntity = (body: { name: string; description?: string; entity_type?: string }) =>
   sendJson<JobAccepted>('/graph/entity/edit', body)
