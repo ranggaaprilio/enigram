@@ -493,6 +493,7 @@ def test_mcp_over_http_lists_the_tools(keyed_env):
 
     names = [t["name"] for t in response.json()["result"]["tools"]]
     assert names == [
+        "list_workspaces",
         "query_knowledge_base",
         "list_documents",
         "add_memory",

@@ -7,7 +7,7 @@ import re
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -239,6 +239,23 @@ class ApiKeyMiddleware:
         await self.app(scope, receive, send)
 
 
+# A connection to one workspace: /mcp/w/<ws> is /mcp with that X-Enigram-Workspace header.
+MCP_WORKSPACE_PATH = re.compile(r"^/mcp/w/([^/]+)/?$")
+
+
+def _mcp_workspace_path(app: ASGIApp) -> ASGIApp:
+    async def route(scope: Scope, receive: Receive, send: Send) -> None:
+        found = MCP_WORKSPACE_PATH.match(scope.get("path", "")) if scope["type"] == "http" else None
+        if found:
+            header = WORKSPACE_HEADER.encode()
+            headers = [(k, v) for k, v in scope["headers"] if k != header]
+            headers.append((header, found.group(1).encode("latin-1")))
+            scope = {**scope, "path": "/mcp", "raw_path": b"/mcp", "headers": headers}
+        await app(scope, receive, send)
+
+    return route
+
+
 def _key_name(request: Request) -> str | None:
     return getattr(request.state, "api_key", None)
 
@@ -276,8 +293,8 @@ async def _workspace(request: Request) -> Workspace:
     `request.state.role`."""
     caller = _caller(request)
     workspaces = request.app.state.workspaces
-    default = caller.principal.default_workspace if caller.principal else None
-    name = request.headers.get(WORKSPACE_HEADER, "").strip() or default or workspaces.cfg.workspace
+    asked = request.headers.get(WORKSPACE_HEADER, "").strip()
+    name = caller.workspace_for(asked, workspaces.cfg.workspace)
     role = caller.role_in(name)  # checked before the workspace's adapters are built
     if role is None:
         raise HTTPException(404, f"No workspace {name!r}")
@@ -327,34 +344,48 @@ def create_app(
             "Postgres storage lets the API see what the worker indexes."
         )
 
-    @asynccontextmanager
-    async def mcp_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
-        # Entered once by session_manager.run() below, after app.state is set. MCP stays on the
-        # process workspace.
-        home = app.state.workspaces.home
-        yield AppContext(
-            engine=home.engine,
-            store=home.store,
-            memory=home.memory,
-            code_graph=home.code_graph,
-            notes=home.notes,
-            decider=home.decider,
-            code_embedder=home.code_embedder,
-            conflicts=home.conflicts,
+    async def mcp_workspace(name: str) -> AppContext:
+        """The adapters of one workspace for an MCP tool; the tool checked the role first."""
+        workspaces = app.state.workspaces
+        ws = await workspaces.get(name)
+        return AppContext(
+            engine=await workspaces.engine(ws),
+            store=ws.store,
+            memory=ws.memory,
+            code_graph=ws.code_graph,
+            notes=ws.notes,
+            decider=ws.decider,
+            code_embedder=ws.code_embedder,
+            conflicts=ws.conflicts,
+            cfg=ws.cfg,
+            deps=ws.deps,
         )
 
+    async def workspace_names() -> list[str]:
+        return [w["name"] for w in await app.state.workspaces.list()]
+
+    @asynccontextmanager
+    async def mcp_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
+        # Entered once by session_manager.run() below, after app.state is set. Each tool call
+        # opens its workspace (docs/rbac.md): the tool argument, the connection's (/mcp/w/<ws>
+        # or the header), the key's default, else the process workspace.
+        home = await mcp_workspace(cfg.workspace)
+        yield replace(home, open_workspace=mcp_workspace, workspace_names=workspace_names)
+
     mcp = create_server(cfg, lifespan=mcp_lifespan, deps=deps)
-    mcp_app = mcp.streamable_http_app(
-        streamable_http_path="/mcp",
-        stateless_http=True,
-        json_response=True,
-        # With keys, remote clients send their own Host and the key is the protection. Without
-        # keys, None keeps the SDK's localhost-only Host check against DNS rebinding.
-        transport_security=(
-            TransportSecuritySettings(enable_dns_rebinding_protection=False)
-            if cfg.api_keys
-            else None
-        ),
+    mcp_app = _mcp_workspace_path(
+        mcp.streamable_http_app(
+            streamable_http_path="/mcp",
+            stateless_http=True,
+            json_response=True,
+            # With keys, remote clients send their own Host and the key is the protection. Without
+            # keys, None keeps the SDK's localhost-only Host check against DNS rebinding.
+            transport_security=(
+                TransportSecuritySettings(enable_dns_rebinding_protection=False)
+                if cfg.api_keys
+                else None
+            ),
+        )
     )
 
     @asynccontextmanager

@@ -56,6 +56,12 @@ class Caller:
             return "admin"
         return self.roles.get(workspace)
 
+    def workspace_for(self, asked: str | None, process: str) -> str:
+        """The workspace a request uses: the one it asks for (header, MCP path or tool
+        argument), else the principal's default, else the process workspace."""
+        default = self.principal.default_workspace if self.principal else None
+        return asked or default or process
+
     def workspaces(self, existing: list[str]) -> list[str]:
         return [w for w in existing if self.role_in(w) is not None]
 
