@@ -3,6 +3,7 @@ import { useParams } from 'react-router'
 import { WsLink } from '@/workspace'
 import { ArrowLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import Empty from '@/components/Empty'
+import Loading from '@/components/Loading'
 import ErrorAlert from '@/components/ErrorAlert'
 import PageHeader from '@/components/PageHeader'
 import StatusBadge from '@/components/StatusBadge'
@@ -65,7 +66,19 @@ export function TraceList() {
         }
       />
       {error && <ErrorAlert>{error}</ErrorAlert>}
-      {rows && rows.length === 0 && <Empty>No queries yet. Ask something on the Ask page.</Empty>}
+      {rows && rows.length === 0 && (
+        <Empty
+          action={
+            <Button asChild size="sm" variant="secondary">
+              <WsLink to="/ask" className="hover:no-underline">
+                Ask a question
+              </WsLink>
+            </Button>
+          }
+        >
+          No queries yet. Every question asked here, on the API or by an agent, shows up here.
+        </Empty>
+      )}
       {rows && rows.length > 0 && (
         <Table>
           <TableHeader>
@@ -133,7 +146,7 @@ function Section({
   children: ReactNode
 }) {
   return (
-    <Collapsible defaultOpen={count > 0 && count <= 10} className="group my-3 rounded-xl bg-card">
+    <Collapsible defaultOpen={count > 0 && count <= 10} className="group my-3 rounded-md bg-card">
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-5 py-4 text-left font-semibold tracking-[-0.3px]">
         <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
         {title} ({count})
@@ -199,7 +212,7 @@ export function TraceDetail() {
     )
   }
   if (error) return <ErrorAlert>{error}</ErrorAlert>
-  if (!record) return <p className="text-muted-foreground">Loading…</p>
+  if (!record) return <Loading rows={6} />
 
   const result = record.result
   return (

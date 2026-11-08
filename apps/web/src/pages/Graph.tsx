@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { toast } from 'sonner'
 import { useSearchParams } from 'react-router'
 import { useAccess } from '../access'
 import {
@@ -115,6 +116,7 @@ export default function Graph() {
         ...list,
       ])
       setError(null)
+      toast.success(`Queued: ${label}`)
     } catch (e) {
       setError(messageOf(e))
     }
@@ -263,7 +265,7 @@ export default function Graph() {
           )}
 
           {selected.length > 0 && (
-            <div className="my-4 flex flex-wrap items-center gap-3 rounded-xl bg-card px-5 py-4">
+            <div className="my-4 flex flex-wrap items-center gap-3 rounded-md bg-card px-5 py-4">
               <Label htmlFor="merge-target">Merge selected into</Label>
               <Input
                 id="merge-target"

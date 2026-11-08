@@ -55,7 +55,7 @@ export default function RecheckNote(props: {
   }
 
   return (
-    <div className="mt-2 rounded-lg bg-background px-3 py-2">
+    <div className="mt-2 rounded-md bg-background px-3 py-2">
       <p className="text-[13px]">
         Re-check: {(note.reason && REASONS[note.reason]) ?? 'Flagged for a re-check.'}
       </p>

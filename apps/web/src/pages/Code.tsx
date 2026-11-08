@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { patchMessage } from '../toasts'
+import { toast } from 'sonner'
 import { useSearchParams } from 'react-router'
 import { WsLink } from '@/workspace'
 import { useAccess } from '../access'
@@ -23,6 +25,7 @@ import {
   type TreeFile,
 } from '../api'
 import Empty from '@/components/Empty'
+import Loading from '@/components/Loading'
 import ErrorAlert from '@/components/ErrorAlert'
 import AddNoteForm, { type NoteMode } from '@/components/AddNoteForm'
 import PageHeader from '@/components/PageHeader'
@@ -42,7 +45,7 @@ const muted = 'text-[13px] text-muted-foreground'
 // column sticks below the header like the notes panel (toggle + gap = the extra 3.5rem).
 // The filter and count keep their height; only the list (listScroll, flex-1) gives way.
 const listCard =
-  'flex max-h-[60vh] flex-col rounded-xl bg-card p-3 lg:max-h-[calc(100vh-9.8rem)] [&>input]:shrink-0 [&>p]:shrink-0'
+  'flex max-h-[60vh] flex-col rounded-md bg-card p-3 lg:max-h-[calc(100vh-9.8rem)] [&>input]:shrink-0 [&>p]:shrink-0'
 const listScroll = '-mx-1 min-h-0 flex-1 overflow-y-auto px-1'
 const heading = 'mt-4 mb-1 text-sm font-semibold'
 const NAME_KEY = 'enigram.by'
@@ -173,10 +176,11 @@ export default function Code() {
     }
   }
 
-  async function act(call: () => Promise<unknown>) {
+  async function act(call: () => Promise<unknown>, done: string) {
     try {
       await call()
       setError(null)
+      toast.success(done)
       await reload()
     } catch (e) {
       setError(messageOf(e))
@@ -239,7 +243,7 @@ export default function Code() {
       {error && <ErrorAlert>{error}</ErrorAlert>}
       <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col gap-2 lg:sticky lg:top-20">
-          <div role="group" aria-label="Browse by" className="flex gap-1 rounded-xl bg-card p-1">
+          <div role="group" aria-label="Browse by" className="flex gap-1 rounded-md bg-card p-1">
             {(
               [
                 ['Features', false],
@@ -282,18 +286,22 @@ export default function Code() {
         ) : notFound ? (
           <Empty>Symbol not found. It may have been removed by a re-index.</Empty>
         ) : !view ? (
-          <p className="text-muted-foreground">Loading…</p>
+          <Loading rows={6} />
         ) : (
           <>
             <SymbolPanel
               view={view}
               onPick={(id) => setParam('symbol', id)}
               onMode={setMode}
-              onReview={() => repoId && act(() => reviewSymbol(repoId, view.symbol.id, by))}
-              onUndo={() => repoId && act(() => unreviewSymbol(repoId, view.symbol.id))}
+              onReview={() =>
+                repoId && act(() => reviewSymbol(repoId, view.symbol.id, by), 'Marked as right')
+              }
+              onUndo={() =>
+                repoId && act(() => unreviewSymbol(repoId, view.symbol.id), 'Review removed')
+              }
             />
             {/* Sticky on wide screens: the form opened from under a long summary stays in view. */}
-            <div className="rounded-xl bg-card px-5 py-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+            <div className="rounded-md bg-card px-5 py-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
               <h3 className="mb-2 text-sm font-semibold">Notes ({view.notes.length})</h3>
               {view.notes.length === 0 ? (
                 <p className={muted}>No notes on this symbol yet.</p>
@@ -319,7 +327,9 @@ export default function Code() {
                         <RecheckNote
                           note={n}
                           summary={view.summary}
-                          onAct={(body) => act(() => patchAnnotation(n.id, body))}
+                          onAct={(body) =>
+                            act(() => patchAnnotation(n.id, body), patchMessage(body))
+                          }
                         />
                       )}
                     </li>
@@ -421,7 +431,7 @@ function Features(props: {
         onChange={(e) => props.onFilter(e.target.value)}
       />
       {list === null ? (
-        <p className={cn('mt-2 px-2', muted)}>Loading…</p>
+        <Loading rows={8} />
       ) : (
         <>
           <p className={cn('mt-2 mb-1 px-2', muted)}>
@@ -544,7 +554,7 @@ function Files(props: {
         onChange={(e) => props.onFilter(e.target.value)}
       />
       {tree === null ? (
-        <p className={cn('mt-2 px-2', muted)}>Loading…</p>
+        <Loading rows={8} />
       ) : (
         <>
           <p className={cn('mt-2 mb-1 px-2', muted)}>
@@ -672,7 +682,7 @@ function SymbolPanel({
     access.can('maintainer') || (contributor && review !== null && review.actor === access.name)
   return (
     <div className="min-w-0">
-      <div className="rounded-xl bg-card px-5 py-4">
+      <div className="rounded-md bg-card px-5 py-4">
         <h2 className="mt-0 mb-2 [overflow-wrap:anywhere]">{view.symbol.qualified_name}</h2>
         <div className="flex flex-wrap items-center gap-1.5">
           {view.entrypoints.map((e) => (
@@ -809,7 +819,7 @@ function Section({
   children: ReactNode
 }) {
   return (
-    <Collapsible className="group my-3 rounded-xl bg-card">
+    <Collapsible className="group my-3 rounded-md bg-card">
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-5 py-4 text-left font-semibold tracking-[-0.3px]">
         <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
         {title} ({count} lines)
