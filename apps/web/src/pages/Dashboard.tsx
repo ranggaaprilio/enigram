@@ -1,13 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
+import { useAccess } from '../access'
 import {
   getRepoStats,
   getStats,
+  getWorkspaceStats,
   messageOf,
   NOTE_TYPES,
   type NoteType,
   type RepoStat,
   type Stats,
+  type WorkspaceStats,
 } from '../api'
 import { formatAgo, formatSecs } from '../format'
 import Empty from '@/components/Empty'
@@ -66,6 +69,7 @@ export default function Dashboard() {
   const [params, setParams] = useSearchParams()
   const asked = Number(params.get('days'))
   const days = (WINDOWS as readonly number[]).includes(asked) ? asked : 30
+  const access = useAccess()
   const [stats, setStats] = useState<Stats | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -105,6 +109,7 @@ export default function Dashboard() {
       />
       {error && <ErrorAlert>{error}</ErrorAlert>}
       {!fresh ? !error && <Loading rows={6} /> : <Panels stats={fresh} />}
+      {fresh && access.owner && <AllWorkspaces days={days} current={fresh.workspace} />}
     </section>
   )
 }
@@ -489,6 +494,108 @@ function RepoTable() {
         ))}
       </TableBody>
     </Table>
+  )
+}
+
+// Plan item 6, D3: every workspace against the daily budget (DAILY_TOKEN_BUDGET applies to each
+// one), for an owner; a name opens that workspace's Dashboard for the same period.
+function AllWorkspaces({ days, current }: { days: number; current: string }) {
+  const [all, setAll] = useState<WorkspaceStats | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let live = true
+    setError(null)
+    getWorkspaceStats(days)
+      .then((s) => live && setAll(s))
+      .catch((e) => live && setError(messageOf(e)))
+    return () => {
+      live = false
+    }
+  }, [days])
+
+  const fresh = all?.days === days ? all : null
+  return (
+    <div className="mt-8">
+      <Panel title="All workspaces">
+        <p className="mt-0 mb-3 text-[13px] text-muted-foreground">
+          Owners only.{' '}
+          {fresh?.budget
+            ? `Each workspace may spend ${number(fresh.budget)} tokens a UTC day.`
+            : 'No daily token cap (DAILY_TOKEN_BUDGET is 0).'}
+        </p>
+        {error && <ErrorAlert>{error}</ErrorAlert>}
+        {!fresh ? (
+          !error && <Loading rows={2} />
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Workspace</TableHead>
+                <TableHead className="text-right">Tokens today</TableHead>
+                <TableHead className="text-right">Tokens, {days} days</TableHead>
+                <TableHead className="text-right">Questions</TableHead>
+                <TableHead className="text-right">Waiting notes</TableHead>
+                <TableHead className="text-right">Failed jobs</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {fresh.workspaces.map((w) => (
+                <TableRow key={w.workspace}>
+                  <TableCell>
+                    <Link
+                      to={`/w/${w.workspace}/dashboard${days === 30 ? '' : `?days=${days}`}`}
+                      aria-current={w.workspace === current ? 'page' : undefined}
+                    >
+                      {w.workspace}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="text-right whitespace-nowrap tabular-nums">
+                    {number(w.tokens_today)}
+                    {fresh.budget && (
+                      <div className="text-[12px] text-muted-foreground">
+                        {percent(w.tokens_today, fresh.budget)} of the budget
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {number(w.tokens_period)}
+                  </TableCell>
+                  <TableCell className="text-right whitespace-nowrap tabular-nums">
+                    {number(w.asked)}
+                    {w.unanswered > 0 && (
+                      <div className="text-[12px] text-muted-foreground">
+                        {number(w.unanswered)} not answered
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{number(w.waiting)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{number(w.failed_jobs)}</TableCell>
+                </TableRow>
+              ))}
+              <TableRow className="font-semibold">
+                <TableCell>All</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {number(fresh.total.tokens_today)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {number(fresh.total.tokens_period)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {number(fresh.total.asked)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {number(fresh.total.waiting)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {number(fresh.total.failed_jobs)}
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        )}
+      </Panel>
+    </div>
   )
 }
 

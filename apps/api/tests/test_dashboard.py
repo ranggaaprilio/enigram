@@ -145,3 +145,26 @@ def test_one_repository_with_its_runs_quality_and_note_impact(notes_env, monkeyp
 )
 def test_remote_status(remote, status):
     assert remote_status({"indexed_sha": SHA, **remote}) == status
+
+
+def test_an_owner_sees_every_workspace_against_the_budget(notes_env):
+    client, store, *_ = notes_env
+    _grant(store, "web", "owner")
+    created = client.post("/workspaces", json={"name": "ws-b"}, headers=_bearer(WEB_KEY))
+    assert created.status_code == 201
+
+    body = client.get("/stats/workspaces?days=7", headers=_bearer(WEB_KEY)).json()
+
+    assert [w["workspace"] for w in body["workspaces"]] == ["default", "ws-b"]
+    first = body["workspaces"][0]
+    assert first["tokens_today"] == 120 and first["left_today"] == body["budget"] - 120
+    assert body["total"]["tokens_today"] == 240  # FakeStats: 120 today in each workspace
+    assert body["days"] == 7 and body["jobs_since_days"] == 7
+
+
+@pytest.mark.parametrize("role", ["viewer", "admin"])
+def test_only_an_owner_sees_every_workspace(notes_env, role):
+    client, store, *_ = notes_env
+    _grant(store, "laptop-a", role)
+    response = client.get("/stats/workspaces", headers=_bearer(LAPTOP_KEY))
+    assert response.status_code == 403

@@ -59,6 +59,7 @@ sama.
 | `GET /jobs/{id}` | `viewer` | Job workspace itu saja |
 | `GET /stats` | `viewer` | Angka Dashboard (item 6); `tokens.by_key` hanya untuk `admin`, peran lain mendapat `null` |
 | `GET /stats/repos`, `/stats/repos/{id}` | `viewer` | Detail repo di Dashboard (D2b) |
+| `GET /stats/workspaces` | `owner` | Semua workspace dalam satu tabel (D3) |
 
 ### Repo dan Code page
 

@@ -44,7 +44,12 @@ from enigram.application.code_browse import (
     tree_view,
     unreview_symbol,
 )
-from enigram.application.dashboard import dashboard, repo_detail, repo_rows
+from enigram.application.dashboard import (
+    dashboard,
+    repo_detail,
+    repo_rows,
+    workspaces_overview,
+)
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
@@ -1003,6 +1008,25 @@ def create_app(
             ws.cfg, await ws.deps.new_stats(ws.store), ws.code_graph, ws.store, _role(request), days
         )
         return jsonable_encoder(found)
+
+    @app.get("/stats/workspaces")
+    async def stats_workspaces(
+        request: Request, days: Annotated[int, Query(ge=1, le=90)] = 30
+    ) -> dict[str, Any]:
+        """Every workspace's tokens against the daily budget, questions, waiting notes and
+        failed jobs in one table (plan item 6, D3); an owner's only."""
+        caller = _caller(request)
+        if caller.principal is not None and not caller.principal.owner:
+            raise HTTPException(403, "Only an owner sees every workspace")
+        workspaces = request.app.state.workspaces
+        # Counted through the job store scoped to each workspace: no adapters are opened.
+        stats_of = {
+            row["name"]: await workspaces.deps.new_stats(
+                workspaces.store.for_workspace(row["name"])
+            )
+            for row in await workspaces.list()
+        }
+        return jsonable_encoder(await workspaces_overview(workspaces.cfg, stats_of, days))
 
     @app.get("/stats/repos")
     async def stats_repos(ws: Viewer) -> list[dict[str, Any]]:

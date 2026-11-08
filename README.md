@@ -318,6 +318,7 @@ write the same index.
 | `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50) |
 | `GET /review` | The inbox: notes waiting for a person (proposed, flagged for a re-check, orphaned, verified but conflicting), each with the summary it was written against and the summary now |
 | `GET /stats?days=30` | The Dashboard's numbers for the last 1-90 UTC days: tokens per day and source against `DAILY_TOKEN_BUDGET` (per key for an `admin` only), questions per day with unanswered, errors and p50/p95 latency, answer routes and sentence origins, documents per status, repositories with size and last index, entry point ✓ coverage, notes per type and status, and what needs attention (inbox counts, doc-code conflicts, jobs failed or over budget in 7 days) |
+| `GET /stats/workspaces?days=30` | Owners only (403 otherwise): every workspace in one table with tokens today against `DAILY_TOKEN_BUDGET` (which each workspace has), tokens and questions over the period, notes waiting and jobs failed in 7 days, and the totals |
 | `GET /stats/repos` | Every repository with its indexed commit and that commit's date, the last index (outcome, duration, tokens), its state against the remote as the worker's last poll saw it (`current`, `behind`, `unreachable`, `unchecked`), how it is kept up to date (webhook, polling, manual) and its size |
 | `GET /stats/repos/{id}` | One repository: the above plus its last 20 index runs, graph quality and summary counts from its index report, and what the last run did to the notes on it |
 | `GET /targets?q=` | What a note can be about, by what people know: features (route), symbols, graph entities and documents matching `q`, at most 8 of each, with a short summary (the note form's search box) |
@@ -536,6 +537,8 @@ opens it, all from the keyboard:
   A repository's name opens its page (`/dashboard/repos/<id>`): the indexed commit and its date,
   whether the remote has commits not indexed yet, the index history, graph quality, summaries,
   what the last run did to the notes, and *Re-index now* for maintainers.
+  An owner also sees *All workspaces* at the foot of the page: every workspace's tokens against
+  its daily budget, questions, waiting notes and failed jobs, with the totals.
 
 The **Graph** page (`/graph`) finds entities and relations
 whose name or description contains a phrase, then edits, merges or deletes them (see [Correcting

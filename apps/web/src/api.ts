@@ -692,3 +692,27 @@ export interface RepoStatDetail extends RepoStat {
 
 export const getRepoStats = () => request<RepoStat[]>('/stats/repos')
 export const getRepoStat = (id: number) => request<RepoStatDetail>(`/stats/repos/${id}`)
+
+// GET /stats/workspaces: every workspace against the daily budget, for an owner (plan item 6, D3).
+export interface WorkspaceStatRow {
+  workspace: string
+  tokens_today: number
+  left_today: number | null
+  tokens_period: number
+  asked: number
+  unanswered: number
+  waiting: number
+  failed_jobs: number
+}
+
+export interface WorkspaceStats {
+  days: number
+  since: string
+  budget: number | null // each workspace's daily cap; null: unlimited
+  jobs_since_days: number
+  workspaces: WorkspaceStatRow[]
+  total: Omit<WorkspaceStatRow, 'workspace' | 'left_today'>
+}
+
+export const getWorkspaceStats = (days: number) =>
+  request<WorkspaceStats>(`/stats/workspaces?days=${days}`)
