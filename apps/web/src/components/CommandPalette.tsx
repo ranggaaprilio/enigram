@@ -90,7 +90,7 @@ export default function CommandPalette(props: { workspace: string; workspaces: W
     .filter((p) => !p.minimum || access.can(p.minimum))
     .filter((p) => matches(p.label))
   // /w/<ws>/<page>/...: another workspace opens the same page.
-  const page = pathname.split('/')[3] || 'documents'
+  const page = pathname.split('/')[3] || 'dashboard'
   const others = props.workspaces.filter((w) => w.name !== props.workspace && matches(w.name))
   const groups = (['feature', 'symbol', 'entity', 'document'] as const)
     .map((kind) => ({ kind, rows: found.filter((t) => t.kind === kind) }))

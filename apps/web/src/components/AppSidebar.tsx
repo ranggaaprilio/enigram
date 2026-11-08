@@ -56,6 +56,11 @@ interface Page {
 }
 
 export const NAV: { label: string; pages: Page[] }[] = [
+  // The home page: where / and a workspace switch land.
+  {
+    label: 'Overview',
+    pages: [{ to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
+  },
   {
     label: 'Answers',
     pages: [
@@ -75,10 +80,6 @@ export const NAV: { label: string; pages: Page[] }[] = [
   {
     label: 'Review',
     pages: [{ to: '/review', label: 'Inbox', icon: Inbox }],
-  },
-  {
-    label: 'Monitor',
-    pages: [{ to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
   },
   {
     label: 'Settings',
