@@ -179,6 +179,28 @@ describe('Annotations', () => {
     expect(screen.getByLabelText('About what?')).toHaveValue('') // ready for the next note
   })
 
+  it('shows the notes already on the target, flags a look-alike and previews the citation', async () => {
+    mockFetch({
+      'GET /api/annotations': { body: [] },
+      'GET /api/repos': { body: [] },
+      'GET /api/annotations?target_kind=entity&target_ref=Mira+Okafor': {
+        body: [note(8, { target_kind: 'entity', text: 'Mira Okafor leads the harbor study.' })],
+      },
+    })
+    renderAt('/annotations?target_kind=entity&target_ref=Mira%20Okafor')
+
+    const here = await screen.findByLabelText('Notes already here')
+    expect(here).toHaveTextContent('note#8 Mira Okafor leads the harbor study.')
+    await userEvent.type(
+      screen.getByLabelText('Which rule must this feature follow?'),
+      'Mira Okafor leads the harbor study',
+    )
+    expect(within(here).getByText('Looks the same:')).toBeInTheDocument()
+    const preview = screen.getByLabelText('How answers cite it')
+    expect(preview).toHaveTextContent('note#… [verified by you')
+    expect(preview).toHaveTextContent('"Mira Okafor leads the harbor study"')
+  })
+
   it('takes the target from a link', async () => {
     mockFetch({ 'GET /api/annotations': { body: [] }, 'GET /api/repos': { body: [] } })
 

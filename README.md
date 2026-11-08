@@ -512,12 +512,15 @@ or system theme:
   [Annotations](#annotations)), and **Add a note**: one search box finds what the note is about
   by route, name, entity or document (no symbol ids), then the kind of note as plain-language
   cards, each with its question; owner, a re-check date (1, 3 or 6 months) and when to ask for a
-  re-check sit under *More options*. The Code page's *Not right* and *Add context* open the same
+  re-check sit under *More options*. Before saving it lists the notes already on that target and
+  marks one that says the same thing, and shows how answers will cite the note (or that they will
+  not until a maintainer verifies it). The Code page's *Not right* and *Add context* open the same
   form on the symbol on screen. ⌘/Ctrl+Enter saves.
 - **Review → Inbox** (`/review`): every note that waits for a person, oldest first per reason
   (proposals, re-checks, orphans, conflicts), each with what the code does now; a re-check shows
   the summary it was written against next to it. Maintainers verify, reject, relink or settle a
-  conflict in place; others see the queue without the decisions.
+  conflict in place, one by one or several at once (tick them, then *Verify* the proposals or
+  *Reject* them all; re-checks stay one by one); others see the queue without the decisions.
 
 The **Graph** page (`/graph`) finds entities and relations
 whose name or description contains a phrase, then edits, merges or deletes them (see [Correcting
