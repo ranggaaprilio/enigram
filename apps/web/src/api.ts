@@ -176,6 +176,7 @@ export interface NewAnnotation {
   repo?: number
   by?: string
   scope?: 'deps' | 'body'
+  owner?: string
   verify_by?: string
   note_type?: NoteType
   proposed?: boolean // stay a proposal even for the owner key (a Code-page claim about the code)
@@ -199,15 +200,6 @@ export interface RepoRow {
   indexed_sha: string
   indexed_at: string | null
   webhook: boolean
-}
-
-export interface SymbolRow {
-  id: string
-  qualified_name: string
-  kind: string
-  file: string
-  line_start: number
-  line_end: number
 }
 
 // One entry point of a repository (code_browse.features_view); a symbol with two routes is two rows.
@@ -521,6 +513,20 @@ export function listAnnotations(params: {
 
 export const createAnnotation = (body: NewAnnotation) => sendJson<Annotation>('/annotations', body)
 
+// GET /targets: what a note can be about, found by what people know (plan item 5, A1).
+export interface Target {
+  kind: 'feature' | 'symbol' | 'entity' | 'document' // how the form groups it
+  target_kind: TargetKind
+  target_ref: string
+  repo: number | null
+  repo_name: string | null
+  label: string
+  detail: string
+  summary: string | null
+}
+
+export const searchTargets = (q: string) => request<Target[]>(`/targets?q=${encodeURIComponent(q)}`)
+
 export const getAnnotation = (id: number) => request<AnnotationWithEvents>(`/annotations/${id}`)
 
 export const patchAnnotation = (id: number, body: AnnotationPatch) =>
@@ -534,9 +540,6 @@ export const deleteAnnotation = (id: number) =>
   request<null>(`/annotations/${id}`, { method: 'DELETE' })
 
 export const listRepos = () => request<RepoRow[]>('/repos')
-
-export const searchSymbols = (repoId: number, q: string) =>
-  request<SymbolRow[]>(`/repos/${repoId}/symbols?q=${encodeURIComponent(q)}`)
 
 export const listFeatures = (repoId: number, q = '') =>
   request<FeatureList>(`/repos/${repoId}/features${q ? `?q=${encodeURIComponent(q)}` : ''}`)

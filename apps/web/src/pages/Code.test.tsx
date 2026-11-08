@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -325,12 +325,15 @@ describe('Code', () => {
 
     // A business rule needs no developer review: saved without `proposed`.
     await userEvent.click(screen.getByRole('button', { name: 'Add context' }))
-    expect(screen.getByLabelText('Type')).toHaveValue('business_rule')
+    const form = screen.getByRole('form', { name: 'Add context' })
+    expect(within(form).getByText('AppController.find')).toBeInTheDocument() // the target
+    expect(within(form).queryByRole('button', { name: 'Change' })).toBeNull()
+    expect(screen.getByRole('radio', { name: /Business rule/ })).toBeChecked()
     await userEvent.type(
       screen.getByLabelText('Which rule must this feature follow?'),
       'Only admins.',
     )
-    expect(screen.getByText('Saved as verified.')).toBeInTheDocument()
+    expect(screen.getByText(/Saved as verified: answers cite it at once\./)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
@@ -342,8 +345,9 @@ describe('Code', () => {
       text: 'Only admins.',
       note_type: 'business_rule',
       repo: 1,
+      scope: 'deps',
     })
-    expect(screen.queryByLabelText('Type')).toBeNull() // the form closes after a save
+    expect(screen.queryByRole('form', { name: 'Add context' })).toBeNull() // closes after a save
   })
 
   it('sends a mismatch as a proposed expected behaviour, signed with the name', async () => {
@@ -360,9 +364,8 @@ describe('Code', () => {
       screen.getByLabelText('What should happen instead?'),
       'Admins only see their own users.',
     )
-    expect(
-      screen.getByText(/Saved as a proposal; review it on Annotations\./),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/Saved as a proposal: a maintainer reviews it/)).toBeInTheDocument()
+    expect(screen.getByText(/Signed as Alice\./)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => expect(bodyOf(fetch, 'POST /api/annotations')).toBeDefined())
@@ -370,6 +373,7 @@ describe('Code', () => {
       target_kind: 'symbol',
       target_ref: CONTROLLER,
       repo: 1,
+      scope: 'deps',
       text: 'Admins only see their own users.',
       note_type: 'expected_behavior',
       by: 'Alice',
@@ -378,7 +382,7 @@ describe('Code', () => {
     expect(localStorage.getItem('enigram.by')).toBe('Alice')
   })
 
-  it('proposes a known issue written as context, and cancels without saving', async () => {
+  it('proposes a known issue written as context with ⌘+Enter, and cancels without saving', async () => {
     const fetch = mockFetch({
       ...BASE,
       [`GET ${SYMBOL_URL}`]: { body: view },
@@ -387,9 +391,11 @@ describe('Code', () => {
 
     renderAt(AT_SYMBOL)
     await userEvent.click(await screen.findByRole('button', { name: 'Add context' }))
-    await userEvent.selectOptions(screen.getByLabelText('Type'), 'Known issue')
-    await userEvent.type(screen.getByLabelText('What goes wrong, and when?'), 'Times out.')
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await userEvent.click(screen.getByRole('radio', { name: /Known issue/ }))
+    await userEvent.type(
+      screen.getByLabelText('What goes wrong, and when?'),
+      'Times out.{Meta>}{Enter}{/Meta}',
+    )
 
     await waitFor(() => expect(bodyOf(fetch, 'POST /api/annotations')).toBeDefined())
     expect(bodyOf(fetch, 'POST /api/annotations')).toMatchObject({
@@ -403,7 +409,7 @@ describe('Code', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Not right' }))
     expect(screen.getByLabelText('What should happen instead?')).toHaveValue('Draft')
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.queryByLabelText('Type')).toBeNull()
+    expect(screen.queryByRole('form', { name: 'Not right' })).toBeNull()
   })
 
   it('marks the summary as right with the name kept in the browser', async () => {
@@ -489,7 +495,9 @@ describe('Code', () => {
 
     renderAt(AT_SYMBOL)
 
-    expect(await screen.findByText(/Reviewed by web .* the summary changed since/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Reviewed by web .* the summary changed since/),
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Looks right' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
   })
@@ -528,7 +536,9 @@ describe('Code', () => {
 
       renderAt(AT_SYMBOL)
 
-      expect(await screen.findByText('Re-check: The code of this symbol changed.')).toBeInTheDocument()
+      expect(
+        await screen.findByText('Re-check: The code of this symbol changed.'),
+      ).toBeInTheDocument()
       expect(screen.getByText('Summary when written (flow)')).toBeInTheDocument()
       expect(screen.getByText('reads a cache.', { exact: false })).toBeInTheDocument()
       expect(screen.getByText('Summary now (flow)')).toBeInTheDocument()

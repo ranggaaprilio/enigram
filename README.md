@@ -315,7 +315,8 @@ write the same index.
 | `DELETE /documents/{book}` | Queue deleting a document: its index entries, parsed files and uploaded file (202; 404 unknown; 409 while it has a job) |
 | `POST /repos` `{"url", "ref"?, "token"?}` | Queue indexing (or re-syncing) a Git repository's Markdown and, with a root `tsconfig.json`, its code graph (202; 422 bad URL or token; 409 already queued). `token`: a private repository's access token, see [Private repositories](#private-repositories) (needs `admin`) |
 | `GET /repos` | Indexed repositories: id, URL, ref, name, indexed commit, whether a webhook secret is set, whether it is `private` (has an access token) |
-| `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50), for the annotation form |
+| `GET /repos/{id}/symbols?q=` | Symbols named `q` or ending in `.q` (at most 50) |
+| `GET /targets?q=` | What a note can be about, by what people know: features (route), symbols, graph entities and documents matching `q`, at most 8 of each, with a short summary (the note form's search box) |
 | `GET /repos/{id}/features?q=` | Entry points (routes, crons, jobs) with the number of notes on each and whether their summary has a current ✓ (`reviewed`), the first 500 whose route or symbol name contains `q`, plus `total` |
 | `GET /repos/{id}/tree` | Every indexed file with its symbols (no bodies) and their note counts |
 | `GET /repos/{id}/symbols/{symbol_id}` | One symbol (`<file>#<qualified_name>`, URL-encoded) with its location, entry points, flow and symbol summaries, steps (direct callees with their summaries and note counts), callers (the repository symbols that call it directly, with note counts), notes and ✓ (`review`, with `current: false` once the summary changed) |
@@ -507,7 +508,11 @@ or system theme:
   relations and sources behind the answer, at a link you can share (`/trace/12`). Entity names open a new note on that entity;
   code sources have an `Annotate` link, note sources open the note.
 - **Annotations**: team notes by status, with verify, reject, relink and history (see
-  [Annotations](#annotations)).
+  [Annotations](#annotations)), and **Add a note**: one search box finds what the note is about
+  by route, name, entity or document (no symbol ids), then the kind of note as plain-language
+  cards, each with its question; owner, a re-check date (1, 3 or 6 months) and when to ask for a
+  re-check sit under *More options*. The Code page's *Not right* and *Add context* open the same
+  form on the symbol on screen. ⌘/Ctrl+Enter saves.
 
 The **Graph** page (`/graph`) finds entities and relations
 whose name or description contains a phrase, then edits, merges or deletes them (see [Correcting

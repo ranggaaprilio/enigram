@@ -24,7 +24,7 @@ import {
 } from '../api'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
-import GuidedNoteForm, { type GuidedMode } from '@/components/GuidedNoteForm'
+import AddNoteForm, { type NoteMode } from '@/components/AddNoteForm'
 import PageHeader from '@/components/PageHeader'
 import RecheckNote from '@/components/RecheckNote'
 import StatusBadge from '@/components/StatusBadge'
@@ -68,7 +68,7 @@ export default function Code() {
   const [view, setView] = useState<SymbolView | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [mode, setMode] = useState<GuidedMode | null>(null)
+  const [mode, setMode] = useState<NoteMode | null>(null)
   const [by, setBy] = useState(readName)
   const access = useAccess()
   // An unknown ?repo= (deleted repository, old link) falls back to the first one.
@@ -327,10 +327,20 @@ export default function Code() {
                 </ul>
               )}
               {mode && repoId ? (
-                <GuidedNoteForm
+                <AddNoteForm
                   key={view.symbol.id}
-                  repoId={repoId}
-                  symbolId={view.symbol.id}
+                  title={mode === 'mismatch' ? 'Not right' : 'Add context'}
+                  target={{
+                    kind: 'symbol',
+                    target_kind: 'symbol',
+                    target_ref: view.symbol.id,
+                    repo: repoId,
+                    repo_name: null,
+                    label: view.symbol.qualified_name,
+                    detail: view.location,
+                    summary: null, // the summary is right above the form
+                  }}
+                  fixedTarget
                   mode={mode}
                   by={by}
                   onSaved={async () => {
@@ -647,7 +657,7 @@ function SymbolPanel({
 }: {
   view: SymbolView
   onPick: (symbolId: string) => void
-  onMode: (mode: GuidedMode) => void
+  onMode: (mode: NoteMode) => void
   onReview: () => void
   onUndo: () => void
 }) {

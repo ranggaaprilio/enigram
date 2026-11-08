@@ -284,7 +284,8 @@ describe('Sign-in (R4)', () => {
     mockFetch({ ...signedOut, 'GET /api/auth/config': { body: { login: true } } })
     renderAt('/w/default/documents?login_error=eve%40other.com+may+not+sign+in')
     expect(await screen.findByText('eve@other.com may not sign in')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Sign in' })).toHaveAttribute(
+    // The link waits for /auth/config.
+    expect(await screen.findByRole('link', { name: 'Sign in' })).toHaveAttribute(
       'href',
       `/api/auth/login?next=${encodeURIComponent('/w/default/documents')}`,
     )

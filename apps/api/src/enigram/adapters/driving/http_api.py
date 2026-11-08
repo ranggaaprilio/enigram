@@ -59,6 +59,7 @@ from enigram.application.querying import answer_question
 from enigram.application.repo_auth import check_token, save_token
 from enigram.application.repo_sync import check_ref, check_repo_url
 from enigram.application.routing import answer_routed, scope_mode
+from enigram.application.targets import find_targets
 from enigram.application.webhooks import parse_push, verify_webhook
 from enigram.bootstrap import build_deps
 from enigram.config import Config
@@ -797,6 +798,15 @@ def create_app(
         await _repo_or_404(ws, repo_id)
         rows = await features_view(ws.code_graph, ws.notes, repo_id, q)
         return {"features": rows[:FEATURE_LIST_MAX], "total": len(rows)}
+
+    @app.get("/targets")
+    async def targets(
+        ws: Viewer, q: Annotated[str, Query(min_length=1, max_length=200)]
+    ) -> list[dict[str, Any]]:
+        """What a note can be about, by what people know: features (route), symbols, graph
+        entities and documents matching `q` (the note form's one search box)."""
+        repos = await ws.code_graph.list_repos()
+        return await find_targets(ws.cfg, ws.code_graph, ws.store, repos, q)
 
     @app.get("/repos/{repo_id}/tree")
     async def repo_tree(ws: Viewer, repo_id: int) -> dict[str, Any]:
