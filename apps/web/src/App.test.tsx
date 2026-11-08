@@ -177,6 +177,7 @@ describe('App frame', () => {
       ['Documents', '/w/ws-a/documents'],
       ['Knowledge', '/w/ws-a/knowledge'],
       ['Graph', '/w/ws-a/graph'],
+      ['Memory', '/w/ws-a/memory'],
       ['Inbox', '/w/ws-a/review'],
       ['Dashboard', '/w/ws-a/dashboard'],
       ['Members', '/w/ws-a/members'], // no /me here: the API alone decides
