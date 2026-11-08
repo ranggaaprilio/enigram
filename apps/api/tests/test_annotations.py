@@ -67,9 +67,24 @@ def test_parse_note_citations():
     assert parse_note_citations("team note #51 says; Note#55 claims; note# 9") == [51, 55]
 
 
+def test_a_note_line_carries_its_type_and_both_prompts_weigh_it():
+    # docs/plan.md item 11: a business rule is a fact, a technical note a hint.
+    from enigram.application.annotations import notes_prompt
+    from enigram.application.code_agent import system_prompt
+    from enigram.domain.annotation import NOTE_WEIGHT_RULE
+
+    rule = note(note_type="business_rule", status="proposed")
+    assert (
+        note_line(rule)
+        == 'note#7 [business rule, proposed] "Logout also revokes the refresh token."'
+    )
+    assert NOTE_WEIGHT_RULE in notes_prompt([rule])
+    assert NOTE_WEIGHT_RULE in system_prompt(["org-app 70ae60dbb609"])
+
+
 def test_note_line_and_warnings():
     assert note_line(note()) == (
-        'note#7 [verified by alice 2026-11-02] "Logout also revokes the refresh token."'
+        'note#7 [technical, verified by alice 2026-11-02] "Logout also revokes the refresh token."'
     )
     long = note(text="word " * 100)
     assert len(note_line(long)) < 260 and note_line(long).endswith('…"')

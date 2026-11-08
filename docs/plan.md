@@ -5,15 +5,34 @@ Urutan di bawah adalah urutan yang disarankan; tiap item bisa dikerjakan sebagai
 
 ## Status sekarang
 
+Per 2026-11-08 malam.
+
+| Item | Status | PR |
+|---|---|---|
+| 1 Repo private | Selesai | #31 |
+| 2 RBAC R1–R4 (peran, key multi-workspace, web sadar peran, login OIDC) | Selesai; Keycloak lokal untuk mencoba login | #32–#34, #36, #37, #51 |
+| 3 Sesi PM/QA | **Belum** (di tangan pemilik; login per orang sudah bisa) | — |
+| 4 UI U1–U4 (sidebar, pola halaman, palet ⌘K, aksesibilitas) | Selesai | #35, #39, #43, #48 |
+| 5 Note A1–A3 (form baru, Knowledge + Inbox, duplikat dan bulk) | Selesai | #38, #40, #42 |
+| 6 Dashboard D1–D3; Dashboard jadi halaman awal | Selesai | #44–#47, #52, #53 |
+| 7 Memory M1–M2 (M3 tercakup test M1) | Selesai | #49, #50 |
+| 8 Chat multi-agent | **Belum**; menunggu lima keputusan di bagian 8 | — |
+| 9 Monorepo | Belum (bisa diuji pada `apps/web` repo ini) | — |
+| 10 Hapus note | Selesai | #29 |
+| 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |
+| 12 Perbaikan kecil Code | Selesai | #30 |
+| 13 Adapter framework lain | Belum, menunggu repo nyata | — |
+| 14 Fase 7 evaluasi penuh | Belum; paling akhir | — |
+| 15 Rilis OSS (non-kode) | Belum, di tangan pemilik | — |
+
 | PRD | Status |
 |---|---|
 | Enigram code knowledge (`enigram-code-knowledge.prd.md`) | Fase 0–6 selesai; **fase 7 (evaluasi penuh) belum** |
 | Code page human annotation (`code-page-human-annotation.prd.md`) | Fase 1–6 selesai (fase 5 Mode File: PR #26) |
 | Workspace selection (`workspace-selection.prd.md`) | Fase 1–4 selesai; RSS dengan 3 engine belum diukur |
 
-Perbaikan di luar PRD yang sudah masuk hari ini: #21 (entry point Next.js dan sitasi path App
-Router), #22 (jawaban dokumen mengutip `[n]` per kalimat), #23 (pertanyaan overview selalu ke kode
-dan dokumen).
+Perbaikan di luar PRD: #21 (entry point Next.js dan sitasi path App Router), #22 (jawaban dokumen
+mengutip `[n]` per kalimat), #23 (pertanyaan overview selalu ke kode dan dokumen).
 
 **Cek regresi setelah #22 dan #23 (2026-11-08).**
 - Agent kode, split `dev`: 11 jawaban identik dengan run 2026-11-05 (cache agent kena, prompt dan
@@ -590,11 +609,25 @@ Diputuskan 2026-11-08. Hanya baris pertama yang butuh kode (perubahan prompt, uk
 
 | Pertanyaan | Keputusan | Dampak |
 |---|---|---|
-| Bobot note per tipe di prompt agent: aturan bisnis = fakta, known issue = petunjuk? | Ya, bertingkat: `business_rule`/`expected_behavior` = fakta, `known_issue`/`technical` = petunjuk | Prompt `notes_prompt` dan hasil eval |
+| Bobot note per tipe di prompt agent: aturan bisnis = fakta, known issue = petunjuk? | Ya, bertingkat: `business_rule`/`expected_behavior` = fakta, `known_issue`/`technical` = petunjuk | **Diterapkan 2026-11-08** (lihat di bawah) |
 | Tanda ✓ *Looks right* dikirim ke agent? | Tidak di v1 | — |
 | Batas token global selain budget per workspace? | Belum, pantau lewat Dashboard (item 6) | — |
 | Branch yang dilacak: default saja atau juga branch PR? | Default saja | — |
 | Daftar fitur memuat symbol ber-summary `flow` yang bukan entry point? | Tidak perlu: semua summary `flow` sudah entry point (nestjs-boilerplate 25/25, white-board 7/7) | — |
+
+**Bobot note per tipe, diterapkan 2026-11-08.** Baris note di prompt kini memuat tipenya
+(`note#7 [business rule, verified by …]`) dan kedua penjawab (code agent dan jalur dokumen)
+mendapat aturan `NOTE_WEIGHT_RULE`: aturan bisnis dan expected behavior adalah keputusan tim
+(jawab dengannya, tandai kode yang berbeda), known issue dan technical adalah petunjuk yang kalah
+oleh kode. Prompt code agent naik 35 token (299 → 334), `AGENT_VERSION` 3.4.
+- Split `dev` (`answers-enigram-agent-20261108-130801`): 10/10 benar menurut jawaban golden,
+  a01 benar, 47/47 sitasi valid, token 1,016× run 2026-11-05. Label oleh Claude, bukan blind.
+- Spike anotasi (semua note `technical`): s01–s03 dan s05 mengikuti note; s05 menyatakan kode
+  sebagai jawaban dan tetap menampilkan konflik. s04 tidak mengutip note#54 (jawaban kodenya
+  benar); di `main` pertanyaan yang sama mengutipnya 1/3 kali, sama dengan prompt baru, jadi bukan
+  regresi.
+- Note#55 (s05) diubah sementara ke `business_rule`: jawabannya berubah menjadi "per aturan bisnis
+  tim: ya, tapi kode belum menerapkannya", sesuai tujuan; tipe dikembalikan ke `technical`.
 
 ## 12. Perbaikan kecil halaman Code
 

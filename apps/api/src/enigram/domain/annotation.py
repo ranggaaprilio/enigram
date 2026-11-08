@@ -21,6 +21,14 @@ VIAS = ("api", "mcp")  # how a note was written: the HTTP/CLI routes, or an agen
 # known issues claim how the code acts; technical is the developers' default.
 NOTE_TYPES = ("business_rule", "expected_behavior", "known_issue", "technical")
 DEFAULT_NOTE_TYPE = "technical"
+# How much an answer leans on a note, by its type (docs/plan.md item 11, decided 2026-11-08): a
+# business rule or expected behaviour is what the team decided; a known issue or a technical
+# note is a developer's reading of the code, which the code itself can overrule. note_line puts
+# the type in front of the status so the model can apply it.
+NOTE_WEIGHT_RULE = (
+    "A business rule or expected behavior note is a team decision: answer with it and flag code "
+    "that differs. A known issue or technical note is a hint the code overrules."
+)
 # Shown in answers (rejected is not).
 ACTIVE_STATUSES = ("verified", "needs_verification", "orphaned", "proposed")
 # Attached to graph-tool rows; a proposal is not.
@@ -111,13 +119,14 @@ def parse_note_citations(text: str) -> list[int]:
 
 
 def note_line(note: Annotation, *, full: bool = False) -> str:
-    """`note#7 [verified by alice 2026-11-02] "text"`, clipped to NOTE_LINE_CHARS unless `full`,
-    with the conflict flag and a non-verified status appended."""
+    """`note#7 [business rule, verified by alice 2026-11-02] "text"`, clipped to NOTE_LINE_CHARS
+    unless `full`, with the conflict flag and a non-verified status appended."""
     if note.status == "verified" and note.verified_by:
         day = f" {note.verified_at.date().isoformat()}" if note.verified_at else ""
         state = f"verified by {note.verified_by}{day}"
     else:
         state = note.status.replace("_", " ")
+    state = f"{note.note_type.replace('_', ' ')}, {state}"
     text = " ".join(note.text.split())
     if not full and len(text) > NOTE_LINE_CHARS:
         text = text[: NOTE_LINE_CHARS - 1].rstrip() + "…"
