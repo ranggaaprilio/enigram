@@ -485,7 +485,9 @@ API keys keep working beside sign-in, for agents and scripts.
 API. Its sidebar (a drawer on a phone, see [`docs/design.md`](docs/design.md)) groups the pages
 into *Answers* (Ask, Trace), *Library* (Documents, Knowledge, Graph), *Review* (Inbox, with the
 number of waiting notes for maintainers) and, for admins, *Settings* (Members); the account menu at its foot shows the key's role and picks the light, dark
-or system theme:
+or system theme. **⌘K / Ctrl+K** (or *Search* in the top bar) opens a palette that goes to any
+page, switches workspace on the same page, or finds a feature, symbol, entity or document and
+opens it, all from the keyboard:
 
 - **Documents**: drop PDF or Markdown files to upload them; the table follows each job until it
   is indexed or failed.

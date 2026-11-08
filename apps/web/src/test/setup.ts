@@ -21,6 +21,9 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 }
 
+// Nor scrollIntoView, which cmdk calls on the active item of the command palette.
+Element.prototype.scrollIntoView ??= function () {}
+
 afterEach(() => {
   localStorage.clear()
   cleanup()
