@@ -490,6 +490,32 @@ session lasts `SESSION_DAYS` (7) and ends at *Sign out* in the account menu or w
 revoked. Notes and ✓ reviews then carry the person's name from the provider, not a typed one.
 API keys keep working beside sign-in, for agents and scripts.
 
+**Try it locally with Keycloak.** The `keycloak` compose profile runs a development Keycloak
+with a realm `enigram` ([`tools/keycloak/enigram-realm.json`](tools/keycloak/enigram-realm.json)):
+the client `enigram-web` and three users whose password is their name: `alice` and `bob`
+(`@example.com`) and `eve` (`@other.test`, refused by the domain rule).
+
+```bash
+docker compose --profile keycloak up -d keycloak   # admin console: http://keycloak.localhost:8081 (admin/admin)
+```
+
+In `.env`, empty `ENIGRAM_WEB_KEY` and set:
+
+```bash
+OIDC_ISSUER=http://keycloak.localhost:8081/realms/enigram
+OIDC_CLIENT_ID=enigram-web
+OIDC_CLIENT_SECRET=local-dev-secret-not-for-production
+OIDC_REDIRECT_URL=http://localhost:3000/api/auth/callback
+OIDC_ALLOWED_DOMAINS=example.com
+```
+
+then `docker compose up -d api web`, open http://localhost:3000 and sign in as `alice`;
+`docker compose exec api enigram principals owner alice@example.com` makes her the owner. The
+issuer `keycloak.localhost` is one name for both sides: browsers resolve `*.localhost` to this
+machine (Chrome, Edge and Firefox; not Safari) and the API container reaches Keycloak through a
+network alias, so the token's issuer matches `OIDC_ISSUER`. For `make web-dev` use the redirect
+URL on port 5173 instead. The passwords and client secret are fixed: never publish this Keycloak.
+
 ### Web UI
 
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
