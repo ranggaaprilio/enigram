@@ -16,7 +16,7 @@ Per 2026-11-08 malam.
 | 5 Note A1–A3 (form baru, Knowledge + Inbox, duplikat dan bulk) | Selesai | #38, #40, #42 |
 | 6 Dashboard D1–D3; Dashboard jadi halaman awal | Selesai | #44–#47, #52, #53 |
 | 7 Memory M1–M2 (M3 tercakup test M1) | Selesai | #49, #50 |
-| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); Ask digabung ke Chat (agent Auto); berikutnya C3 panel | #55–#57 |
+| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); Ask digabung ke Chat (agent Auto, #58); C3 panel; berikutnya C4 agent kustom | #55–#58 |
 | 9 Monorepo | Belum (bisa diuji pada `apps/web` repo ini) | — |
 | 10 Hapus note | Selesai | #29 |
 | 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |
@@ -613,6 +613,18 @@ Dua perbaikan prompt dari ukuran ini: Business semula 0,35 karena kalimat ringka
 (`[human]`) oleh Business, QA dan Overview di s03 dan s05. **Belum terukur:** pemakaian dokumen
 oleh Business, karena keempat pertanyaan dirutekan ke kode (dokumen workspace `default` tidak
 membahas repo ini); ulangi pada workspace yang punya dokumen aturan bisnis.
+
+**C3 selesai 2026-11-08.** Panel per pesan (keputusan owner): beberapa `@nama` di awal pesan, atau
+tombol **Panel** di composer yang memilih 2–3 agent lalu menaruh `@nama` itu di depan pesan; pesan
+berikutnya kembali ke agent sesi. Batas `PANEL_MAX_AGENTS = 3` (lebih dari itu 422 sebelum apa pun
+disimpan). Agent panel menjawab paralel, masing-masing dengan meter token sendiri, trace sendiri,
+dan bagian yang sama dari sisa kuota hari itu (sisa / jumlah agent), jadi satu panel tidak melewati
+kuota harian. Event `question` membawa `answering` berupa daftar agent; tiap `step` membawa
+`agent`. Riwayat pertanyaan lanjutan memuat semua jawaban panel, masing-masing diberi nama
+agentnya ("QA answer: ..."). Halaman: berdampingan di layar lebar (`lg`), satu tab per agent di
+bawahnya, total token panel di bawahnya. **Belum:** tiap agent menulis ulang pertanyaan mandiri
+sendiri (satu panggilan LLM kecil per agent, bisa dibagi); panel belum dicoba di browser dengan
+model sungguhan.
 
 **Keputusan awal (sudah dijawab di atas).**
 - Interaksi utama: pilih satu agent per percakapan, panel, atau keduanya sejak awal.

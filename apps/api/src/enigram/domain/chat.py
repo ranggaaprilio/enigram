@@ -13,6 +13,8 @@ CHAT_TITLE_MAX_CHARS = 120
 # either limit is reached. Resent with every tool call of the answer, so kept small.
 HISTORY_MAX_TURNS = 6  # question + answer pairs
 HISTORY_MAX_TOKENS = 3000
+# C3: one question to several agents at once ("@business @qa ..."); each costs a full answer.
+PANEL_MAX_AGENTS = 3
 ROLES = ("user", "agent")
 
 
@@ -126,11 +128,14 @@ def agent_named(name: str) -> ChatAgent | None:
     return next((a for a in AGENTS.values() if name == a.name or name in a.aliases), None)
 
 
-def split_mention(text: str) -> tuple[str | None, str]:
-    """`@qa make scenarios` -> ("qa", "make scenarios"); no leading @name -> (None, text).
-    An @name that is no agent stays part of the text (an e-mail, a decorator)."""
+def split_mentions(text: str) -> tuple[list[str], str]:
+    """`@qa make scenarios` -> (["qa"], "make scenarios"); `@business @qa which rule?` ->
+    (["business", "qa"], "which rule?"), a panel; no leading @name -> ([], text). An @name
+    that is no agent ends the list and stays part of the text (an e-mail, a decorator)."""
     text = text.strip()
-    if m := MENTION.match(text):
-        if agent := agent_named(m[1]):
-            return agent.name, text[m.end() :]
-    return None, text
+    names: list[str] = []
+    while (m := MENTION.match(text)) and (agent := agent_named(m[1])):
+        if agent.name not in names:
+            names.append(agent.name)
+        text = text[m.end() :]
+    return names, text

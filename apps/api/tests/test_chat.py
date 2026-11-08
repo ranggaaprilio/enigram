@@ -34,6 +34,19 @@ def test_history_keeps_answered_turns_oldest_first():
     assert history_of([]) == []
 
 
+def test_a_panel_is_one_turn_with_each_answer_named():
+    m = [
+        ChatMessage(1, 1, "user", None, "@technical @qa q1", None, 0, None, NOW),
+        ChatMessage(2, 1, "agent", "qa", "scenarios", 2, 0, None, NOW),
+        ChatMessage(3, 1, "agent", "business", "", 3, 0, "provider down", NOW),
+        ChatMessage(4, 1, "agent", "technical", "the flow", 4, 0, None, NOW),
+    ]
+    assert history_of(m) == [
+        {"role": "user", "content": "@technical @qa q1"},
+        {"role": "assistant", "content": "QA answer:\nscenarios\n\nTechnical answer:\nthe flow"},
+    ]
+
+
 def test_history_keeps_the_newest_turns_within_both_limits():
     many = _turns(*[(f"q{i}", f"a{i}", None) for i in range(HISTORY_MAX_TURNS + 3)])
     kept = history_of(many)
@@ -78,16 +91,22 @@ async def test_a_follow_up_is_rewritten_to_stand_alone_for_the_guard():
 
 
 def test_a_mention_picks_an_agent_by_name_or_alias():
-    from enigram.domain.chat import AGENTS, split_mention
+    from enigram.domain.chat import AGENTS, split_mentions
 
-    assert split_mention("@qa make scenarios") == ("qa", "make scenarios")
-    assert split_mention("@Rules, which rule?") == ("business", "which rule?")
-    assert split_mention("@tech: walk through it") == ("technical", "walk through it")
-    assert split_mention("@ask what is it?") == ("auto", "what is it?")
+    assert split_mentions("@qa make scenarios") == (["qa"], "make scenarios")
+    assert split_mentions("@Rules, which rule?") == (["business"], "which rule?")
+    assert split_mentions("@tech: walk through it") == (["technical"], "walk through it")
+    assert split_mentions("@ask what is it?") == (["auto"], "what is it?")
     # Not an agent, or nothing after it: the text as typed.
-    assert split_mention("@Roles decorator, where?") == (None, "@Roles decorator, where?")
-    assert split_mention("@qa") == (None, "@qa")
-    assert split_mention("ask @qa later") == (None, "ask @qa later")
+    assert split_mentions("@Roles decorator, where?") == ([], "@Roles decorator, where?")
+    assert split_mentions("@qa") == ([], "@qa")
+    assert split_mentions("ask @qa later") == ([], "ask @qa later")
+    # A panel: several @names, each once; one that is no agent ends the list.
+    assert split_mentions("@business, @qa @rules which rule?") == (
+        ["business", "qa"],
+        "which rule?",
+    )
+    assert split_mentions("@qa @Roles where?") == (["qa"], "@Roles where?")
     # Technical and Auto keep the answerer's own prompt; the others add a focus.
     assert AGENTS["technical"].focus is None
     assert AGENTS["auto"].focus is None and AGENTS["auto"].route == "auto"

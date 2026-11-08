@@ -1,11 +1,13 @@
-"""Chat (plan item 8): sessions with an agent and their history, each answer a trace. C2: four
-agents (domain/chat.py AGENTS), a message starting with @name asks another one.
+"""Chat (plan item 8): sessions with an agent and their history, each answer a trace. C2: the
+agents (domain/chat.py AGENTS), a message starting with @name asks another one. C3: a message
+starting with several @names is a panel: those agents answer it at once, each with its trace.
 
 Who may do what (decided 2026-11-08): a member (viewer and up) starts sessions and asks in
 their own; the owner may share a session, which every member then reads but cannot write to;
 the owner deletes it, and an admin may delete any. Another person's private session looks
 missing (404), as another key's memory does. History is kept until deleted."""
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import Any
@@ -36,11 +38,12 @@ from enigram.domain.chat import (
     DEFAULT_AGENT,
     HISTORY_MAX_TOKENS,
     HISTORY_MAX_TURNS,
+    PANEL_MAX_AGENTS,
     ChatAgent,
     ChatMessage,
     ChatSession,
     agent_named,
-    split_mention,
+    split_mentions,
     title_of,
 )
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
@@ -89,6 +92,8 @@ def check_question(text: str) -> str:
         raise EnigramError("Ask something")
     if len(text) > CHAT_MESSAGE_MAX_CHARS:
         raise EnigramError(f"A message is at most {CHAT_MESSAGE_MAX_CHARS} characters")
+    if len(split_mentions(text)[0]) > PANEL_MAX_AGENTS:
+        raise EnigramError(f"A panel has at most {PANEL_MAX_AGENTS} agents")
     return text
 
 
@@ -191,18 +196,29 @@ async def standalone_question(
     return rewritten[:CHAT_MESSAGE_MAX_CHARS] or question
 
 
+def _label(name: str | None) -> str:
+    agent = agent_named(name or "")
+    return agent.label if agent else (name or "Agent")
+
+
 def history_of(messages: list[ChatMessage]) -> list[dict[str, str]]:
     """The answered turns before a new question, as chat messages, oldest first: the newest
     HISTORY_MAX_TURNS pairs that fit in HISTORY_MAX_TOKENS. A question whose answer failed is
-    left out with it."""
-    pairs: list[tuple[str, str]] = []
-    asked: str | None = None
+    left out with it. A panel's answers are one answer, each part named by its agent, so a
+    follow-up can say "from the QA answer above"."""
+    turns: list[tuple[str, list[ChatMessage]]] = []
     for m in messages:
         if m.role == "user":
-            asked = m.text
-        elif asked is not None and m.text and not m.error:
-            pairs.append((asked, m.text))
-            asked = None
+            turns.append((m.text, []))
+        elif turns and m.text and not m.error:
+            turns[-1][1].append(m)
+    pairs: list[tuple[str, str]] = []
+    for asked, answers in turns:
+        if len(answers) == 1:
+            pairs.append((asked, answers[0].text))
+        elif answers:
+            parts = [f"{_label(a.agent)} answer:\n{a.text}" for a in answers]
+            pairs.append((asked, "\n\n".join(parts)))
     kept: list[tuple[str, str]] = []
     used = 0
     for q, a in reversed(pairs[-HISTORY_MAX_TURNS:]):
@@ -226,64 +242,79 @@ async def ask(
     api_key: str | None,
     answer: Answer,
     emit: Emit,
-) -> ChatMessage:
-    """One turn: store the question, answer it with the history before it, store the answer
-    (or the error) and log it as a trace like /query. `emit` hears the stored question, each
-    tool step and the stored answer, for the stream."""
+) -> list[ChatMessage]:
+    """One turn: store the question, answer it with the history before it, store each answer
+    (or its error) and log it as a trace like /query. A panel (several @names) asks its agents
+    at once; each gets an equal share of the tokens left today, so together they stay within
+    it. `emit` hears the stored question, each tool step (with its agent) and each stored
+    answer as it comes, for the stream."""
     question = check_question(text)
-    named, asked_text = split_mention(question)
-    agent = AGENTS[named or session.agent]
+    named, asked_text = split_mentions(question)
+    agents = [AGENTS[n] for n in named] or [AGENTS[session.agent]]
     history = history_of(await chat.messages(session.id))
     if not history and session.title == "New chat":
         session = await chat.update_session(session.id, title=title_of(question)) or session
     asked = await chat.add_message(session.id, "user", question)
-    # `answering`: which agent the UI shows at work (an @name changes it for this turn).
-    await emit("question", {**message_json(asked), "title": session.title, "answering": agent.name})
+    # `answering`: the agents the UI shows at work (@names change them for this turn).
+    await emit(
+        "question",
+        {**message_json(asked), "title": session.title, "answering": [a.name for a in agents]},
+    )
 
-    async def failed(error: str, query_id: int | None, tokens: int = 0) -> ChatMessage:
+    try:
+        allowance = await query_allowance(store, cfg, api_key)
+    except BudgetExceeded as e:
+        return [await _failed(chat, emit, session, a, str(e), None) for a in agents]
+    cap = allowance // len(agents) if allowance else allowance
+
+    async def one(agent: ChatAgent) -> ChatMessage:
+        async def on_tool(name: str, args: dict[str, Any]) -> None:
+            label = TOOL_STEPS.get(name, name)
+            await emit("step", {"tool": name, "label": label, "agent": agent.name})
+
+        # Inside the task, so each agent's provider calls count on its own meter.
+        with metered(cap, "this answer") as meter:
+            try:
+                result = await answer(agent, asked_text, history, on_tool)
+            except EnigramError as e:
+                query_id = await store.log_query(
+                    TOKEN_SOURCE, question, agent.name, error=str(e), api_key=api_key
+                )
+                return await _failed(chat, emit, session, agent, str(e), query_id, meter.total)
+            finally:
+                if meter.total:
+                    await store.add_tokens(TOKEN_SOURCE, api_key, meter.total)
+        query_id = await store.log_query(
+            TOKEN_SOURCE, question, result.mode, result=result, api_key=api_key
+        )
         message = await chat.add_message(
             session.id,
             "agent",
-            "",
+            result.answer,
             agent=agent.name,
             query_id=query_id,
-            tokens=tokens,
-            error=error,
+            tokens=meter.total,
         )
-        await emit("answer", message_json(message))
+        await emit("answer", message_json(message, asdict(result)))
         return message
 
-    try:
-        cap = await query_allowance(store, cfg, api_key)
-    except BudgetExceeded as e:
-        return await failed(str(e), None)
+    return list(await asyncio.gather(*(one(a) for a in agents)))
 
-    async def on_tool(name: str, args: dict[str, Any]) -> None:
-        await emit("step", {"tool": name, "label": TOOL_STEPS.get(name, name)})
 
-    with metered(cap, "this answer") as meter:
-        try:
-            result = await answer(agent, asked_text, history, on_tool)
-        except EnigramError as e:
-            query_id = await store.log_query(
-                TOKEN_SOURCE, question, agent.name, error=str(e), api_key=api_key
-            )
-            return await failed(str(e), query_id, meter.total)
-        finally:
-            if meter.total:
-                await store.add_tokens(TOKEN_SOURCE, api_key, meter.total)
-    query_id = await store.log_query(
-        TOKEN_SOURCE, question, result.mode, result=result, api_key=api_key
-    )
+async def _failed(
+    chat: ChatRepository,
+    emit: Emit,
+    session: ChatSession,
+    agent: ChatAgent,
+    error: str,
+    query_id: int | None,
+    tokens: int = 0,
+) -> ChatMessage:
+    """An answer that failed: stored with its error, the text empty."""
     message = await chat.add_message(
-        session.id,
-        "agent",
-        result.answer,
-        agent=agent.name,
-        query_id=query_id,
-        tokens=meter.total,
+        session.id, "agent", "", agent=agent.name, query_id=query_id, tokens=tokens, error=error
     )
-    await emit("answer", message_json(message, asdict(result)))
+    await emit("answer", message_json(message))
     return message
 
 

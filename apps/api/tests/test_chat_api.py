@@ -100,7 +100,11 @@ def test_a_turn_streams_its_steps_and_stores_the_answer_with_its_trace(chat_env)
     )
     assert [e for e, _ in events] == ["question", "step", "answer"]
     assert events[0][1]["title"] == "Who may call /users?"  # the first question names it
-    assert events[1][1] == {"tool": "find_symbol", "label": "Looking up a symbol"}
+    assert events[1][1] == {
+        "tool": "find_symbol",
+        "label": "Looking up a symbol",
+        "agent": "technical",
+    }
     answer = events[2][1]
     assert answer["text"] == ANSWER and answer["agent"] == "technical"
     assert answer["sources"][0]["origin"] == "code" and answer["tokens"] == 1000
@@ -219,8 +223,11 @@ def test_an_agent_answers_with_its_focus_and_a_mention_asks_another(chat_env):
 
     # Business rules routes (here: to the documents) with its focus in the prompt.
     events = _events(client.post(url, json={"text": "Which rule covers /users?"}, headers=LAPTOP))
-    assert events[0][1]["answering"] == "business"
-    assert ("step", {"tool": "documents", "label": "Searching the documents"}) in events
+    assert events[0][1]["answering"] == ["business"]
+    assert (
+        "step",
+        {"tool": "documents", "label": "Searching the documents", "agent": "business"},
+    ) in events
     assert events[-1][1]["agent"] == "business"
     docs = next(a for a in asked if "docs" in a)
     assert docs["docs"] == "Which rule covers /users?"
@@ -229,7 +236,7 @@ def test_an_agent_answers_with_its_focus_and_a_mention_asks_another(chat_env):
     # @qa asks QA for this message only: the code agent with QA's focus, the mention dropped.
     events = _events(client.post(url, json={"text": "@qa scenarios for that?"}, headers=LAPTOP))
     assert events[0][1]["text"] == "@qa scenarios for that?"  # stored as typed
-    assert events[0][1]["answering"] == "qa" and events[-1][1]["agent"] == "qa"
+    assert events[0][1]["answering"] == ["qa"] and events[-1][1]["agent"] == "qa"
     qa = asked[-1]
     assert qa["question"] == "scenarios for that?" and qa["focus"].startswith("Answer for a tester")
     # The history carries the other agent's answer.
@@ -242,3 +249,39 @@ def test_an_agent_answers_with_its_focus_and_a_mention_asks_another(chat_env):
     assert asked[-1]["focus"] is None
     bad = client.patch(f"/chat/sessions/{sid}", json={"agent": "sales"}, headers=LAPTOP)
     assert bad.status_code == 422
+
+
+def test_a_panel_asks_its_agents_at_once_within_one_share_each(chat_env):
+    client, store, asked = chat_env
+    sid = _start(client)["id"]
+    url = f"/chat/sessions/{sid}/messages"
+    # 1500 tokens left today: 750 per agent. QA (the code agent, 1000) goes over its share;
+    # Business rules (the documents, 550) stays within it.
+    home = client.app.state.workspaces.home
+    home.cfg = dataclasses.replace(home.cfg, daily_token_budget=1500)
+
+    text = "@rules @qa which rule covers /users?"
+    events = _events(client.post(url, json={"text": text}, headers=LAPTOP))
+    assert events[0][1]["answering"] == ["business", "qa"]
+    steps = [d for e, d in events if e == "step"]
+    assert {d["agent"] for d in steps} == {"business", "qa"}
+    answers = {d["agent"]: d for e, d in events if e == "answer"}
+    assert set(answers) == {"business", "qa"}
+    assert (
+        answers["business"]["text"].startswith("Only admins") and not answers["business"]["error"]
+    )
+    assert "cap of 750" in answers["qa"]["error"] and answers["qa"]["query_id"] is not None
+    # Each answer is its own trace, and the tokens count per agent.
+    traces = [
+        client.get(f"/queries/{a['query_id']}", headers=LAPTOP).json() for a in answers.values()
+    ]
+    assert {t["question"] for t in traces} == {text}
+    assert sorted(t for s, _, t in store.tokens if s == "chat") == [550, 1000]
+
+    detail = client.get(f"/chat/sessions/{sid}", headers=LAPTOP).json()
+    assert [m["role"] for m in detail["messages"]] == ["user", "agent", "agent"]
+
+    # More than three agents: refused before anything is stored or asked.
+    many = "@auto @technical @business @qa which?"
+    assert client.post(url, json={"text": many}, headers=LAPTOP).status_code == 422
+    assert len(client.get(f"/chat/sessions/{sid}", headers=LAPTOP).json()["messages"]) == 3
