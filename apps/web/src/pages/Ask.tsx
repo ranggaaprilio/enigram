@@ -129,12 +129,12 @@ export default function Ask() {
         </>
       )}
       {!result && !pending && !error && (
-        // DESIGN.md spotlight card: the one gradient on the page, gone once there is an answer.
-        <div className="mt-8 rounded-2xl bg-(image:--spotlight) p-8 text-white">
-          <h2 className="mt-0 mb-2 flex items-center gap-2 text-2xl font-medium tracking-[-0.8px]">
-            <Sparkles className="size-5" /> What do you want to know?
+        <div className="mt-6 rounded-md border p-5">
+          <h2 className="mt-0 mb-1 flex items-center gap-2">
+            <Sparkles className="size-4 text-muted-foreground" aria-hidden /> What do you want to
+            know?
           </h2>
-          <p className="mb-5 max-w-[60ch] text-white/90">
+          <p className="mb-4 max-w-[60ch] text-muted-foreground">
             Answers come from the documents and code you indexed, with a source for every sentence.
             Try one of these:
           </p>
@@ -143,7 +143,9 @@ export default function Ask() {
               <Button
                 key={example}
                 type="button"
-                className="h-auto min-h-9 bg-white/15 py-2 text-left whitespace-normal text-white hover:bg-white/25"
+                variant="outline"
+                size="sm"
+                className="h-auto min-h-8 py-1.5 text-left whitespace-normal"
                 onClick={() => {
                   setQuestion(example)
                   box.current?.focus()

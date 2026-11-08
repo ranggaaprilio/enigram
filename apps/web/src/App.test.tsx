@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -42,7 +42,10 @@ function headersOf(fetch: ReturnType<typeof mockFetch>, url: string) {
   return fetch.mock.calls.filter(([u]) => u === url).map(([, init]) => header(init))
 }
 
-afterEach(() => setWorkspace(null))
+afterEach(() => {
+  setWorkspace(null)
+  document.documentElement.classList.remove('dark')
+})
 
 describe('App workspaces', () => {
   it('redirects / to the process workspace', async () => {
@@ -156,5 +159,66 @@ describe('App workspaces', () => {
     renderAt('/w/ws-a/documents')
     expect(await screen.findByText('API unreachable')).toBeInTheDocument()
     await waitFor(() => expect(headersOf(fetch, '/api/documents')).toContain('ws-a'))
+  })
+})
+
+describe('App frame', () => {
+  it('reaches every page from the sidebar and marks the current one', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/code')
+    const nav = await screen.findByRole('navigation', { name: 'Pages' })
+    const links = within(nav).getAllByRole('link')
+    expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
+      ['Ask', '/w/ws-a/ask'],
+      ['Trace', '/w/ws-a/trace'],
+      ['Documents', '/w/ws-a/documents'],
+      ['Code', '/w/ws-a/code'],
+      ['Annotations', '/w/ws-a/annotations'],
+      ['Graph', '/w/ws-a/graph'],
+    ])
+    expect(within(nav).getByRole('link', { name: 'Code' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('banner')).toHaveTextContent('ws-a / Code')
+  })
+
+  it('shows the key and its role, and keeps the theme picked', async () => {
+    mockFetch({
+      ...ROUTES,
+      'GET /api/me': {
+        body: {
+          principal: { name: 'qa-team', kind: 'key', owner: false, default_workspace: 'ws-a' },
+          roles: { 'ws-a': 'contributor' },
+        },
+      },
+    })
+    renderAt('/w/ws-a/documents')
+    const menu = await screen.findByRole('button', { name: 'Account and theme' })
+    await waitFor(() => expect(menu).toHaveTextContent('contributor · ws-a'))
+    expect(menu).toHaveTextContent('qa-team')
+
+    await userEvent.click(menu)
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Dark' }))
+    expect(document.documentElement).toHaveClass('dark')
+    expect(localStorage.getItem('enigram-theme')).toBe('dark')
+
+    await userEvent.click(menu)
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'System' }))
+    expect(document.documentElement).not.toHaveClass('dark') // the test system is light
+    expect(localStorage.getItem('enigram-theme')).toBeNull()
+  })
+
+  it('names the open access mode when the API has no keys', async () => {
+    mockFetch({ ...ROUTES, 'GET /api/me': { body: { principal: null, roles: {} } } })
+    renderAt('/w/default/documents')
+    const menu = await screen.findByRole('button', { name: 'Account and theme' })
+    await waitFor(() => expect(menu).toHaveTextContent('admin · default'))
+    expect(menu).toHaveTextContent('Local')
+  })
+
+  it('remembers a collapsed sidebar', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/default/documents')
+    const bar = await screen.findByRole('banner')
+    await userEvent.click(within(bar).getByRole('button', { name: 'Toggle Sidebar' }))
+    expect(localStorage.getItem('enigram-sidebar')).toBe('closed')
   })
 })

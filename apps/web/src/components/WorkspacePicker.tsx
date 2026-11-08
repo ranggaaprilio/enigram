@@ -51,9 +51,10 @@ export default function WorkspacePicker(props: {
   }
 
   return (
-    <div className="relative flex items-center gap-2">
+    <div className="flex flex-col gap-1.5 [&_[data-slot=native-select-wrapper]]:w-full">
       <NativeSelect
         size="sm"
+        className="w-full"
         aria-label="Workspace"
         value={props.current}
         onChange={(e) => navigate(`/w/${e.target.value}/${page}`)}
@@ -67,6 +68,7 @@ export default function WorkspacePicker(props: {
       <Button
         size="sm"
         variant="ghost"
+        className="justify-start text-muted-foreground"
         aria-expanded={open}
         onClick={() => (open ? close() : setOpen(true))}
       >
@@ -77,7 +79,7 @@ export default function WorkspacePicker(props: {
         <form
           aria-label="New workspace"
           onSubmit={submit}
-          className="absolute top-full right-0 mt-2 flex w-72 flex-col gap-2 rounded-xl border bg-card p-3 whitespace-normal shadow-lg"
+          className="flex flex-col gap-2 rounded-lg border bg-background p-3"
         >
           <Label htmlFor="workspace-name">Workspace name</Label>
           <Input
