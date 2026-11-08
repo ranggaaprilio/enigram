@@ -201,3 +201,45 @@ async def repo_detail(
         "summaries": report.get("summaries"),
         "staleness": last_done["staleness"] if last_done else None,
     }
+
+
+async def workspaces_overview(
+    cfg: Config, stats_of: dict[str, DashboardStats], days: int
+) -> dict[str, Any]:
+    """Plan item 6, D3: every workspace in one table for an owner: tokens today against the
+    daily budget (DAILY_TOKEN_BUDGET applies to each workspace), tokens and questions over the
+    last `days` UTC days, notes waiting and failed jobs; with the totals."""
+    now = today()
+    since = now - timedelta(days=days - 1)
+    week_ago = datetime.now(UTC) - timedelta(days=ATTENTION_DAYS)
+    budget = cfg.daily_token_budget or None
+    rows = []
+    for name, stats in sorted(stats_of.items()):
+        tokens = await stats.tokens_by_source(since)
+        used_today = sum(r["tokens"] for r in tokens if r["day"] == now)
+        asked = await stats.questions(since)
+        attention = await stats.attention(week_ago)
+        rows.append(
+            {
+                "workspace": name,
+                "tokens_today": used_today,
+                "left_today": max(budget - used_today, 0) if budget else None,
+                "tokens_period": sum(r["tokens"] for r in tokens),
+                "asked": asked["asked"],
+                "unanswered": asked["unanswered"],
+                "waiting": sum(
+                    attention[k]
+                    for k in ("proposed", "needs_verification", "orphaned", "note_conflicts")
+                ),
+                "failed_jobs": attention["failed_jobs"] + attention["budget_exceeded_jobs"],
+            }
+        )
+    keys = ("tokens_today", "tokens_period", "asked", "unanswered", "waiting", "failed_jobs")
+    return {
+        "days": days,
+        "since": since,
+        "budget": budget,
+        "jobs_since_days": ATTENTION_DAYS,
+        "workspaces": rows,
+        "total": {k: sum(r[k] for r in rows) for k in keys},
+    }

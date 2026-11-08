@@ -84,9 +84,10 @@ async def _new_conflicts(cfg: Config, store: JobRepository) -> ConflictRepositor
 
 
 async def _new_stats(cfg: Config, store: JobRepository) -> DashboardStats:
-    # Like _new_memory, read-only: the tables it counts belong to the other repositories.
+    # Like _new_memory, read-only: the tables it counts belong to the other repositories. The
+    # store's workspace, not cfg's: the owner's table (D3) counts other workspaces through it.
     assert isinstance(store, PostgresJobStore)
-    return PostgresStats(store.pool, cfg.workspace)
+    return PostgresStats(store.pool, store.workspace)
 
 
 def _decider(cfg: Config) -> DecisionProvider:

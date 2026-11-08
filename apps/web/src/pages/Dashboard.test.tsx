@@ -2,7 +2,10 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
-import type { Stats } from '../api'
+import type { ReactElement } from 'react'
+import { accessOf, AccessProvider } from '../access'
+import type { Stats, WorkspaceStats } from '../api'
+import { asRole } from '../test/access'
 import { REPO } from '../test/fixtures'
 import { mockFetch } from '../test/mockFetch'
 import Dashboard from './Dashboard'
@@ -71,12 +74,19 @@ function stats(days = 30): Stats {
   }
 }
 
-function renderPage(routes: Parameters<typeof mockFetch>[0], url = '/dashboard') {
+// An admin of "default" unless `ui` wraps it otherwise; the owner's table has its own test.
+function renderPage(
+  routes: Parameters<typeof mockFetch>[0],
+  url = '/dashboard',
+  wrap = (ui: ReactElement) => asRole('admin', ui),
+) {
   const fetch = mockFetch({ 'GET /api/stats/repos': { body: [REPO] }, ...routes })
   render(
-    <MemoryRouter initialEntries={[url]}>
-      <Dashboard />
-    </MemoryRouter>,
+    wrap(
+      <MemoryRouter initialEntries={[url]}>
+        <Dashboard />
+      </MemoryRouter>,
+    ),
   )
   return fetch
 }
@@ -202,5 +212,54 @@ describe('Dashboard', () => {
   it('shows an API error where the panels would be', async () => {
     renderPage({ 'GET /api/stats?days=30': { status: 500, body: { detail: 'database down' } } })
     expect(await screen.findByText(/database down/)).toBeInTheDocument()
+  })
+
+  it('lists every workspace against the budget for an owner', async () => {
+    const owner = {
+      principal: { name: 'me', kind: 'key', owner: true, default_workspace: 'default' },
+      roles: { default: 'admin', 'ws-b': 'admin' },
+    }
+    const row = { tokens_period: 900, asked: 4, unanswered: 1, waiting: 2, failed_jobs: 0 }
+    const all: WorkspaceStats = {
+      days: 30,
+      since: '2026-10-10',
+      budget: 1000,
+      jobs_since_days: 7,
+      workspaces: [
+        { workspace: 'default', tokens_today: 250, left_today: 750, ...row },
+        { workspace: 'ws-b', tokens_today: 500, left_today: 500, ...row },
+      ],
+      total: {
+        tokens_today: 750,
+        tokens_period: 1800,
+        asked: 8,
+        unanswered: 2,
+        waiting: 4,
+        failed_jobs: 0,
+      },
+    }
+    renderPage(
+      {
+        'GET /api/stats?days=30': { body: stats() },
+        'GET /api/stats/workspaces?days=30': { body: all },
+      },
+      '/dashboard',
+      (ui) => <AccessProvider value={accessOf(owner, 'default')}>{ui}</AccessProvider>,
+    )
+    const table = await screen.findByRole('region', { name: 'All workspaces' })
+    expect(await within(table).findByRole('link', { name: 'ws-b' })).toHaveAttribute(
+      'href',
+      '/w/ws-b/dashboard',
+    )
+    expect(within(table).getByText('50% of the budget')).toBeInTheDocument()
+    const totals = within(table).getByRole('row', { name: /^All/ })
+    expect(within(totals).getByText('1,800')).toBeInTheDocument()
+  })
+
+  it('has no workspace table for an admin who is not an owner', async () => {
+    const fetch = renderPage({ 'GET /api/stats?days=30': { body: stats() } })
+    await screen.findByRole('heading', { name: 'Token usage' })
+    expect(screen.queryByRole('heading', { name: 'All workspaces' })).toBeNull()
+    expect(fetch.mock.calls.some(([url]) => url.includes('/stats/workspaces'))).toBe(false)
   })
 })

@@ -370,3 +370,37 @@ async def test_index_jobs_of_one_repository_and_ref_newest_first(pool, world):
     ]
     assert [j["status"] for j in await stats.index_jobs(url, "dev", 10)] == ["done"]
     assert len(await stats.index_jobs(url, None, 1)) == 1
+
+
+async def test_the_owner_table_adds_up_every_workspace(pool, world, cfg):
+    """D3's acceptance check: the tokens of every workspace in the database, against the raw
+    rows, in one table with the totals."""
+    from enigram.application.dashboard import workspaces_overview
+
+    ws, _ = world
+    await pool.execute(
+        "INSERT INTO enigram_token_usage (workspace, day, source, api_key, tokens) "
+        "VALUES ($1, $2, 'query', 'web', 300)",
+        ws,
+        TODAY,
+    )
+    names = [
+        r["workspace"]
+        for r in await pool.fetch("SELECT DISTINCT workspace FROM enigram_token_usage")
+        if not r["workspace"].startswith("test_") or r["workspace"] == ws
+    ]
+    found = await workspaces_overview(cfg, {n: PostgresStats(pool, n) for n in names}, 90)
+
+    since = TODAY - timedelta(days=89)
+    for row in found["workspaces"]:
+        spent = await pool.fetchval(
+            "SELECT coalesce(sum(tokens), 0) FROM enigram_token_usage "
+            "WHERE workspace = $1 AND day >= $2",
+            row["workspace"],
+            since,
+        )
+        assert row["tokens_period"] == spent, row["workspace"]
+    mine = next(r for r in found["workspaces"] if r["workspace"] == ws)
+    assert mine["tokens_today"] == 300
+    assert mine["left_today"] == cfg.daily_token_budget - 300
+    assert found["total"]["tokens_period"] == sum(r["tokens_period"] for r in found["workspaces"])
