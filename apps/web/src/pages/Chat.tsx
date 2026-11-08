@@ -31,17 +31,19 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { useWorkspacePath, WsLink } from '@/workspace'
 
-// Plan item 8: conversations with an agent (C2: Technical, Business rules, QA, Overview). A
+// Plan item 8: conversations with an agent (C2: Technical, Business rules, QA, Overview; Auto
+// is what the Ask page did, merged here 2026-11-08). A
 // follow-up sees the turns before it, whichever agent gave them; a message starting with @name
 // asks another agent. Every answer has a trace. Shared sessions are read-only for others.
 const EXAMPLES = [
   'Walk through POST /auth/refresh: what is checked?',
   'Who may call the /users endpoints?',
   'Where is the upload size limit set?',
+  'Which documents mention the release gate?',
 ]
 // Until /chat/agents answers (and for an agent it no longer lists).
 const FALLBACK_AGENTS: ChatAgent[] = [
-  { name: 'technical', label: 'Technical', description: '', aliases: [] },
+  { name: 'auto', label: 'Auto', description: '', aliases: [] },
 ]
 const muted = 'text-[13px] text-muted-foreground'
 
@@ -62,7 +64,7 @@ export default function Chat() {
   const [error, setError] = useState<string | null>(null)
   const [turn, setTurn] = useState<Turn | null>(null)
   const [agents, setAgents] = useState<ChatAgent[]>(FALLBACK_AGENTS)
-  const [picked, setPicked] = useState('technical') // a new chat's agent
+  const [picked, setPicked] = useState('auto') // a new chat's agent
   const label = (name: string | null) => agents.find((a) => a.name === name)?.label ?? name ?? ''
   const started = useRef<number | null>(null) // a session this page just made: no reload
 
@@ -78,7 +80,7 @@ export default function Chat() {
     void loadSessions()
     listChatAgents()
       .then(setAgents)
-      .catch(() => {}) // the fallback still chats with Technical
+      .catch(() => {}) // the fallback still chats with Auto
   }, [])
 
   useEffect(() => {

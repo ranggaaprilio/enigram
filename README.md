@@ -323,7 +323,7 @@ write the same index.
 | `GET /memories/{id}` | One memory and the notes made from it; another key's is 404 below `maintainer` |
 | `DELETE /memories/{id}` | Your own memory, or any key's for a `maintainer` (204); notes made from it stay, with its `memory_id` |
 | `POST /memories/{id}/note` `{target_kind, target_ref, repo?, text?, note_type?}` | A note made from the memory: always a proposal, its text the memory's unless given |
-| `GET /chat/agents` | The chat agents: `technical` (the graph-first code agent as `/query` uses it), `business` (plain-language rules, routed to the documents, the code or both), `qa` (test scenarios over the code), `overview` (a short summary, routed); with their labels, descriptions and other @names |
+| `GET /chat/agents` | The chat agents: `auto` (the default: the router picks the documents, the code or both, with no focus; also `@ask`), `technical` (the graph-first code agent as `/query` uses it), `business` (plain-language rules, routed to the documents, the code or both), `qa` (test scenarios over the code), `overview` (a short summary, routed); with their labels, descriptions and other @names |
 | `GET /chat/sessions` | Your chat sessions and the ones others shared (`mine` false), newest activity first |
 | `POST /chat/sessions` `{agent?, title?}` | A new session (201); the title becomes the first question unless given |
 | `GET /chat/sessions/{id}` | The session and its messages; each answer has its `sources`, `origins` and `query_id` (its trace). Another person's private session is 404 |
@@ -527,7 +527,7 @@ URL on port 5173 instead. The passwords and client secret are fixed: never publi
 
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
 API. Its sidebar (a drawer on a phone, see [`docs/design.md`](docs/design.md)) groups the pages
-into *Overview* (Dashboard, the home page), *Answers* (Ask, Chat, Trace), *Library* (Documents, Knowledge, Graph, and Memory for contributors), *Review* (Inbox, with the
+into *Overview* (Dashboard, the home page), *Answers* (Chat, Trace), *Library* (Documents, Knowledge, Graph, and Memory for contributors), *Review* (Inbox, with the
 number of waiting notes for maintainers) and, for admins, *Settings* (Members); the account menu at its foot shows the key's role and picks the light, dark
 or system theme. **⌘K / Ctrl+K** (or *Search* in the top bar) opens a palette that goes to any
 page, switches workspace on the same page, or finds a feature, symbol, entity or document and
@@ -535,9 +535,6 @@ opens it, all from the keyboard:
 
 - **Documents**: drop PDF or Markdown files to upload them; the table follows each job until it
   is indexed or failed.
-- **Ask**: a question in `Auto (router)` mode (default: the router picks the documents, the code
-  or both), `mix` (GraphRAG) or `naive` (vector only) on the documents, or `Code (agent)` for
-  the indexed repositories, answered with sources and per-sentence origin tags.
 - **Knowledge → Explore** (`/knowledge`; old `/code` links land here): an indexed repository by its entry points (routes, pages, jobs, ..., grouped by
   kind), each with its AI summary, the steps it calls, its code (collapsed) and the notes on it,
   plus a note form with the target
@@ -573,7 +570,8 @@ opens it, all from the keyboard:
   marked (a search by meaning never finds it). *Open* shows its full text and the notes made
   from it; *Make a note* turns it into a proposal; *Delete* removes it after a confirmation.
 - **Answers → Chat** (`/chat`, `/chat/<id>`, plan item 8): a conversation with an agent:
-  Technical (code flows), Business rules (plain language, from team notes, documents and code),
+  Auto (the default: the router picks the documents, the code or both, as the old Ask page did;
+  `/ask` now opens Chat), Technical (code flows), Business rules (plain language, from team notes, documents and code),
   QA (test scenarios and edge cases) or Overview (a short summary). Pick one for a new chat or
   change it in the chat's header; start a message with `@qa` (or `@business`, ...) to ask
   another agent once, with the conversation so far. The first question starts a session and

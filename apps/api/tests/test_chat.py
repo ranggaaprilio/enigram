@@ -83,12 +83,14 @@ def test_a_mention_picks_an_agent_by_name_or_alias():
     assert split_mention("@qa make scenarios") == ("qa", "make scenarios")
     assert split_mention("@Rules, which rule?") == ("business", "which rule?")
     assert split_mention("@tech: walk through it") == ("technical", "walk through it")
+    assert split_mention("@ask what is it?") == ("auto", "what is it?")
     # Not an agent, or nothing after it: the text as typed.
     assert split_mention("@Roles decorator, where?") == (None, "@Roles decorator, where?")
     assert split_mention("@qa") == (None, "@qa")
     assert split_mention("ask @qa later") == (None, "ask @qa later")
-    # Technical keeps the code agent's own prompt; the others add a focus.
+    # Technical and Auto keep the answerer's own prompt; the others add a focus.
     assert AGENTS["technical"].focus is None
+    assert AGENTS["auto"].focus is None and AGENTS["auto"].route == "auto"
     assert all(AGENTS[n].focus for n in ("business", "qa", "overview"))
     assert {a.route for a in AGENTS.values()} == {"code", "auto"}
 

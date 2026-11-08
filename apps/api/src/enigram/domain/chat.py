@@ -1,6 +1,7 @@
 """Chat (plan item 8): conversations with agents that each have a focus. A session belongs to the
 person (or key) that started it; they may share it with the workspace, read-only (decided
-2026-11-08). Four built-in agents (C2); a message starting with @name asks another one."""
+2026-11-08). Five built-in agents (C2, plus Auto in place of the Ask page); a message starting
+with @name asks another one."""
 
 import re
 from dataclasses import dataclass
@@ -29,6 +30,15 @@ class ChatAgent:
 
 
 AGENTS = {
+    # What the Ask page did (merged into Chat 2026-11-08): the router picks, no focus.
+    "auto": ChatAgent(
+        "auto",
+        "Auto",
+        "Picks code, documents or both for you, without a focus",
+        "auto",
+        None,
+        ("ask",),
+    ),
     "technical": ChatAgent(
         "technical",
         "Technical",
@@ -73,7 +83,7 @@ AGENTS = {
         "citation.",
     ),
 }
-DEFAULT_AGENT = "technical"
+DEFAULT_AGENT = "auto"
 
 
 @dataclass(frozen=True)

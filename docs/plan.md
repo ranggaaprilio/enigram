@@ -16,7 +16,7 @@ Per 2026-11-08 malam.
 | 5 Note A1–A3 (form baru, Knowledge + Inbox, duplikat dan bulk) | Selesai | #38, #40, #42 |
 | 6 Dashboard D1–D3; Dashboard jadi halaman awal | Selesai | #44–#47, #52, #53 |
 | 7 Memory M1–M2 (M3 tercakup test M1) | Selesai | #49, #50 |
-| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); berikutnya C3 panel | #55–#57 |
+| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); Ask digabung ke Chat (agent Auto); berikutnya C3 panel | #55–#57 |
 | 9 Monorepo | Belum (bisa diuji pada `apps/web` repo ini) | — |
 | 10 Hapus note | Selesai | #29 |
 | 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |
@@ -121,7 +121,7 @@ memang diizinkan.
 
 | Peran | Untuk | Boleh |
 |---|---|---|
-| `viewer` | Pembaca | Baca dokumen, Ask, Trace, halaman Code dan Annotations |
+| `viewer` | Pembaca | Baca dokumen, Ask (kini Chat), Trace, halaman Code dan Annotations |
 | `contributor` | PM/QA, agent | + note sebagai *proposal*, ✓ *Looks right*, *Not right*, *Add context*, `add_memory`, `propose_annotation` |
 | `maintainer` | Developer | + verifikasi/tolak note, upload dan hapus dokumen, index dan hapus repo, edit graph, deteksi konflik |
 | `admin` | Pemilik workspace | + kelola anggota dan peran, kredensial repo private, secret webhook, budget workspace |
@@ -581,7 +581,13 @@ dari fase 7.
 - Sesi milik orang yang memulainya; pemilik bisa membagikannya ke anggota workspace (baca saja).
   Sesi privat orang lain tampak tidak ada (404), juga bagi admin.
 - Riwayat disimpan sampai dihapus (pemilik, atau `admin` untuk sesi siapa pun), seperti memory.
-- Halaman Ask tetap ada di samping Chat; ditinjau lagi setelah Chat dipakai.
+- ~~Halaman Ask tetap ada di samping Chat; ditinjau lagi setelah Chat dipakai.~~ Dibalik hari yang
+  sama: Ask digabung ke Chat (lihat di bawah).
+
+**Ask digabung ke Chat 2026-11-08 (keputusan owner).** Menu Ask dihapus; `/ask` membuka `/chat`.
+Mode Auto Ask menjadi agent **Auto** (`auto`, alias `@ask`): rute `auto` lewat router, tanpa fokus,
+dan menjadi agent default chat baru (sesi lama tetap memakai agent tersimpannya). Mode
+dokumen saja (`mix`, `naive`) tidak dibawa ke UI; tetap ada di `POST /query` dan MCP.
 
 **C1a (API) selesai 2026-11-08.** Tabel `chat_sessions` dan `chat_messages`, route `/chat/...`
 (README), agent Technical dengan riwayat. Dua penyesuaian terhadap rencana:

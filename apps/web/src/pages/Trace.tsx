@@ -70,7 +70,7 @@ export function TraceList() {
         <Empty
           action={
             <Button asChild size="sm" variant="secondary">
-              <WsLink to="/ask" className="hover:no-underline">
+              <WsLink to="/chat" className="hover:no-underline">
                 Ask a question
               </WsLink>
             </Button>

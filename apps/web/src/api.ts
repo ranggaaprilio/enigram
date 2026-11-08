@@ -96,8 +96,6 @@ export interface RouteDecision {
   confidence: number | null
 }
 
-export type Scope = 'auto' | 'docs' | 'code'
-
 export type AnnotationStatus =
   | 'verified'
   | 'needs_verification'
@@ -452,9 +450,6 @@ export const revokeKey = (name: string) =>
   request<null>(`/keys/${encodeURIComponent(name)}`, { method: 'DELETE' })
 
 export const createWorkspace = (name: string) => sendJson<Workspace>('/workspaces', { name })
-
-export const ask = (question: string, mode: Mode, scope: Scope = 'auto') =>
-  sendJson<QueryResult & { id: number }>('/query', { question, mode, scope })
 
 export const listQueries = (limit = 50) => request<QuerySummary[]>(`/queries?limit=${limit}`)
 
