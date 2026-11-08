@@ -199,6 +199,10 @@ class AnnotationRepository(Protocol):
 
     async def events(self, annotation_id: int) -> list["AnnotationEvent"]: ...
 
+    async def delete(self, annotation_id: int) -> bool:
+        """Remove the note and its events for good; False when there is no such note."""
+        ...
+
     async def expire(self, now: datetime, actor: str) -> list["Annotation"]:
         """Verified notes past verify_by -> needs_verification (reason verify_by), one event
         each."""

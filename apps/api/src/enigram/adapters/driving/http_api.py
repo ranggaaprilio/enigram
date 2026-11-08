@@ -28,6 +28,7 @@ from enigram.application.annotations import (
     NewAnnotation,
     change_annotation,
     create_annotation,
+    delete_annotation,
 )
 from enigram.application.budget import daily_exhausted, query_allowance
 from enigram.application.code_agent import answer_with_agent, repo_name
@@ -725,6 +726,13 @@ def create_app(
         except EnigramError as e:
             raise _raise_http(e) from e
         return _note_json(note)
+
+    @app.delete("/annotations/{annotation_id}", status_code=204)
+    async def delete_annotation_route(ws: Scoped, request: Request, annotation_id: int) -> None:
+        try:
+            await delete_annotation(ws.cfg, ws.notes, annotation_id, _actor(request))
+        except EnigramError as e:
+            raise _raise_http(e) from e
 
     @app.get("/jobs/{job_id}")
     async def get_job(ws: Scoped, job_id: int) -> dict[str, Any]:

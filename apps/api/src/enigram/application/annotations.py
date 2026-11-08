@@ -439,6 +439,31 @@ async def change_annotation(
     return changed
 
 
+async def delete_annotation(
+    cfg: Config, notes: AnnotationRepository, annotation_id: int, actor: str
+) -> None:
+    """Remove a note and its history for good. Only the key that wrote it or a key in
+    ANNOTATION_VERIFIERS may; the deletion is written to the log, as no event outlives the note."""
+    note = await notes.get(annotation_id)
+    if note is None:
+        raise NotFound(f"No annotation {annotation_id}")
+    if actor != note.author and actor not in cfg.annotation_verifiers:
+        raise Forbidden(
+            f"Only the author ({note.author}) or a key in ANNOTATION_VERIFIERS may delete this note"
+        )
+    if not await notes.delete(annotation_id):
+        raise NotFound(f"No annotation {annotation_id}")
+    log.info(
+        "[notes] %s deleted %d (%s %s, %s, by %s)",
+        actor,
+        annotation_id,
+        note.target_kind,
+        note.target_ref,
+        note.status,
+        note.author,
+    )
+
+
 async def seed_annotations(
     cfg: Config,
     graph: CodeGraphRepository,

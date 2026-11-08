@@ -472,6 +472,9 @@ export const patchAnnotation = (id: number, body: AnnotationPatch) =>
     body: JSON.stringify(body),
   })
 
+export const deleteAnnotation = (id: number) =>
+  request<null>(`/annotations/${id}`, { method: 'DELETE' })
+
 export const listRepos = () => request<RepoRow[]>('/repos')
 
 export const searchSymbols = (repoId: number, q: string) =>
