@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "ES2021", "strict": false },
+  "include": ["src"]
+}

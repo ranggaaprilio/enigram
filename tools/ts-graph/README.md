@@ -57,7 +57,11 @@ the checker; they are counted in `report.files_skipped`.
 | `parent` | the class or interface name for members, else `""` |
 
 Interface method signatures are symbols (kind `method`, `parent` = the interface) so a call
-through an interface has a target; the `implements` edges lead to the implementations.
+through an interface has a target; the `implements` edges lead to the implementations. A class
+property whose value is a function (`getUsers = async (req, res) => {...}`) is a `method` too. In a
+project that depends on `express`, the inline handler of a top-level route registration
+(`router.get("/articles", auth, async (req, res) => {...})`) is a `function` named
+`GET /articles` (not exported), so the route has a flow.
 
 ### `edges.jsonl`
 
@@ -88,8 +92,14 @@ it; intrinsic tags (`<div>`) and package components are not edges.
 (`bootstrap`/`main` in `src/main.ts`) for Nest; `page` (`/board/[boardId]`), `http_route`
 (`"POST /api/auth"`, one row per HTTP-method export of a `route` file), `middleware` and `action`
 (exported `"use server"` functions) for the Next.js App Router (`app/` or `src/app/`; route groups
-and parallel slots drop out of the path, `_private` folders are skipped). Framework adapters live
-in `lib/entrypoints/` and export `detect({project, root, symbols, deps}) -> {entrypoints, matched}`.
+and parallel slots drop out of the path, `_private` folders are skipped); `http_route`
+(`"GET /api/articles"`) for Express: every `get/post/put/patch/delete/options/head/all(path, …,
+handler)` on a router or app made by `express()`, `Router()` or `express.Router()`, with the
+paths of the `use(path, router)` calls that mount it joined in front, across files, `.use()`
+chains and `export default`; the entry point is the last handler (an inline one is its own
+symbol, a named one the symbol it resolves to; a package's handler is skipped). Framework adapters
+live in `lib/entrypoints/` and export `detect({project, root, prefix, symbols, files, deps}) ->
+{entrypoints, matched}`.
 When no adapter matches anything, `lib/entrypoints/generic.mjs` adds `root` rows (framework
 `generic`, route = the name): exported top-level functions that nothing in the repository calls
 and that call at least one repository symbol.

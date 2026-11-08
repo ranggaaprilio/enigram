@@ -653,7 +653,8 @@ folder, and a call between projects resolves when it goes through a relative imp
 alias (not a package name: there is no `node_modules`). The job result's `code.projects` lists
 them. The `tools/ts-graph` sidecar (Node 22, ts-morph) reads its symbols,
 calls, injections, environment reads and entry points (Nest routes, `@Cron`, events, jobs,
-`bootstrap`; Next.js App Router pages, route handlers, middleware and server actions; with no
+`bootstrap`; Next.js App Router pages, route handlers, middleware and server actions; Express
+routes with their mount paths; with no
 framework recognised, the exported functions nothing in the repository calls, marked `root`)
 without running or installing anything from the repository, then the generator
 writes a summary of every symbol an entry point reaches and a step-by-step flow per entry point

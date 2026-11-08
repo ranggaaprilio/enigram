@@ -21,7 +21,7 @@ Per 2026-11-08 malam.
 | 10 Hapus note | Selesai | #29 |
 | 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |
 | 12 Perbaikan kecil Code | Selesai | #30 |
-| 13 Adapter framework lain | Belum, menunggu repo nyata | — |
+| 13 Adapter framework lain | Express selesai; BullMQ, Convex, Next Pages Router menunggu repo nyata | — |
 | 14 Fase 7 evaluasi penuh | Belum; paling akhir | — |
 | 15 Rilis OSS (non-kode) | Belum, di tangan pemilik | — |
 
@@ -716,6 +716,17 @@ yang benar-benar akan dipakai.
 
 **Selesai bila.** Repo contoh untuk tiap adapter mendapat entry point dengan kind yang benar,
 dan `ENTRYPOINT_KINDS` di Python ikut diperbarui (pelajaran dari #21).
+
+**Express selesai 2026-11-09** (pilihan owner: Express, repo publik). Diuji pada dua repo publik
+dengan dua gaya: `gothinkster/node-express-realworld-example-app` @30b68e1 (handler inline,
+`Router().use(a).use(b)`, `export default Router().use('/api', api)`): 20 dari 20 rute,
+`GET /api/articles` dan seterusnya; `edwinhern/express-typescript` @983fa04 (handler
+`userController.getUsers`, `app.use("/users", userRouter)`): 4 dari 4 rute. Kind `http_route`
+sudah ada di `ENTRYPOINT_KINDS`, jadi Python tidak berubah. Dua tambahan di simbol: handler
+inline sebuah rute Express menjadi simbol `GET /articles` (supaya rute punya flow), dan properti
+kelas berisi fungsi (`getUsers = async () => {}`) menjadi `method` untuk semua repo; repo eval
+Nest tetap 408 simbol dan 25 entry point. Belum: `router.route('/x').get(...)`, path berupa
+variabel atau regex, middleware (`auth.required`) sebagai edge seperti `guarded_by` di Nest.
 
 ## 14. Fase 7: evaluasi penuh
 

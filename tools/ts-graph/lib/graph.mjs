@@ -2,13 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { ts } from "ts-morph";
 import { buildEdges, edgeContext } from "./edges.mjs";
+import * as express from "./entrypoints/express.mjs";
 import * as generic from "./entrypoints/generic.mjs";
 import * as nest from "./entrypoints/nest.mjs";
 import * as next from "./entrypoints/next.mjs";
 import { findProjects, openProject, relPath } from "./project.mjs";
 import { fileSymbols } from "./symbols.mjs";
 
-const ADAPTERS = { nest, next };
+const ADAPTERS = { nest, next, express };
 // Frameworks with entry points but no adapter yet; reported so a miss is visible.
 const KNOWN_FRAMEWORKS = ["express", "next", "fastify", "koa", "hono"];
 const MAX_DIAGNOSTICS = 10;
@@ -121,7 +122,11 @@ function openPart(root, config, taken) {
   const files = all.filter((sf) => !taken.has(sf.getFilePath()));
   skipped.other_project = all.length - files.length;
   for (const sf of files) taken.add(sf.getFilePath());
-  return { config, project, files: files.length, sourceFiles: files, skipped, symbols: files.flatMap((sf) => fileSymbols(root, sf)) };
+  const dir = path.dirname(path.join(root, config));
+  const deps = new Set([...dependencyNames(root), ...dependencyNames(dir)]);
+  const options = { express: deps.has("express") }; // inline route handlers become symbols
+  const symbols = files.flatMap((sf) => fileSymbols(root, sf, options));
+  return { config, project, dir, deps, files: files.length, sourceFiles: files, skipped, symbols };
 }
 
 /**
@@ -129,15 +134,13 @@ function openPart(root, config, taken) {
  * `app/` or `src/main.ts`, its package.json (and the root one).
  */
 function finishPart(root, ctx, part, diagnostics) {
-  const { project, symbols, sourceFiles } = part;
+  const { project, symbols, sourceFiles, dir, deps } = part;
   const { edges, local } = buildEdges(ctx, symbols, sourceFiles);
-  const dir = path.dirname(path.join(root, part.config));
   const prefix = dir === root ? "" : `${relPath(root, dir)}/`;
-  const deps = new Set([...dependencyNames(root), ...dependencyNames(dir)]);
   const entrypoints = [];
   const adapters = {};
   for (const [name, adapter] of Object.entries(ADAPTERS)) {
-    const found = adapter.detect({ project, root: dir, prefix, symbols, deps });
+    const found = adapter.detect({ project, root: dir, prefix, symbols, files: sourceFiles, deps });
     if (found.matched) adapters[name] = found.matched;
     entrypoints.push(...found.entrypoints);
   }
