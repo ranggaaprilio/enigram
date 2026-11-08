@@ -4,6 +4,7 @@ import { ChevronRight, Search } from 'lucide-react'
 import { useAccess } from '../access'
 import {
   createAnnotation,
+  noteFromMemory,
   listAnnotations,
   messageOf,
   NOTE_TYPES,
@@ -81,6 +82,9 @@ function inMonths(months: number): string {
 export default function AddNoteForm(props: {
   title: string
   level?: 2 | 3 // the title's heading level under the page's own headings; 3 by default
+  // A note made from an agent memory (Memory page, plan item 7): its text to start from, saved
+  // through POST /memories/{id}/note, always as a proposal.
+  memory?: { id: number; text: string }
   target?: Target | null // set: the note is about this (the Code page's symbol, a link)
   fixedTarget?: boolean // the target cannot be changed (the symbol on screen)
   mode?: NoteMode
@@ -95,7 +99,7 @@ export default function AddNoteForm(props: {
   const [query, setQuery] = useState('')
   const [found, setFound] = useState<Target[] | null>(null)
   const [type, setType] = useState<NoteType>(TYPES[mode][0])
-  const [text, setText] = useState('')
+  const [text, setText] = useState(props.memory?.text ?? '')
   const [name, setName] = useState('')
   const [owner, setOwner] = useState('')
   const [recheck, setRecheck] = useState(0)
@@ -110,7 +114,7 @@ export default function AddNoteForm(props: {
   const by = (props.by ?? name).trim()
   const signedAs = access.user ? access.name : by
   const proposed = mode === 'mismatch' || CLAIMS.includes(type)
-  const review = !access.can('maintainer') || proposed
+  const review = !access.can('maintainer') || proposed || props.memory !== undefined
 
   // Opened from a button under the summary: bring the form into view (stacked panels on a phone)
   // and put the cursor in it. Switching Not right / Add context keeps the text.
@@ -160,6 +164,22 @@ export default function AddNoteForm(props: {
     if (saving || !target || !text.trim()) return // a second save would add a duplicate
     setSaving(true)
     try {
+      const where = {
+        target_kind: target.target_kind,
+        target_ref: target.target_ref,
+        text: text.trim(),
+        note_type: type,
+        ...(target.target_kind === 'symbol' && target.repo !== null
+          ? { repo: target.repo, scope }
+          : {}),
+        ...(by && !access.user ? { by } : {}),
+      }
+      if (props.memory) {
+        await noteFromMemory(props.memory.id, where)
+        toast.success('Proposal saved for review')
+        await props.onSaved()
+        return
+      }
       await createAnnotation({
         target_kind: target.target_kind,
         target_ref: target.target_ref,
@@ -390,66 +410,69 @@ export default function AddNoteForm(props: {
         </div>
       )}
 
-      <Collapsible className="group/options">
-        <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 text-[13px] font-medium text-muted-foreground">
-          <ChevronRight className="size-3.5 transition-transform group-data-[state=open]/options:rotate-90" />
-          More options
-        </CollapsibleTrigger>
-        <CollapsibleContent className="mt-3 flex flex-col gap-3">
-          <div className="flex flex-wrap gap-4">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="note-owner" className={label}>
-                Owner
-              </Label>
-              <Input
-                id="note-owner"
-                className="w-48"
-                value={owner}
-                onChange={(e) => setOwner(e.target.value)}
-                placeholder="who keeps it right"
-              />
+      {/* Owner and re-check date belong to a note written here, not to a memory's proposal. */}
+      {!props.memory && (
+        <Collapsible className="group/options">
+          <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 text-[13px] font-medium text-muted-foreground">
+            <ChevronRight className="size-3.5 transition-transform group-data-[state=open]/options:rotate-90" />
+            More options
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-3 flex flex-col gap-3">
+            <div className="flex flex-wrap gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="note-owner" className={label}>
+                  Owner
+                </Label>
+                <Input
+                  id="note-owner"
+                  className="w-48"
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value)}
+                  placeholder="who keeps it right"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="note-recheck" className={label}>
+                  Check it again
+                </Label>
+                <NativeSelect
+                  id="note-recheck"
+                  value={recheck}
+                  onChange={(e) => setRecheck(Number(e.target.value))}
+                >
+                  {RECHECK.map((r) => (
+                    <NativeSelectOption key={r.months} value={r.months}>
+                      {r.label}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </div>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="note-recheck" className={label}>
-                Check it again
-              </Label>
-              <NativeSelect
-                id="note-recheck"
-                value={recheck}
-                onChange={(e) => setRecheck(Number(e.target.value))}
-              >
-                {RECHECK.map((r) => (
-                  <NativeSelectOption key={r.months} value={r.months}>
-                    {r.label}
-                  </NativeSelectOption>
+            {target?.target_kind === 'symbol' && (
+              <fieldset className="m-0 flex flex-col gap-1 border-0 p-0">
+                <legend className={cn(label, 'mb-1')}>Ask for a re-check when</legend>
+                {(
+                  [
+                    ['deps', 'this code or code it calls changes'],
+                    ['body', 'only this code changes'],
+                  ] as const
+                ).map(([value, words]) => (
+                  <label key={value} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="note-scope"
+                      value={value}
+                      checked={scope === value}
+                      onChange={() => setScope(value)}
+                    />
+                    {words}
+                  </label>
                 ))}
-              </NativeSelect>
-            </div>
-          </div>
-          {target?.target_kind === 'symbol' && (
-            <fieldset className="m-0 flex flex-col gap-1 border-0 p-0">
-              <legend className={cn(label, 'mb-1')}>Ask for a re-check when</legend>
-              {(
-                [
-                  ['deps', 'this code or code it calls changes'],
-                  ['body', 'only this code changes'],
-                ] as const
-              ).map(([value, words]) => (
-                <label key={value} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="note-scope"
-                    value={value}
-                    checked={scope === value}
-                    onChange={() => setScope(value)}
-                  />
-                  {words}
-                </label>
-              ))}
-            </fieldset>
-          )}
-        </CollapsibleContent>
-      </Collapsible>
+              </fieldset>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       <p className="m-0 text-[13px] text-muted-foreground">
         {review

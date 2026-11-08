@@ -20,7 +20,7 @@ Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spe
 - Left sidebar, open by default, collapses to icons (⌘B / Ctrl+B or the toggle); its state is kept
   per browser.
   - Top: the workspace picker and *New workspace*.
-  - Middle: page groups. *Answers* (Ask, Trace), *Library* (Documents, Knowledge, Graph),
+  - Middle: page groups. *Answers* (Ask, Trace), *Library* (Documents, Knowledge, Graph, Memory),
     *Review* (Inbox), *Monitor* (Dashboard) and *Settings* (Members).
   - Bottom: the user menu (who is signed in, the role in this workspace, the theme).
 - Below 768px the sidebar is a drawer opened from the menu button; the top bar shows the page

@@ -494,7 +494,7 @@ API keys keep working beside sign-in, for agents and scripts.
 
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
 API. Its sidebar (a drawer on a phone, see [`docs/design.md`](docs/design.md)) groups the pages
-into *Answers* (Ask, Trace), *Library* (Documents, Knowledge, Graph), *Review* (Inbox, with the
+into *Answers* (Ask, Trace), *Library* (Documents, Knowledge, Graph, and Memory for contributors), *Review* (Inbox, with the
 number of waiting notes for maintainers), *Monitor* (Dashboard) and, for admins, *Settings* (Members); the account menu at its foot shows the key's role and picks the light, dark
 or system theme. **⌘K / Ctrl+K** (or *Search* in the top bar) opens a palette that goes to any
 page, switches workspace on the same page, or finds a feature, symbol, entity or document and
@@ -534,6 +534,11 @@ opens it, all from the keyboard:
   the summary it was written against next to it. Maintainers verify, reject, relink or settle a
   conflict in place, one by one or several at once (tick them, then *Verify* the proposals or
   *Reject* them all; re-checks stay one by one); others see the queue without the decisions.
+- **Library → Memory** (`/memory`): what agents saved with `add_memory`. A maintainer sees
+  every key's (with a key filter), anyone else their own. Search by words, or by meaning to see
+  what `search_memory` would find and its score; a memory embedded with an older model is
+  marked (a search by meaning never finds it). *Open* shows its full text and the notes made
+  from it; *Make a note* turns it into a proposal; *Delete* removes it after a confirmation.
 - **Monitor → Dashboard** (`/dashboard`, `GET /stats`): one workspace over the last 7, 30 or 90
   days, in this order: what needs a person (proposals, re-checks, orphaned or conflicting notes,
   failed jobs; each opens its page), questions (asked, not answered, typical and slowest answer

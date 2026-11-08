@@ -23,6 +23,7 @@ import Documents from './pages/Documents'
 import RepoDetail from './pages/RepoDetail'
 import Graph from './pages/Graph'
 import Knowledge from './pages/Knowledge'
+import Memory from './pages/Memory'
 import Members from './pages/Members'
 import Review from './pages/Review'
 import { TraceDetail, TraceList } from './pages/Trace'
@@ -209,6 +210,7 @@ function WorkspaceShell({ home }: { home: string }) {
                 <Route path="graph" element={<Graph />} />
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="dashboard/repos/:id" element={<RepoDetail />} />
+                <Route path="memory" element={<Memory />} />
                 <Route path="members" element={<Members />} />
                 <Route path="*" element={<Empty>Not found.</Empty>} />
               </Routes>

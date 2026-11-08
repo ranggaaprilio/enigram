@@ -716,3 +716,39 @@ export interface WorkspaceStats {
 
 export const getWorkspaceStats = (days: number) =>
   request<WorkspaceStats>(`/stats/workspaces?days=${days}`)
+
+// GET/DELETE /memories, POST /memories/{id}/note (plan item 7, M1): agent memories for people.
+// A maintainer sees every key's; anyone else only their own.
+export interface MemoryRow {
+  id: number
+  text: string
+  created_at: string
+  api_key: string | null // the key that saved it; null without ENIGRAM_API_KEYS
+  embed_model: string | null
+  stale_model: boolean // embedded with an older model: never found by meaning
+  score?: number // mode=semantic only: 1 = same meaning
+}
+
+export interface MemoryDetail extends MemoryRow {
+  notes: Annotation[] // made from it
+}
+
+export type MemoryMode = 'text' | 'semantic'
+
+export const listMemories = (opts: { q?: string; mode?: MemoryMode; key?: string } = {}) => {
+  const params = new URLSearchParams()
+  if (opts.q) params.set('q', opts.q)
+  if (opts.mode && opts.mode !== 'text') params.set('mode', opts.mode)
+  if (opts.key) params.set('key', opts.key)
+  const query = params.toString()
+  return request<MemoryRow[]>(`/memories${query ? `?${query}` : ''}`)
+}
+
+export const getMemory = (id: number) => request<MemoryDetail>(`/memories/${id}`)
+
+export const deleteMemory = (id: number) => request<null>(`/memories/${id}`, { method: 'DELETE' })
+
+export const noteFromMemory = (
+  id: number,
+  body: Omit<NewAnnotation, 'owner' | 'verify_by' | 'proposed'>,
+) => sendJson<Annotation>(`/memories/${id}/note`, body)
