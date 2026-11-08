@@ -752,3 +752,105 @@ export const noteFromMemory = (
   id: number,
   body: Omit<NewAnnotation, 'owner' | 'verify_by' | 'proposed'>,
 ) => sendJson<Annotation>(`/memories/${id}/note`, body)
+
+// Chat (plan item 8, C1). A session belongs to whoever started it; `shared` lets every member
+// of the workspace read it. Each answer is a trace (`query_id`).
+export interface ChatSession {
+  id: number
+  owner: string | null
+  title: string
+  agent: string
+  shared: boolean
+  created_at: string
+  updated_at: string
+  mine: boolean
+}
+
+export interface ChatMessage {
+  id: number
+  session_id: number
+  role: 'user' | 'agent'
+  agent: string | null
+  text: string
+  query_id: number | null
+  tokens: number
+  error: string | null // the answer failed (budget, provider): the text is empty
+  created_at: string
+  // An answer's, from its trace:
+  sources?: Source[]
+  found?: boolean | null
+}
+
+export interface ChatSessionDetail extends ChatSession {
+  messages: ChatMessage[]
+}
+
+// The events of one turn (POST /chat/sessions/{id}/messages, server-sent events).
+export type ChatEvent =
+  | { event: 'question'; data: ChatMessage & { title: string } }
+  | { event: 'step'; data: { tool: string; label: string } }
+  | { event: 'answer'; data: ChatMessage }
+  | { event: 'error'; data: { detail: string } }
+
+export const listChatSessions = () => request<ChatSession[]>('/chat/sessions')
+
+export const createChatSession = () => sendJson<ChatSession>('/chat/sessions', {})
+
+export const getChatSession = (id: number) => request<ChatSessionDetail>(`/chat/sessions/${id}`)
+
+export const updateChatSession = (id: number, body: { title?: string; shared?: boolean }) =>
+  request<ChatSession>(`/chat/sessions/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+export const deleteChatSession = (id: number) =>
+  request<null>(`/chat/sessions/${id}`, { method: 'DELETE' })
+
+// One turn: each event as it arrives. Refusals before the stream (an empty question, someone
+// else's session) throw ApiError like any request.
+export async function sendChatMessage(
+  id: number,
+  text: string,
+  onEvent: (e: ChatEvent) => void,
+): Promise<void> {
+  const res = await fetch(
+    `/api/chat/sessions/${id}/messages`,
+    withHeaders(
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      },
+      workspace,
+    ),
+  )
+  if (!res.ok || !res.body) {
+    const body: unknown = await res.json().catch(() => null)
+    throw new ApiError(res.status, errorMessage(res, body))
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    let end
+    while ((end = buffer.indexOf('\n\n')) >= 0) {
+      onEvent(parseEvent(buffer.slice(0, end)))
+      buffer = buffer.slice(end + 2)
+    }
+    if (done) return
+  }
+}
+
+function parseEvent(block: string): ChatEvent {
+  let event = ''
+  let data = ''
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event: ')) event = line.slice(7)
+    else if (line.startsWith('data: ')) data += line.slice(6)
+  }
+  return { event, data: JSON.parse(data) } as ChatEvent
+}

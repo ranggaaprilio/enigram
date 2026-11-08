@@ -18,6 +18,7 @@ import SignIn from './components/SignIn'
 import { Separator } from './components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar'
 import Ask from './pages/Ask'
+import Chat from './pages/Chat'
 import Dashboard from './pages/Dashboard'
 import Documents from './pages/Documents'
 import RepoDetail from './pages/RepoDetail'
@@ -42,6 +43,10 @@ function Moved({ to, tab }: { to: string; tab?: string }) {
 // The item a page shows, for the breadcrumb: a query, a symbol, a note.
 function itemOf(segment: string, pathname: string, search: string): string | null {
   const params = new URLSearchParams(search)
+  if (segment === 'chat') {
+    const id = pathname.split('/')[4]
+    return id ? `Chat ${id}` : null
+  }
   if (segment === 'trace') {
     const id = pathname.split('/')[4]
     return id ? `Query ${id}` : null
@@ -200,6 +205,7 @@ function WorkspaceShell({ home }: { home: string }) {
                 <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="documents" element={<Documents />} />
                 <Route path="ask" element={<Ask />} />
+                <Route path="chat/:id?" element={<Chat />} />
                 <Route path="knowledge" element={<Knowledge />} />
                 {/* Before item 5 A2: Code and Annotations were pages of their own. */}
                 <Route path="code" element={<Moved to="knowledge" />} />
