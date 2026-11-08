@@ -39,10 +39,12 @@ function bodyStatements(node) {
 /**
  * Next.js App Router entry points, by file convention: `page` (a page's default export),
  * `http_route` (each HTTP-method export of a `route` file), `middleware`, and `action` (exported
- * server actions). Runs only when the repository depends on `next` or has a next.config file.
- * @param {{root: string, symbols: {row: object, node: import("ts-morph").Node}[], deps: Set<string>}} input
+ * server actions). Runs only when the project depends on `next` or has a next.config file.
+ * `root` is the project's folder; `prefix` its path from the repository root ("" or "apps/web/"),
+ * which every symbol's file starts with.
+ * @param {{root: string, prefix?: string, symbols: {row: object, node: import("ts-morph").Node}[], deps: Set<string>}} input
  */
-export function detect({ root, symbols, deps }) {
+export function detect({ root, prefix = "", symbols, deps }) {
   const entrypoints = [];
   if (!deps.has("next") && !CONFIGS.some((c) => fs.existsSync(path.join(root, c)))) {
     return { entrypoints, matched: 0 };
@@ -52,7 +54,7 @@ export function detect({ root, symbols, deps }) {
     if (!byFile.has(sym.row.file)) byFile.set(sym.row.file, []);
     byFile.get(sym.row.file).push(sym);
   }
-  const appDirs = APP_DIRS.filter((d) => fs.existsSync(path.join(root, d)));
+  const appDirs = APP_DIRS.filter((d) => fs.existsSync(path.join(root, d))).map((d) => prefix + d);
   const add = (sym, kind, route) =>
     entrypoints.push({ symbol: sym.row.id, kind, route, framework: "next", version: "" });
 
@@ -76,7 +78,7 @@ export function detect({ root, symbols, deps }) {
         continue;
       }
     }
-    if (MIDDLEWARE.has(file)) {
+    if (file.startsWith(prefix) && MIDDLEWARE.has(file.slice(prefix.length))) {
       const sym = fileSymbols.find((s) => s.row.qualified_name === "middleware" && s.row.exported) ?? defaultExportSymbol(fileSymbols);
       if (sym) add(sym, "middleware", "middleware");
       continue;

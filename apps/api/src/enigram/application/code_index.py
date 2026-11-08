@@ -35,8 +35,18 @@ SKIP_DIRS = {"node_modules", "dist", "build", ".git", "coverage"}
 GIT_TIMEOUT_SECS = 60
 
 
+# A tsconfig.json in these is a fixture, not the repository's (as tools/ts-graph decides).
+TEST_DIRS = {"test", "__tests__"}
+
+
 def is_ts_repo(root: Path) -> bool:
-    return (root / "tsconfig.json").is_file()
+    """A tsconfig.json anywhere outside SKIP_DIRS and test folders: a monorepo's
+    `apps/web/tsconfig.json` counts (plan item 9); the sidecar parses every such project."""
+    for _folder, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and d not in TEST_DIRS]
+        if "tsconfig.json" in names:
+            return True
+    return False
 
 
 def _is_ts(name: str) -> bool:
@@ -181,6 +191,7 @@ async def index_code(
         "adapters": report.get("adapters"),
         "unmatched_frameworks": report.get("unmatched_frameworks"),
         "fallback": report.get("fallback"),
+        "projects": report.get("projects"),
         "files_skipped": report.get("files_skipped"),
         "diagnostics_sample": report.get("diagnostics_sample"),
         "secrets_redacted": redacted,

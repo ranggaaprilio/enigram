@@ -16,8 +16,8 @@ Per 2026-11-08 malam.
 | 5 Note A1–A3 (form baru, Knowledge + Inbox, duplikat dan bulk) | Selesai | #38, #40, #42 |
 | 6 Dashboard D1–D3; Dashboard jadi halaman awal | Selesai | #44–#47, #52, #53 |
 | 7 Memory M1–M2 (M3 tercakup test M1) | Selesai | #49, #50 |
-| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); Ask digabung ke Chat (agent Auto, #58); C3 panel (#59); C4 agent kustom | #55–#59 |
-| 9 Monorepo | Belum (bisa diuji pada `apps/web` repo ini) | — |
+| 8 Chat multi-agent | C1 selesai (#55, #56); C2 empat agent dan `@mention` (#57); Ask digabung ke Chat (agent Auto, #58); Selesai: C3 panel (#59); C4 agent kustom (#60) | #55–#60 |
+| 9 Monorepo | Sidecar dan deteksi selesai; flow summary repo ini belum dijalankan (butuh index dengan LLM) | — |
 | 10 Hapus note | Selesai | #29 |
 | 11 Keputusan tertunda | Selesai; bobot note per tipe di prompt diukur 2026-11-08 (lihat bagian 11) | #54 |
 | 12 Perbaikan kecil Code | Selesai | #30 |
@@ -652,6 +652,19 @@ project, gabungkan hasilnya dalam satu graph repo dengan path relatif ke root. B
 TypeScript/JavaScript tetap di luar lingkup.
 
 **Selesai bila.** Repo enigram sendiri (`apps/web`) mendapat entry point dan flow summary.
+
+**Dikerjakan 2026-11-08.** Tanpa `--tsconfig`, sidecar mencari semua `tsconfig.json` di luar
+`node_modules`, `dist`, `build` dan folder `test`/`__tests__`, mengikuti `references` (tsconfig
+gaya *solution* seperti Vite tidak punya file sendiri), maks. 50, yang paling dangkal dulu. File
+yang dimuat dua project milik project pertama (`files_skipped.other_project`). Simbol semua
+project dikumpulkan dulu, lalu edge dibangun dengan satu konteks gabungan, jadi panggilan antar
+project lewat import relatif atau alias `paths` tetap tersambung; lewat nama package tidak (tanpa
+`node_modules`). Adapter melihat folder project masing-masing (`app/`, `middleware.ts`,
+`src/main.ts`, `package.json` project + root); project tanpa adapter mendapat entry point
+generik. `report.projects` dan `code.projects` di hasil job. `is_ts_repo` menerima tsconfig di
+subfolder. Hasil pada clone bersih repo ini: satu project `apps/web/tsconfig.json`, 58 file,
+439 simbol, 27 entry point generik (termasuk `App`), fixture `tools/ts-graph/test` tidak ikut.
+**Belum:** flow summary repo ini (index sungguhan memakai token LLM).
 
 ## 10. Endpoint hapus note
 

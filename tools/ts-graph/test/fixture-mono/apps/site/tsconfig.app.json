@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "ES2021", "jsx": "preserve", "strict": true },
+  "include": ["app", "middleware.ts", "../../packages/lib/src/format.ts"]
+}

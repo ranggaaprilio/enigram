@@ -1,6 +1,7 @@
 """Index a Git repository (public, or private with an access token: repo_auth): shallow clone;
 its Markdown files are copied into books_dir as <repo>--<path>.md and go through the normal
-index pipeline, and a TypeScript repository (tsconfig.json at the root) also gets a code graph.
+index pipeline, and a TypeScript repository (a tsconfig.json at the root or in a subfolder, as in
+a monorepo) also gets a code graph.
 Re-running re-syncs the repository."""
 
 import asyncio
@@ -258,7 +259,7 @@ async def index_repo(
             )
             code["store"] = str(store)
         else:
-            code = {"skipped": "no tsconfig.json at the repository root"}
+            code = {"skipped": "no tsconfig.json in the repository"}
             if not files:
                 raise EnigramError(f"No Markdown or TypeScript (tsconfig.json) in {url}")
 

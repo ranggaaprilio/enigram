@@ -21,11 +21,11 @@ function controllerPath(decorator) {
  * bootstrap()/main() in src/main.ts. Reads decorators syntactically: no @nestjs types needed.
  * @param {{symbols: {row: object, node: import("ts-morph").Node}[]}} input
  */
-export function detect({ symbols }) {
+export function detect({ symbols, prefix = "" }) {
   const entrypoints = [];
   const classes = new Map(symbols.filter((s) => s.row.kind === "class").map((s) => [s.row.id, s.node]));
   for (const { row, node } of symbols) {
-    if (row.kind === "function" && row.file === "src/main.ts" && ["bootstrap", "main"].includes(row.qualified_name)) {
+    if (row.kind === "function" && row.file === `${prefix}src/main.ts` && ["bootstrap", "main"].includes(row.qualified_name)) {
       entrypoints.push({ symbol: row.id, kind: "cli_main", route: row.qualified_name, framework: "nest", version: "" });
       continue;
     }

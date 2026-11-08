@@ -1,0 +1,5 @@
+{
+  // A solution-style config, as Vite writes it: no files of its own.
+  "files": [],
+  "references": [{ "path": "./apps/site/tsconfig.app.json" }]
+}
