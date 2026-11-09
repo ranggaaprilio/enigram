@@ -166,6 +166,15 @@ describe('App workspaces', () => {
 })
 
 describe('App frame', () => {
+  it('shows the enigram mark next to the name', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/documents')
+    const app = await screen.findByRole('region', { name: 'App and workspace' })
+    expect(app).toHaveTextContent('enigram')
+    expect(app.querySelector('svg[data-slot="logo"]')).not.toBeNull()
+    expect(app.querySelector('svg.lucide-book-open')).toBeNull()
+  })
+
   it('reaches every page from the sidebar and marks the current one', async () => {
     mockFetch(ROUTES)
     renderAt('/w/ws-a/knowledge')
@@ -288,6 +297,7 @@ describe('Sign-in (R4)', () => {
       `/api/auth/login?next=${encodeURIComponent('/w/default/code?repo=1')}`,
     )
     expect(screen.queryByRole('navigation', { name: 'Pages' })).toBeNull()
+    expect(document.querySelector('svg[data-slot="logo"]')).not.toBeNull()
   })
 
   it('shows why the last sign-in failed and drops it from the way back', async () => {

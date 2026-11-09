@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 import {
-  BookOpen,
   Bot,
   Check,
   ChevronsUpDown,
@@ -21,6 +20,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react'
+import Logo from '@/components/Logo'
 import StatusBadge from '@/components/StatusBadge'
 import WorkspacePicker from '@/components/WorkspacePicker'
 import {
@@ -114,7 +114,7 @@ export default function AppSidebar(props: {
       {/* A landmark for the app name and the workspace switch, as the pages below have theirs. */}
       <SidebarHeader role="region" aria-label="App and workspace" className="gap-3 p-3">
         <div className="flex items-center gap-2 px-1">
-          <BookOpen className="size-4 shrink-0" aria-hidden />
+          <Logo className="shrink-0" />
           <span className="font-semibold tracking-[-0.2px] group-data-[collapsible=icon]:hidden">
             enigram
           </span>

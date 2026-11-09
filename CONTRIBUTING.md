@@ -71,8 +71,8 @@ Run the slower integration tests when your change touches parsing or the LLM pat
 - Add or update tests for what you change. New behavior without a test will be asked for one.
 - Match the surrounding code: comment density, naming, and the existing style. Do not
   reformat or "improve" code you did not need to touch.
-- Update the README when you change a command, an endpoint, an environment variable, or an MCP
-  tool.
+- Update the README or the page under `docs/` it links to when you change a command, an
+  endpoint, an environment variable, or an MCP tool.
 - Describe *why* in the pull request, not only *what*; link the issue.
 - Commit messages follow the existing history: `feat:`, `fix:`, `docs:`, `test:`, with an
   optional scope such as `fix(web): …`. The `commit-msg` hook rejects anything else.

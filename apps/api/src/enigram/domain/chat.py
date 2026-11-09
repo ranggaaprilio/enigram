@@ -25,7 +25,7 @@ ROLES = ("user", "agent")
 
 @dataclass(frozen=True)
 class ChatAgent:
-    """A configuration over the existing answerers, not a model of its own (docs/plan.md
+    """A configuration over the existing answerers, not a model of its own (docs/plans/plan.md
     item 8): which sources it asks and a focus line for the prompt."""
 
     name: str  # in the API and @mentions

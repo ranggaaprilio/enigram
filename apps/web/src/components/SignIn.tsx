@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router'
-import { BookOpen, LogIn } from 'lucide-react'
+import { LogIn } from 'lucide-react'
 import { getAuthConfig, loginUrl } from '../api'
 import ErrorAlert from '@/components/ErrorAlert'
+import Logo from '@/components/Logo'
 import { Button } from '@/components/ui/button'
 
 // Shown when the API answers 401: with OIDC set (R4) people sign in; without it the web UI's
@@ -26,7 +27,7 @@ export default function SignIn() {
     <main className="flex min-h-svh items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm rounded-md border p-6">
         <p className="m-0 mb-4 flex items-center gap-2 font-semibold">
-          <BookOpen className="size-4" aria-hidden /> enigram
+          <Logo /> enigram
         </p>
         {failed && <ErrorAlert>{failed}</ErrorAlert>}
         {login === true && (
