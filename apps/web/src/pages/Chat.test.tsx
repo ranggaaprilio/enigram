@@ -190,22 +190,29 @@ describe('Chat', () => {
   })
 
   it('collapses the chat list on a wide screen and remembers it', async () => {
-    mockFetch({ 'GET /api/chat/sessions': { body: [session(1)] } })
-    renderAt('/chat')
-    const hide = await screen.findByRole('button', { name: 'Hide chats' })
-    expect(hide).toHaveAttribute('aria-expanded', 'true')
-    await userEvent.click(hide)
-    const show = screen.getByRole('button', { name: 'Show chats' })
-    expect(show).toHaveAttribute('aria-expanded', 'false')
-    expect(show).toHaveFocus() // the button that hid the list is gone
+    mockFetch({
+      'GET /api/chat/sessions': { body: [session(1)] },
+      'GET /api/chat/sessions/1': { body: { ...session(1), messages: [QUESTION, ANSWER] } },
+    })
+    renderAt('/chat/1')
+    // One button, left of the chat's title, whether the list is open or not.
+    const toggle = await screen.findByRole('button', { name: 'Chat list' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(toggle).toHaveAttribute('aria-controls', 'chat-list')
+    const chats = screen.getByRole('navigation', { name: 'Chats' })
+    expect(within(chats).queryByRole('button', { name: 'Chat list' })).toBeNull()
+    await userEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveFocus()
     // On a phone the list still opens with /chat: it is hidden from md up only.
-    expect(screen.getByRole('navigation', { name: 'Chats' })).toHaveClass('md:hidden')
+    expect(chats).toHaveClass('md:hidden')
     expect(localStorage.getItem('enigram-chat-list')).toBe('closed')
 
     cleanup()
-    renderAt('/chat')
-    await userEvent.click(await screen.findByRole('button', { name: 'Show chats' }))
-    expect(screen.getByRole('button', { name: 'Hide chats' })).toHaveFocus()
+    renderAt('/chat') // a new chat has the button too
+    const again = await screen.findByRole('button', { name: 'Chat list' })
+    expect(again).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(again)
     expect(screen.getByRole('navigation', { name: 'Chats' })).not.toHaveClass('md:hidden')
     expect(localStorage.getItem('enigram-chat-list')).toBeNull()
   })
