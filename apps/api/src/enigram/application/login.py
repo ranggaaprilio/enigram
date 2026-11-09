@@ -6,11 +6,18 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from enigram.application.access import caller_of
+from enigram.application.access import caller_of, change_member
 from enigram.application.ports import PrincipalRepository
 from enigram.config import Config, OidcConfig
-from enigram.domain.access import Caller, Identity, Principal, hash_key, new_api_key
-from enigram.domain.errors import Forbidden
+from enigram.domain.access import (
+    Caller,
+    Identity,
+    Principal,
+    check_role,
+    hash_key,
+    new_api_key,
+)
+from enigram.domain.errors import EnigramError, Forbidden
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +60,33 @@ async def sign_in(principals: PrincipalRepository, cfg: Config, who: Identity) -
     if who.name != found.display_name:
         await principals.set_display_name(found.id, who.name)
     return found
+
+
+async def invite(
+    principals: PrincipalRepository, cfg: Config, workspace: str, email: str, role: str
+) -> str:
+    """Give the person with `email` `role` in `workspace` before (or after) they first sign in:
+    sign_in then finds their principal ready. No mail is sent; the admin shares the link.
+    Returns the email as stored (the principal's name)."""
+    check_role(role)
+    if cfg.oidc is None:
+        raise EnigramError("People are invited by email only when sign-in (OIDC) is set")
+    email = email.strip().lower()
+    local, _, domain = email.partition("@")
+    if not local or "." not in domain:
+        raise EnigramError(f"{email!r} is not an email address")
+    if not allowed(cfg.oidc, email):
+        raise EnigramError(f"{email} may not sign in here (OIDC_ALLOWED_DOMAINS)")
+    found = await principals.by_name(email)
+    if found is None:
+        found = await principals.create(email, "user", None, workspace)
+        log.info("[access] %s invited to %s as %s", email, workspace, role)
+    elif found.kind != "user":
+        raise EnigramError(f"{email} is the name of an API key, not a person")
+    elif await principals.is_revoked(found.id):
+        raise EnigramError(f"{email} was revoked")
+    await change_member(principals, workspace, email, role)  # keeps the last admin
+    return email
 
 
 async def start_session(principals: PrincipalRepository, principal: Principal, days: int) -> str:

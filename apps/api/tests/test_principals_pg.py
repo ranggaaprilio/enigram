@@ -59,12 +59,14 @@ async def test_user_sessions_expire_and_end_with_revocation(principals):
     repo, tag = principals
     user = await repo.create(f"ann@example.com-{tag}", "user", None, "default")
     await repo.set_display_name(user.id, "Ann Lee")
+    assert not user.signed_in  # invited, not yet come
     soon, gone = datetime.now(UTC) + timedelta(days=1), datetime.now(UTC) - timedelta(seconds=1)
     await repo.create_session(user.id, f"live-{tag}", soon)
     await repo.create_session(user.id, f"old-{tag}", gone)
 
     found = await repo.by_session(f"live-{tag}")
     assert (found.name, found.kind, found.display_name) == (user.name, "user", "Ann Lee")
+    assert found.signed_in
     assert await repo.by_session(f"old-{tag}") is None
     await repo.delete_session(f"live-{tag}")
     assert await repo.by_session(f"live-{tag}") is None

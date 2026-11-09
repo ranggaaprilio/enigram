@@ -881,6 +881,7 @@ class FakePrincipals:
             row["owner"],
             row["default_workspace"],
             row.get("display_name"),
+            row.get("signed_in", False),
         )
 
     async def by_key_hash(self, key_hash):
@@ -947,6 +948,7 @@ class FakePrincipals:
 
     async def create_session(self, principal_id, token_hash, expires_at):
         self.sessions[token_hash] = (principal_id, expires_at)
+        self.rows[principal_id]["signed_in"] = True
 
     async def by_session(self, token_hash):
         from datetime import UTC, datetime

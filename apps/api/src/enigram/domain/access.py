@@ -52,6 +52,7 @@ class Principal:
     owner: bool
     default_workspace: str | None
     display_name: str | None = None  # a signed-in user's name from the provider
+    signed_in: bool = False  # a user who signed in at least once; False: invited, not yet come
 
 
 @dataclass(frozen=True)

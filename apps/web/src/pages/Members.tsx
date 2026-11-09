@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { KeyRound, UserPlus } from 'lucide-react'
 import { useParams } from 'react-router'
 import { useAccess } from '../access'
 import {
   createKey,
+  getAuthConfig,
+  inviteMember,
   listMembers,
   messageOf,
   removeMember,
@@ -13,9 +14,11 @@ import {
   type Member,
   type Role,
 } from '../api'
+import CopyBlock from '@/components/CopyBlock'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
 import PageHeader from '@/components/PageHeader'
+import StatusBadge from '@/components/StatusBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -60,13 +63,17 @@ function RoleSelect(props: {
   )
 }
 
-// docs/rbac.md: the admins of a workspace manage its members and keys. Every write reloads.
+type Act = (run: () => Promise<unknown>, message?: string) => Promise<boolean>
+
+// docs/rbac.md: the admins of a workspace manage its members. People (sign-in by email) and API
+// keys (agents, scripts) are apart: a person is invited, a key is made. Every write reloads.
 export default function Members() {
   const { workspace = '' } = useParams()
   const access = useAccess()
   const [members, setMembers] = useState<Member[] | null>(null)
+  const [login, setLogin] = useState(false) // People only when sign-in (OIDC) is set
   const [error, setError] = useState<string | null>(null)
-  const [confirming, setConfirming] = useState<{ name: string; action: 'remove' | 'revoke' }>()
+  const [invited, setInvited] = useState<string | null>(null)
   const [newKey, setNewKey] = useState<{ name: string; key: string } | null>(null)
   const admin = access.can('admin')
 
@@ -79,11 +86,16 @@ export default function Members() {
   }, [])
 
   useEffect(() => {
-    if (admin) void load()
+    if (!admin) return
+    void load()
+    getAuthConfig().then(
+      (c) => setLogin(c.login),
+      () => setLogin(false),
+    )
   }, [admin, load])
 
-  // True when the API took it; its refusal is shown above the table.
-  async function act(run: () => Promise<unknown>, message?: string): Promise<boolean> {
+  // True when the API took it; its refusal is shown above the sections.
+  const act: Act = async (run, message) => {
     let done = false
     try {
       await run()
@@ -93,12 +105,15 @@ export default function Members() {
     } catch (e) {
       setError(messageOf(e))
     }
-    setConfirming(undefined)
     await load()
     return done
   }
 
   if (!admin) return <Empty>Only an admin of {workspace} manages its members.</Empty>
+
+  const people = members?.filter((m) => m.kind === 'user') ?? []
+  const keys = members?.filter((m) => m.kind !== 'user') ?? []
+  const link = `${window.location.origin}/w/${workspace}`
 
   return (
     <section>
@@ -107,128 +122,59 @@ export default function Members() {
         description={`Who can use ${workspace}, and with which role. A role includes every right of the ones before it.`}
       />
       {error && <ErrorAlert>{error}</ErrorAlert>}
-      {newKey && (
-        <div role="status" className="my-4 rounded-md border p-4">
-          <p className="m-0 font-medium">Key for {newKey.name}, shown only now</p>
-          <p className="mt-1 mb-2 text-muted-foreground">
-            Copy it to whoever uses it; Enigram keeps only its hash.
-          </p>
-          <code className="block rounded-sm bg-card px-3 py-2 text-[13px] [overflow-wrap:anywhere]">
-            {newKey.key}
-          </code>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="mt-3"
-            onClick={() => setNewKey(null)}
-          >
-            Done
-          </Button>
-        </div>
+
+      {login && (
+        <Part
+          title="People"
+          hint="Invite someone by email, then send them the link. They sign in with that email and get the role you chose. Enigram sends no email itself."
+        >
+          <AddForm
+            title="Invite a person"
+            field="Email"
+            type="email"
+            placeholder="name@company.com"
+            submit="Invite"
+            onSubmit={(email, role) =>
+              act(async () => {
+                const made = await inviteMember(email, role)
+                setInvited(made.name)
+              }, `${email} invited as ${role}`)
+            }
+          />
+          {invited && (
+            <div role="status" className="rounded-md border p-4">
+              <p className="m-0 font-medium">Send {invited} this link</p>
+              <p className="mt-1 mb-2 text-muted-foreground">
+                They sign in with {invited}; until then they show as invited.
+              </p>
+              <CopyBlock label="Workspace link" text={link} />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="mt-3"
+                onClick={() => setInvited(null)}
+              >
+                Done
+              </Button>
+            </div>
+          )}
+          {members === null ? null : people.length === 0 ? (
+            <Empty>Nobody invited yet.</Empty>
+          ) : (
+            <MemberTable rows={people} me={access.name} act={act} people />
+          )}
+        </Part>
       )}
-      {members === null ? null : members.length === 0 ? (
-        <Empty>No members yet.</Empty>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {members.map((m) => (
-              <TableRow key={m.name}>
-                <TableCell>
-                  {m.name}
-                  {m.name === access.name && <span className="text-muted-foreground"> (you)</span>}
-                  {m.owner && (
-                    <Badge variant="outline" className="ml-2">
-                      owner
-                    </Badge>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <RoleSelect
-                    label={`Role of ${m.name}`}
-                    value={m.role}
-                    onChange={(role) =>
-                      void act(() => setMember(m.name, role), `${m.name} is now ${role}`)
-                    }
-                  />
-                </TableCell>
-                <TableCell>
-                  {confirming?.name === m.name ? (
-                    <span className="flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="soft-destructive"
-                        onClick={() =>
-                          void act(
-                            () =>
-                              confirming.action === 'remove'
-                                ? removeMember(m.name)
-                                : revokeKey(m.name),
-                            confirming.action === 'remove'
-                              ? `${m.name} removed`
-                              : `${m.name}'s key revoked`,
-                          )
-                        }
-                      >
-                        {confirming.action === 'remove'
-                          ? `Remove ${m.name}`
-                          : `Revoke ${m.name}'s key`}
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setConfirming(undefined)}
-                      >
-                        Cancel
-                      </Button>
-                    </span>
-                  ) : (
-                    <span className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setConfirming({ name: m.name, action: 'remove' })}
-                      >
-                        Remove
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="soft-destructive"
-                        onClick={() => setConfirming({ name: m.name, action: 'revoke' })}
-                      >
-                        Revoke key
-                      </Button>
-                    </span>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
-      <div className="mt-8 grid gap-6 md:grid-cols-2">
-        <KeyForm
-          title="Add an existing key"
-          icon={<UserPlus className="size-4" aria-hidden />}
-          hint="A key that already works in another workspace."
-          submit="Add"
-          onSubmit={(name, role) => act(() => setMember(name, role), `${name} added as ${role}`)}
-        />
-        <KeyForm
+
+      <Part
+        title="API keys"
+        hint="For agents, MCP clients and scripts. A new key is shown once; Enigram keeps only its hash."
+      >
+        <AddForm
           title="Make a new key"
-          icon={<KeyRound className="size-4" aria-hidden />}
-          hint="For a person or an agent; the key is shown once."
+          field="Key name"
+          placeholder="qa-agent"
           submit="Make key"
           onSubmit={(name, role) =>
             act(async () => {
@@ -237,51 +183,186 @@ export default function Members() {
             })
           }
         />
-      </div>
+        {newKey && (
+          <div role="status" className="rounded-md border p-4">
+            <p className="m-0 font-medium">Key for {newKey.name}, shown only now</p>
+            <p className="mt-1 mb-2 text-muted-foreground">Copy it to whoever uses it.</p>
+            <CopyBlock label="API key" text={newKey.key} />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="mt-3"
+              onClick={() => setNewKey(null)}
+            >
+              Done
+            </Button>
+          </div>
+        )}
+        {members === null ? null : keys.length === 0 ? (
+          <Empty>No keys yet.</Empty>
+        ) : (
+          <MemberTable rows={keys} me={access.name} act={act} />
+        )}
+      </Part>
     </section>
   )
 }
 
-function KeyForm(props: {
+function Part(props: { title: string; hint: string; children: ReactNode }) {
+  return (
+    <section aria-label={props.title} className="mt-10 flex flex-col gap-4">
+      <div>
+        <h2 className="m-0">{props.title}</h2>
+        <p className="mt-1 mb-0 max-w-[64ch] text-muted-foreground">{props.hint}</p>
+      </div>
+      {props.children}
+    </section>
+  )
+}
+
+// People get Remove only; a key can also be revoked (it stops working everywhere).
+function MemberTable(props: { rows: Member[]; me: string | null; act: Act; people?: boolean }) {
+  const [confirming, setConfirming] = useState<{ name: string; action: 'remove' | 'revoke' }>()
+
+  async function confirm(m: Member, action: 'remove' | 'revoke') {
+    await props.act(
+      () => (action === 'remove' ? removeMember(m.name) : revokeKey(m.name)),
+      action === 'remove' ? `${m.name} removed` : `${m.name}'s key revoked`,
+    )
+    setConfirming(undefined)
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{props.people ? 'Person' : 'Key'}</TableHead>
+          <TableHead>Role</TableHead>
+          {props.people && <TableHead>Status</TableHead>}
+          <TableHead>Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {props.rows.map((m) => (
+          <TableRow key={m.name}>
+            <TableCell>
+              {m.display_name ?? m.name}
+              {m.name === props.me && <span className="text-muted-foreground"> (you)</span>}
+              {m.owner && (
+                <Badge variant="outline" className="ml-2">
+                  owner
+                </Badge>
+              )}
+              {m.display_name && <span className="block text-muted-foreground">{m.name}</span>}
+            </TableCell>
+            <TableCell>
+              <RoleSelect
+                label={`Role of ${m.name}`}
+                value={m.role}
+                onChange={(role) =>
+                  void props.act(() => setMember(m.name, role), `${m.name} is now ${role}`)
+                }
+              />
+            </TableCell>
+            {props.people && (
+              <TableCell>
+                <StatusBadge status={m.signed_in ? 'active' : 'invited'} />
+              </TableCell>
+            )}
+            <TableCell>
+              {confirming?.name === m.name ? (
+                <span className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="soft-destructive"
+                    onClick={() => void confirm(m, confirming.action)}
+                  >
+                    {confirming.action === 'remove' ? `Remove ${m.name}` : `Revoke ${m.name}'s key`}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setConfirming(undefined)}
+                  >
+                    Cancel
+                  </Button>
+                </span>
+              ) : (
+                <span className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setConfirming({ name: m.name, action: 'remove' })}
+                  >
+                    Remove
+                  </Button>
+                  {!props.people && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="soft-destructive"
+                      onClick={() => setConfirming({ name: m.name, action: 'revoke' })}
+                    >
+                      Revoke key
+                    </Button>
+                  )}
+                </span>
+              )}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
+
+function AddForm(props: {
   title: string
-  icon: ReactNode
-  hint: string
+  field: string
+  type?: string
+  placeholder: string
   submit: string
-  onSubmit: (name: string, role: Role) => Promise<boolean>
+  onSubmit: (value: string, role: Role) => Promise<boolean>
 }) {
-  const [name, setName] = useState('')
+  const [value, setValue] = useState('')
   const [role, setRole] = useState<Role>('viewer') // new members start as viewers
   const id = props.submit.toLowerCase().replace(/\W+/g, '-')
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    if (await props.onSubmit(name.trim(), role)) {
-      setName('')
+    if (await props.onSubmit(value.trim(), role)) {
+      setValue('')
       setRole('viewer')
     }
   }
 
   return (
-    <form aria-label={props.title} onSubmit={submit} className="flex flex-col gap-2">
-      <h2 className="m-0 flex items-center gap-2">
-        {props.icon}
-        {props.title}
-      </h2>
-      <p className="m-0 text-muted-foreground">{props.hint}</p>
-      <Label htmlFor={`${id}-name`}>Key name</Label>
-      <Input
-        id={`${id}-name`}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="qa-team"
-      />
-      <Label htmlFor={`${id}-role`}>Role</Label>
-      <RoleSelect id={`${id}-role`} value={role} onChange={setRole} />
-      <div>
-        <Button type="submit" size="sm" disabled={!name.trim()}>
-          {props.submit}
-        </Button>
+    <form
+      aria-label={props.title}
+      onSubmit={submit}
+      className="flex flex-wrap items-end gap-3 rounded-md border p-4"
+    >
+      <div className="flex min-w-[16rem] flex-1 flex-col gap-1.5">
+        <Label htmlFor={`${id}-value`}>{props.field}</Label>
+        <Input
+          id={`${id}-value`}
+          type={props.type ?? 'text'}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={props.placeholder}
+        />
       </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${id}-role`}>Role</Label>
+        <RoleSelect id={`${id}-role`} value={role} onChange={setRole} />
+      </div>
+      <Button type="submit" size="sm" disabled={!value.trim()}>
+        {props.submit}
+      </Button>
     </form>
   )
 }

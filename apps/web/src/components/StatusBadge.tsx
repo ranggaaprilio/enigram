@@ -21,6 +21,9 @@ const TONES: Record<string, string> = {
   current: 'bg-success-bg text-success',
   behind: 'bg-warning-bg text-warning',
   unreachable: 'bg-danger-bg text-destructive',
+  // a person on Members: invited and not yet signed in, or signed in
+  invited: 'bg-info-bg text-info',
+  active: 'bg-success-bg text-success',
 }
 
 // `status-<status>` stays on the element: the page tests select on it (no stylesheet rule uses it).

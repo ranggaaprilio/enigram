@@ -74,6 +74,7 @@ from enigram.application.documents import documents_overview
 from enigram.application.indexing import list_sources, load_manifest
 from enigram.application.login import (
     end_session,
+    invite,
     new_login,
     session_caller,
     sign_in,
@@ -279,6 +280,11 @@ class RepoRequest(BaseModel):
 
 class MemberRole(BaseModel):
     role: Literal["viewer", "contributor", "maintainer", "admin"]
+
+
+class MemberInvite(BaseModel):
+    email: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=254)]
+    role: Literal["viewer", "contributor", "maintainer", "admin"] = "viewer"
 
 
 class KeyCreate(BaseModel):
@@ -679,6 +685,20 @@ def create_app(
     @app.get("/members")
     async def list_members(request: Request, ws: Admin) -> list[dict[str, Any]]:
         return await access.members(request.app.state.principals, ws.cfg.workspace)
+
+    @app.post("/members", status_code=201)
+    async def invite_member(request: Request, ws: Admin, body: MemberInvite) -> Any:
+        """A person, by email, gets a role here before or after they first sign in."""
+        try:
+            name = await invite(
+                request.app.state.principals, cfg, ws.cfg.workspace, body.email, body.role
+            )
+        except EnigramError as e:
+            raise _raise_http(e) from e
+        log.info(
+            "[api] %s: %s invited as %s by %s", ws.cfg.workspace, name, body.role, _actor(request)
+        )
+        return {"name": name, "role": body.role}
 
     @app.put("/members/{name}")
     async def put_member(request: Request, ws: Admin, name: str, body: MemberRole) -> Any:

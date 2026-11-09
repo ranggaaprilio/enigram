@@ -36,6 +36,17 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS sessions_expires ON sessions (expires_at);
+-- Members page: an invited user who has not signed in yet. Users made before this column came
+-- were all made by signing in, so they count as signed in.
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'principals' AND column_name = 'signed_in_at'
+    ) THEN
+        ALTER TABLE principals ADD COLUMN signed_in_at TIMESTAMPTZ;
+        UPDATE principals SET signed_in_at = created_at WHERE kind = 'user';
+    END IF;
+END $$;
 """
 
 
@@ -47,6 +58,7 @@ def _principal(row: Any) -> Principal:
         row["is_owner"],
         row["default_workspace"],
         row["display_name"],
+        row["signed_in_at"] is not None,
     )
 
 
@@ -167,6 +179,9 @@ class PostgresPrincipals:
             token_hash,
             principal_id,
             expires_at,
+        )
+        await self.pool.execute(
+            "UPDATE principals SET signed_in_at = now() WHERE id = $1", principal_id
         )
 
     async def by_session(self, token_hash: str) -> Principal | None:
