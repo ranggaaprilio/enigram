@@ -21,6 +21,7 @@
 
 <p align="center">
   <a href="#quickstart-docker">Quickstart</a> ·
+  <a href="#supported-today">Supported today</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#where-your-data-goes">Your data</a> ·
   <a href="#documentation">Documentation</a> ·
@@ -37,7 +38,8 @@
 > [!WARNING]
 > **Enigram is alpha software.** Expect breaking changes to the API, the CLI, the MCP tools and
 > the database schema between versions, and rough edges in the UI. Do not rely on it for anything
-> critical yet, and back up your Postgres before upgrading.
+> critical yet, and back up your Postgres before upgrading. Code support is **TypeScript only**,
+> with entry points for **NestJS, Next.js and Express**: see [Supported today](#supported-today).
 
 Enigram indexes a TypeScript repository (a code graph built with ts-morph, plus a summary and a
 step-by-step flow per entry point) and its Markdown and PDF documents, and answers questions with
@@ -62,6 +64,18 @@ offer MCP access. What Enigram combines:
 
 Accuracy against a coding agent with repository access is being evaluated (`docs/evaluation.md`);
 there is no verdict yet.
+
+## Supported today
+
+| | Supported | Not yet |
+|---|---|---|
+| Code | TypeScript projects with a `tsconfig.json` (monorepos too: every project is merged into one graph) | Other languages. A repository without a `tsconfig.json` gets its Markdown indexed, not its code |
+| Entry points | **NestJS** (routes, `@Cron`, events, jobs, `bootstrap`), **Next.js** App Router (pages, route handlers, middleware, server actions), **Express** (routes with their mount paths) | Other frameworks: their flows start from the exported functions nothing in the repository calls, so summaries and flows are coarser |
+| Documents | Markdown and PDF | Other formats |
+| Models | DeepSeek (chat) and Voyage AI (embeddings), online | Local models, other providers |
+| Size | Up to 2,000 TypeScript files and 50,000 lines per repository | Larger repositories |
+
+Details: [`docs/repositories.md`](docs/repositories.md).
 
 ## How it works
 
