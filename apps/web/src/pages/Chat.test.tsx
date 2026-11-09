@@ -249,7 +249,8 @@ describe('Chat', () => {
     await userEvent.type(screen.getByLabelText('Message'), 'Who may call /users?{Enter}')
 
     expect(await screen.findByRole('link', { name: 'View trace' })).toBeInTheDocument()
-    expect(screen.getByTestId('where')).toHaveTextContent('/chat/7')
+    // The router moves in a transition: under load the answer can show before the URL changes.
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/chat/7'))
     expect(screen.getByRole('heading', { name: 'Who may call /users?' })).toBeInTheDocument()
     const post = fetch.mock.calls.find(([u]) => u === '/api/chat/sessions/7/messages')!
     expect(JSON.parse(String(post[1]?.body))).toEqual({
