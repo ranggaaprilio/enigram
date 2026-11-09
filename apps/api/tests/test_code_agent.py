@@ -763,3 +763,158 @@ async def test_a_chat_follow_up_carries_its_history_and_reports_each_tool(cfg, g
     alone = ScriptedChat([answer_reply(FINAL)])
     await answer_with_agent(cfg, alone, graph, "And a normal user?", cache_dir=cache)
     assert len(alone.calls) == 1
+
+
+# -- the agent route: documents and team notes as tools (unified agent loop, B2) ------------
+
+REFUND_1 = "Refund Policy | 2 Rules > 2.1 Window | p.3-3 | #00004"
+REFUND_2 = "Refund Policy | 3 Exceptions | p.5-5 | #00007"
+DOCS_ANSWER = (
+    "Refunds are allowed within 30 days [1]. Gift cards are never refunded [2]. "
+    "The team rule says the same note#1. "
+    f"The controller is guarded by RolesGuard src/app.controller.ts:7-17@{SHA[:12]}."
+)
+
+
+async def _entity_note(notes, text, note_type="business_rule", ref="Refund"):
+    fields = {
+        "target_kind": "entity",
+        "target_ref": ref,
+        "text": text,
+        "note_type": note_type,
+        "author": "alice",
+        "owner": "alice",
+        "status": "verified",
+        "verified_by": "alice",
+    }
+    return await notes.create(fields, "alice")
+
+
+def _refund_docs():
+    from code_fakes import FakeDocs, doc_result
+
+    first = doc_result(
+        "refund window",
+        ("refund-c00004-chunk-000", REFUND_1, "Customers may get a refund within 30 days."),
+    )
+    second = doc_result(
+        "refund exceptions",
+        ("refund-c00004-chunk-000", REFUND_1, "Customers may get a refund within 30 days."),
+        ("refund-c00007-chunk-000", REFUND_2, "Gift cards are never refunded."),
+    )
+    return FakeDocs({"refund window": first, "refund exceptions": second})
+
+
+async def test_the_agent_route_searches_documents_notes_and_code_and_cites_each(cfg, graph):
+    from code_fakes import FakeAnnotations
+
+    notes = FakeAnnotations()
+    await _entity_note(notes, "Refunds only within 30 days.")
+    docs = _refund_docs()
+    chat = ScriptedChat(
+        [
+            tool_reply(("search_documents", _args(query="refund window"))),
+            tool_reply(
+                ("search_documents", _args(query="refund exceptions")),
+                ("search_notes", _args(query="refund", note_type="business_rule")),
+            ),
+            tool_reply(("find_symbol", _args(name="AppController"))),
+            answer_reply(DOCS_ANSWER),
+        ]
+    )
+
+    result = await answer_with_agent(cfg, chat, graph, "Who gets a refund?", notes=notes, docs=docs)
+
+    assert docs.queries == [("refund window", "mix"), ("refund exceptions", "mix")]
+    names = [t["function"]["name"] for t in chat.calls[0]["tools"]]
+    assert names == [*(t["function"]["name"] for t in TOOLS), "search_documents", "search_notes"]
+    system = chat.calls[0]["messages"][0]["content"]
+    assert "search_documents" in system and "[n]" in system
+    first_out = chat.calls[1]["messages"][-1]["content"]
+    assert first_out.startswith("[1] Refund Policy — 2 Rules > 2.1 Window p.3")
+    # A chunk seen again keeps its number; the new one is next.
+    second_out = chat.calls[2]["messages"][-2]["content"]
+    assert "[1] Refund Policy" in second_out and "[2] Refund Policy — 3 Exceptions" in second_out
+    notes_out = chat.calls[2]["messages"][-1]["content"]
+    assert notes_out.startswith("- note#1 [business rule, verified by alice")
+    assert "(on entity Refund)" in notes_out
+    assert [(s.ref, s.origin, s.citation) for s in result.sources] == [
+        (1, "document", REFUND_1),
+        (2, "document", REFUND_2),
+        (3, "code", f"src/app.controller.ts:7-17@{SHA[:12]}"),
+        (4, "human", "note#1"),
+    ]
+    assert result.extra["origins"] == {"document": 2, "human": 1, "code": 1}
+    assert result.extra["diagnostics"]["doc_searches"] == 2
+
+
+async def test_document_search_output_is_clipped(cfg, graph):
+    from code_fakes import FakeDocs, doc_result
+
+    from enigram.domain.answer import ContextRelation
+
+    many = [(f"c{i}", f"Doc | Part {i} | p.1-1 | #0000{i}", "x" * 5000) for i in range(12)]
+    relations = [ContextRelation(f"A{i}", "B", "k", "y" * 500) for i in range(30)]
+    docs = FakeDocs({"q": doc_result("q", *many, relations=relations)})
+    tools = _tools(cfg, graph, docs=docs)
+
+    out = await tools.run("search_documents", {"query": "q"})
+
+    assert out.count("\n[") + out.startswith("[") == code_agent.DOC_MAX_CHUNKS
+    assert len(out) < 12_000
+    assert out.count("graph: ") == code_agent.DOC_MAX_RELATIONS
+    assert set(tools.doc_citations) == set(range(1, code_agent.DOC_MAX_CHUNKS + 1))
+
+
+async def test_document_search_failures_and_misses_come_back_as_text(cfg, graph):
+    from code_fakes import FakeDocs
+
+    from enigram.domain.errors import EnigramError
+
+    assert "no document" in await _tools(cfg, graph, docs=FakeDocs()).run(
+        "search_documents", {"query": "nothing here"}
+    )
+    failing = _tools(cfg, graph, docs=FakeDocs(error=EnigramError("RAG query is too short.")))
+    assert "too short" in await failing.run("search_documents", {"query": "a"})
+    # Without an engine the documents are not a tool.
+    assert "unknown tool" in await _tools(cfg, graph).run("search_documents", {"query": "q"})
+
+
+async def test_search_notes_filters_by_type_and_rejects_an_unknown_one(cfg, graph):
+    from code_fakes import FakeAnnotations, FakeDocs
+
+    notes = FakeAnnotations()
+    rule = await _entity_note(notes, "Refunds only within 30 days.")
+    await _entity_note(notes, "Refunds go through a queue.", note_type="technical", ref="Queue")
+    tools = _tools(cfg, graph, notes=notes, docs=FakeDocs())
+
+    both = await tools.run("search_notes", {"query": "refunds"})
+    rules = await tools.run("search_notes", {"query": "refunds", "note_type": "business_rule"})
+
+    assert both.count("- note#") == 2
+    assert rules.count("- note#") == 1 and f"note#{rule.id} [business rule" in rules
+    assert "one of business_rule" in await tools.run(
+        "search_notes", {"query": "refunds", "note_type": "rule"}
+    )
+    assert "no team note" in await tools.run("search_notes", {"query": "zebra"})
+    assert set(tools.notes_seen) == {1, 2}
+
+
+async def test_the_agent_route_answers_without_repos_and_is_not_cached(cfg, tmp_path):
+    graph = FakeCodeGraph()  # nothing indexed
+    docs = _refund_docs()
+    cache = tmp_path / "cache"
+    for _ in range(2):
+        chat = ScriptedChat(
+            [
+                tool_reply(("search_documents", _args(query="refund window"))),
+                answer_reply("Refunds are allowed within 30 days [1]."),
+            ]
+        )
+        result = await answer_with_agent(cfg, chat, graph, "Who?", docs=docs, cache_dir=cache)
+        assert len(chat.calls) == 2  # the model ran: no cached answer
+    names = [t["function"]["name"] for t in chat.calls[0]["tools"]]
+    assert names == ["search_documents", "search_notes"]
+    assert "indexed TypeScript repos" not in chat.calls[0]["messages"][0]["content"]
+    assert [(s.ref, s.origin) for s in result.sources] == [(1, "document")]
+    assert not cache.exists() or not any(cache.iterdir())

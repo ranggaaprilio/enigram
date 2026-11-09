@@ -38,12 +38,13 @@ class ChatAgent:
 
 
 AGENTS = {
-    # What the Ask page did (merged into Chat 2026-11-08): the router picks, no focus.
+    # What the Ask page did (merged into Chat 2026-11-08), no focus. Auto, Business rules and
+    # Overview moved from the router to the agent route (owner, 2026-11-09: accuracy first).
     "auto": ChatAgent(
         "auto",
         "Auto",
-        "Picks code, documents or both for you, without a focus",
-        "auto",
+        "Searches the code, documents and team notes for you, without a focus",
+        "agent",
         None,
         ("ask",),
     ),
@@ -59,7 +60,7 @@ AGENTS = {
         "business",
         "Business rules",
         "The rules and behaviour in plain language, from documents and team notes",
-        "auto",
+        "agent",
         "Answer for a product manager: state the rule or behaviour in plain language, without "
         "function names, file paths or code terms in the prose. Every sentence still ends with "
         "its own citation, a summary sentence too (cite what it sums up); never gather them at "
@@ -82,7 +83,7 @@ AGENTS = {
         "overview",
         "Overview",
         "A short summary without code detail",
-        "auto",
+        "agent",
         # No closing "ask @technical for more": a sentence without a citation is tagged
         # [unsupported] (all four Overview answers had one, 2026-11-08); the page lists the
         # @names instead.
@@ -156,7 +157,8 @@ AGENT_NAME = re.compile(r"[a-z][a-z0-9-]{1,23}", re.ASCII)
 AGENT_LABEL_MAX_CHARS = 40
 AGENT_DESCRIPTION_MAX_CHARS = 160
 AGENT_FOCUS_MAX_CHARS = 1000
-AGENT_ROUTES = ("auto", "code")
+# "agent": one tool loop over the code, the documents and the team notes, no router.
+AGENT_ROUTES = ("auto", "code", "agent")
 
 
 @dataclass(frozen=True)

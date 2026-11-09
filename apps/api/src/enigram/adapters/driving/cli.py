@@ -175,11 +175,22 @@ def _build_parser() -> argparse.ArgumentParser:
     # Literal copy of golden_run.SYSTEMS so parsing never imports LightRAG; a test keeps them equal.
     answer.add_argument(
         "--system",
-        choices=("mix", "naive", "code", "agent+repo", "enigram-agent"),
+        choices=(
+            "mix",
+            "naive",
+            "code",
+            "agent+repo",
+            "enigram-agent",
+            "router-auto",
+            "agent-auto",
+            "router-business",
+            "agent-business",
+        ),
         default="mix",
         help="mix/naive = the document index; code = the code graph (one prompt, frozen "
         "ablation); agent+repo = a coding agent reading the pinned clone; enigram-agent = the "
-        "graph-first agent over the repository store",
+        "graph-first agent over the repository store; router-/agent-<auto|business> = a chat "
+        "agent on the router or on the agent route",
     )
     answer.add_argument("--split", choices=("dev", "verdict", "reserve"), help="only this split")
     answer.add_argument(

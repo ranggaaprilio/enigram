@@ -32,6 +32,7 @@ import { cn } from '@/lib/utils'
 // (decided 2026-11-08). A deleted agent's chats move to Auto.
 const muted = 'text-[13px] text-muted-foreground'
 const ROUTES: { value: AgentRoute; label: string }[] = [
+  { value: 'agent', label: 'Everything: code, documents and notes, searched until answered' },
   { value: 'auto', label: 'Auto: code, documents or both' },
   { value: 'code', label: 'Code only' },
 ]

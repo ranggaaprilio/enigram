@@ -1,7 +1,7 @@
 """KnowledgeEngine on LightRAG: the only module that talks to the lightrag package for the index."""
 
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -164,6 +164,20 @@ class LightRagEngine:
         return _outcome(await self.rag.adelete_by_doc_id(doc_id))
 
     async def query(self, question: str, mode: str, instructions: str) -> QueryResult:
+        return await self._run(self.rag.aquery_llm, question, mode, instructions)
+
+    async def retrieve(self, question: str, mode: str = QUERY_MODE) -> QueryResult:
+        """`aquery_data`: the same retrieval as query, no answer (its keyword extraction still
+        calls the LLM in mix mode)."""
+        return await self._run(self.rag.aquery_data, question, mode, None)
+
+    async def _run(
+        self,
+        call: Callable[[str, QueryParam], Awaitable[dict[str, Any]]],
+        question: str,
+        mode: str,
+        instructions: str | None,
+    ) -> QueryResult:
         # A fresh QueryParam per call: LightRAG mutates it in places.
         param = QueryParam(
             mode=mode,  # naive ignores the entity/relation caps; the total budget is shared
@@ -175,7 +189,7 @@ class LightRagEngine:
         )
         start = time.perf_counter()
         try:
-            raw = await self.rag.aquery_llm(question, param)
+            raw = await call(question, param)
         except QueryValidationError as e:
             raise EnigramError(str(e)) from e
         return to_result(question, raw, round(time.perf_counter() - start, 1), mode)

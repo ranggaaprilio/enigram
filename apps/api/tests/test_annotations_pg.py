@@ -201,6 +201,27 @@ async def test_search_text_by_name_and_words(notes):
     assert await notes.search_text("What is the mutation score?", ("document",)) == []
 
 
+async def test_search_text_filters_note_types(notes):
+    base = {"target_kind": "entity", "author": "web", "owner": "web", "status": "verified"}
+    rule = await notes.create(
+        {
+            **base,
+            "target_ref": "Refund",
+            "text": "Refunds in 30 days.",
+            "note_type": "business_rule",
+        },
+        "web",
+    )
+    await notes.create(
+        {**base, "target_ref": "Other", "text": "Refunds use a queue.", "note_type": "technical"},
+        "web",
+    )
+
+    assert len(await notes.search_text("refunds", ("entity",))) == 2
+    hits = await notes.search_text("refunds", ("entity",), note_types=("business_rule",))
+    assert [n.id for n in hits] == [rule.id]
+
+
 async def test_workspaces_are_isolated(notes, pool):
     a = await notes.create(_symbol_note(), "web")
     other = PostgresAnnotations(pool, f"test_{uuid4().hex[:8]}")

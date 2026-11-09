@@ -83,6 +83,13 @@ class FakeRag:
             raise self.error
         return self.response
 
+    async def aquery_data(self, question, param):
+        """aquery_llm's output without the answer, as LightRAG 1.5.7 returns it."""
+        self.params.append(param)
+        if self.error:
+            raise self.error
+        return {k: v for k, v in self.response.items() if k != "llm_response"}
+
 
 @pytest.mark.parametrize(
     ("citation", "title", "section", "pages"),
@@ -244,6 +251,47 @@ async def test_answer_question_rejects_too_short_question():
     rag = FakeRag(error=RAGQueryTooShortError("RAG query is too short."))
     with pytest.raises(EnigramError, match="too short"):
         await querying.answer_question(lightrag_engine.LightRagEngine(rag), "a")
+
+
+async def test_retrieve_returns_the_context_without_an_answer():
+    rag = FakeRag()
+    result = await lightrag_engine.LightRagEngine(rag).retrieve("Who designed the protocol?")
+
+    (param,) = rag.params
+    assert param.mode == "mix"
+    assert param.max_entity_tokens == lightrag_engine.QUERY_MAX_ENTITY_TOKENS
+    assert param.max_relation_tokens == lightrag_engine.QUERY_MAX_RELATION_TOKENS
+    assert param.max_total_tokens == lightrag_engine.QUERY_MAX_TOTAL_TOKENS
+    assert param.enable_rerank is False
+    assert result.answer == ""
+    assert [s.ref for s in result.sources] == [1, 2]
+    assert [c.chunk_id for c in result.chunks] == [
+        "harbor-book-c00000-chunk-000",
+        "harbor-book-c00002-chunk-000",
+    ]
+    assert len(result.entities) == 1 and len(result.relations) == 1
+    assert result.found and result.mode == "mix"
+
+
+async def test_retrieve_no_results_is_empty_not_an_error():
+    raw = {
+        "status": "failure",
+        "message": "Query returned no results",
+        "data": {},
+        "metadata": {"failure_reason": "no_results", "mode": "mix"},
+    }
+    result = await lightrag_engine.LightRagEngine(FakeRag(raw)).retrieve("Who?")
+    assert not result.found
+    assert result.answer == "" and result.sources == [] and result.chunks == []
+
+
+async def test_retrieve_failure_and_too_short_raise():
+    raw = {"status": "failure", "message": "Query failed: Connection error.", "data": {}}
+    with pytest.raises(EnigramError, match="Connection error"):
+        await lightrag_engine.LightRagEngine(FakeRag(raw)).retrieve("Who designed it?")
+    rag = FakeRag(error=RAGQueryTooShortError("RAG query is too short."))
+    with pytest.raises(EnigramError, match="too short"):
+        await lightrag_engine.LightRagEngine(rag).retrieve("a")
 
 
 async def test_open_engine_without_index_raises(cfg):

@@ -2,15 +2,24 @@
 `enigram-agent` in code_agent.py): the model calls tools until it answers or the budget runs out,
 then answers without tools. Tool outputs never raise to the model: problems come back as text."""
 
+import dataclasses
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from enigram.application.ports import ChatModel, ChatReply
 from enigram.domain.annotation import Annotation, note_source, parse_note_citations
-from enigram.domain.answer import NO_ANSWER_MARKER, ContextChunk, QueryResult, Source
+from enigram.domain.answer import (
+    NO_ANSWER_MARKER,
+    ContextChunk,
+    QueryResult,
+    Source,
+    parse_citation,
+)
 from enigram.domain.code import CodeCitation, parse_code_citations
+from enigram.domain.origin import REFS
 
 AGENT_MAX_TOOL_CALLS = 30
 AGENT_MAX_INPUT_TOKENS = 120_000  # cumulative prompt tokens per question (eval/README.md)
@@ -97,15 +106,23 @@ def loop_answer(
     extra: dict[str, Any],
     notes: dict[int, Annotation] | None = None,
     resolve_target: Callable[[CodeCitation], str] | None = None,
+    docs: dict[int, str] | None = None,
 ) -> QueryResult:
-    """The QueryResult of an agent answer: the no-answer marker becomes `found`, every inline
+    """The QueryResult of an agent answer: the no-answer marker becomes `found`, every `[n]` of
+    a chunk in `docs` (n -> its citation) a document source numbered n, every inline
     `path:start-end@sha` citation a code source and every `note#N` of a note in `notes` a human
-    source (a note id the tools never showed is dropped). The `agent+repo` baseline passes
-    neither `notes` nor `resolve_target`."""
+    source, numbered after the documents (a note id the tools never showed is dropped). The
+    `agent+repo` baseline passes neither `notes` nor `resolve_target`."""
     text = loop.reply.text
     found = NO_ANSWER_MARKER not in text
     text = text.replace(NO_ANSWER_MARKER, "").strip()
+    cited_docs = {int(n) for group in REFS.findall(text) for n in re.split(r"\s*,\s*", group)}
     sources = [
+        dataclasses.replace(parse_citation(n, docs[n]), origin="document")
+        for n in sorted(cited_docs & set(docs or {}))
+    ]
+    first = max((s.ref for s in sources), default=0) + 1
+    sources += [
         Source(
             ref=i,
             title=c.file,
@@ -115,12 +132,13 @@ def loop_answer(
             origin="code" if notes is not None else "",
             target=resolve_target(c) if resolve_target else "",
         )
-        for i, c in enumerate(parse_code_citations(text), 1)
+        for i, c in enumerate(parse_code_citations(text), first)
     ]
     if notes:
         for note_id in dict.fromkeys(parse_note_citations(text)):
             if note := notes.get(note_id):
-                sources.append(note_source(len(sources) + 1, note))
+                ref = max((s.ref for s in sources), default=0) + 1
+                sources.append(note_source(ref, note))
     return QueryResult(
         question,
         text,

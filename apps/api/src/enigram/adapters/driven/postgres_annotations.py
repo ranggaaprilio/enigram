@@ -260,7 +260,11 @@ class PostgresAnnotations:
         return {r["target_ref"]: r["n"] for r in rows}
 
     async def search_text(
-        self, question: str, kinds: tuple[str, ...], limit: int = 5
+        self,
+        question: str,
+        kinds: tuple[str, ...],
+        limit: int = 5,
+        note_types: tuple[str, ...] | None = None,
     ) -> list[Annotation]:
         # The question's stemmed words OR-ed, as postgres_code_graph._OR_QUERY; a question of only
         # stop words gives an empty tsquery, which matches nothing.
@@ -270,7 +274,8 @@ class PostgresAnnotations:
             "FROM annotations a, (SELECT array_to_string(array(SELECT quote_literal(l) "
             "FROM unnest(tsvector_to_array(to_tsvector('english', $4))) l), ' | ')::tsquery AS q) "
             "AS words WHERE a.workspace = $1 AND a.target_kind = ANY($2::text[]) "
-            "AND a.status = ANY($3::text[]) AND (position(lower(a.target_ref) in lower($4)) > 0 "
+            "AND a.status = ANY($3::text[]) AND ($6::text[] IS NULL OR a.note_type = ANY($6)) "
+            "AND (position(lower(a.target_ref) in lower($4)) > 0 "
             "OR to_tsvector('english', a.text) @@ q) "
             "ORDER BY named DESC, rank DESC, a.id LIMIT $5",
             self.workspace,
@@ -278,6 +283,7 @@ class PostgresAnnotations:
             list(ACTIVE_STATUSES),
             question,
             limit,
+            list(note_types) if note_types is not None else None,
         )
         return [_annotation(r) for r in rows]
 

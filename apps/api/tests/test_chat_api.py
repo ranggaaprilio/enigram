@@ -52,8 +52,19 @@ def chat_env(notes_env, monkeypatch):
         cfg, chat, graph, question, *, history, on_tool, guard_question, focus, **kw
     ):
         asked.append(
-            {"question": question, "history": history, "guard": guard_question, "focus": focus}
+            {
+                "question": question,
+                "history": history,
+                "guard": guard_question,
+                "focus": focus,
+                "with_docs": kw.get("docs") is not None,
+            }
         )
+        if kw.get("docs") is not None:  # the agent route: here, a cheaper document answer
+            await on_tool("search_documents", {"query": question})
+            record_usage(500, 50)
+            text = "Only admins may manage users [1] [document]."
+            return QueryResult(question, text, [], [], mode="enigram-agent")
         await on_tool("find_symbol", {"name": "UsersController"})
         record_usage(900, 100)
         if question == "break":
@@ -221,17 +232,18 @@ def test_an_agent_answers_with_its_focus_and_a_mention_asks_another(chat_env):
     sid = _start(client, agent="business")["id"]
     url = f"/chat/sessions/{sid}/messages"
 
-    # Business rules routes (here: to the documents) with its focus in the prompt.
+    # Business rules: the agent loop with the documents as tools and its focus in the prompt.
     events = _events(client.post(url, json={"text": "Which rule covers /users?"}, headers=LAPTOP))
     assert events[0][1]["answering"] == ["business"]
     assert (
         "step",
-        {"tool": "documents", "label": "Searching the documents", "agent": "business"},
+        {"tool": "search_documents", "label": "Searching the documents", "agent": "business"},
     ) in events
     assert events[-1][1]["agent"] == "business"
-    docs = next(a for a in asked if "docs" in a)
-    assert docs["docs"] == "Which rule covers /users?"
-    assert "Answer for a product manager" in docs["prompt"]
+    business = asked[-1]
+    assert business["with_docs"] and business["question"] == "Which rule covers /users?"
+    assert business["focus"].startswith("Answer for a product manager")
+    assert not any("routed" in a or "docs" in a for a in asked)  # no router, no one-shot query
 
     # @qa asks QA for this message only: the code agent with QA's focus, the mention dropped.
     events = _events(client.post(url, json={"text": "@qa scenarios for that?"}, headers=LAPTOP))
@@ -256,7 +268,7 @@ def test_a_panel_asks_its_agents_at_once_within_one_share_each(chat_env):
     sid = _start(client)["id"]
     url = f"/chat/sessions/{sid}/messages"
     # 1500 tokens left today: 750 per agent. QA (the code agent, 1000) goes over its share;
-    # Business rules (the documents, 550) stays within it.
+    # Business rules (the agent route, here a 550-token document answer) stays within it.
     home = client.app.state.workspaces.home
     home.cfg = dataclasses.replace(home.cfg, daily_token_budget=1500)
 
@@ -285,6 +297,28 @@ def test_a_panel_asks_its_agents_at_once_within_one_share_each(chat_env):
     many = "@auto @technical @business @qa which?"
     assert client.post(url, json={"text": many}, headers=LAPTOP).status_code == 422
     assert len(client.get(f"/chat/sessions/{sid}", headers=LAPTOP).json()["messages"]) == 3
+
+
+def test_an_agent_route_agent_searches_everything_in_one_loop(chat_env):
+    client, _, asked = chat_env
+    body = {
+        "name": "policy",
+        "label": "Policy",
+        "description": "Rules from every source",
+        "route": "agent",
+        "focus": "",
+        "note_types": [],
+    }
+    assert client.post("/chat/agents", json=body, headers=WEB).status_code == 201
+    sid = _start(client, agent="policy")["id"]
+
+    url = f"/chat/sessions/{sid}/messages"
+    events = _events(client.post(url, json={"text": "Which rule covers /users?"}, headers=LAPTOP))
+
+    assert events[-1][1]["agent"] == "policy"
+    # No router and no one-shot document query: the loop gets the documents as tools.
+    assert asked[-1]["with_docs"] is True and asked[-1]["question"] == "Which rule covers /users?"
+    assert not any("routed" in a or "docs" in a for a in asked)
 
 
 def test_an_admin_adds_changes_and_deletes_a_custom_agent(chat_env):
