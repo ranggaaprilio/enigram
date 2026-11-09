@@ -68,7 +68,7 @@ def test_parse_note_citations():
 
 
 def test_a_note_line_carries_its_type_and_both_prompts_weigh_it():
-    # docs/plan.md item 11: a business rule is a fact, a technical note a hint.
+    # docs/plans/plan.md item 11: a business rule is a fact, a technical note a hint.
     from enigram.application.annotations import notes_prompt
     from enigram.application.code_agent import system_prompt
     from enigram.domain.annotation import NOTE_WEIGHT_RULE
