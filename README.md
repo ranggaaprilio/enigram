@@ -12,6 +12,7 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
   <a href="https://github.com/ranggaaprilio/enigram/actions/workflows/ci.yml"><img src="https://github.com/ranggaaprilio/enigram/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-blue" alt="License: AGPL-3.0-only"></a>
   <img src="https://img.shields.io/badge/MCP-Claude%20Code-black" alt="MCP: Claude Code">
@@ -32,6 +33,11 @@
     <img src="docs/assets/screenshot-chat-light.png" alt="The Chat page: a question about who may call the /users endpoints, answered by the Technical agent with a source pinned to file:line@sha, then a panel of the Business rules and QA agents" width="900">
   </picture>
 </p>
+
+> [!WARNING]
+> **Enigram is alpha software.** Expect breaking changes to the API, the CLI, the MCP tools and
+> the database schema between versions, and rough edges in the UI. Do not rely on it for anything
+> critical yet, and back up your Postgres before upgrading.
 
 Enigram indexes a TypeScript repository (a code graph built with ts-morph, plus a summary and a
 step-by-step flow per entry point) and its Markdown and PDF documents, and answers questions with
