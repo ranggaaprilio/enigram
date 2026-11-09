@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+  <!-- The enigram mark (src/components/Logo.tsx), in the foreground colour of the browser's theme. -->
+  <style>
+    .m { stroke: #09090b; } .d { fill: #09090b; }
+    @media (prefers-color-scheme: dark) { .m { stroke: #fafafa; } .d { fill: #fafafa; } }
+  </style>
+  <path class="m" d="M10.1 8.35 6.88 14.7M13.9 8.35l3.22 6.35M9.4 18.8h5.2"/>
+  <circle class="d" cx="12" cy="4.6" r="3.4"/>
+  <circle class="m" cx="4.8" cy="18.8" r="2.8"/>
+  <circle class="m" cx="19.2" cy="18.8" r="2.8"/>
+</svg>

@@ -88,6 +88,10 @@ floating layers (menus, popovers, the drawer).
 
 ## Components
 
+The logo (`Logo`) is a small graph: three nodes joined, the top one filled (the cited answer), on
+lucide's 24px grid in the text colour. The favicon is the same mark (`public/favicon.svg`, dark or
+light with the browser's theme; `favicon-32.png` and `apple-touch-icon.png` on a dark tile).
+
 shadcn/ui (new-york) on Radix, Tailwind v4, lucide icons at 16px. New pieces are added with the
 shadcn CLI, then imports point at `@/lib/utils` and versions stay pinned in `package.json`.
 
