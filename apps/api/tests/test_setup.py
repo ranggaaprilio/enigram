@@ -41,6 +41,23 @@ def test_secrets_are_reported_as_set_never_by_value(cfg):
         assert secret not in text
 
 
+def test_openai_compatible_shows_endpoint_and_its_key(cfg):
+    compat = dataclasses.replace(
+        cfg,
+        llm_provider="openai-compatible",
+        llm_base_url="http://ollama.test:11434/v1",
+        llm_api_key="unused",
+    )
+    rows = _rows(setup_status(compat))
+
+    assert "DEEPSEEK_API_KEY" not in rows
+    assert rows["LLM_BASE_URL"]["value"] == "http://ollama.test:11434/v1"
+    assert rows["LLM_API_KEY"]["set"] is False  # a local server needs no key
+    keyed = _rows(setup_status(dataclasses.replace(compat, llm_api_key="sk-not-real")))
+    assert keyed["LLM_API_KEY"]["set"] is True and keyed["LLM_API_KEY"]["value"] is None
+    assert "sk-not-real" not in repr(keyed)
+
+
 def test_plain_settings_show_their_value(cfg):
     cfg = dataclasses.replace(cfg, repo_poll_secs=0, daily_token_budget=0, max_tokens_per_job=5)
     rows = _rows(setup_status(cfg))

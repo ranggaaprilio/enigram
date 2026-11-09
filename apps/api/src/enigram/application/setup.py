@@ -3,7 +3,7 @@ may need to look at. A secret is reported as set or not, never by value."""
 
 from typing import Any
 
-from enigram.config import Config
+from enigram.config import NO_API_KEY, Config
 
 
 def _row(group: str, label: str, env: str, value: str | None, is_set: bool) -> dict[str, Any]:
@@ -33,7 +33,20 @@ def setup_status(cfg: Config) -> dict[str, Any]:
         "workspace": cfg.workspace,
         "settings": [
             _row("Models", "Chat model", "LLM_MODEL", f"{cfg.llm_provider} {cfg.llm_model}", True),
-            _secret("Models", "DeepSeek API key", "DEEPSEEK_API_KEY", cfg.llm_api_key),
+            *(
+                [_secret("Models", "DeepSeek API key", "DEEPSEEK_API_KEY", cfg.llm_api_key)]
+                if cfg.llm_provider == "deepseek"
+                else [
+                    _row("Models", "Chat endpoint", "LLM_BASE_URL", cfg.llm_base_url, True),
+                    # NO_API_KEY stands in for an unset key (local servers need none).
+                    _secret(
+                        "Models",
+                        "Chat API key",
+                        "LLM_API_KEY",
+                        "" if cfg.llm_api_key == NO_API_KEY else cfg.llm_api_key,
+                    ),
+                ]
+            ),
             _row(
                 "Models",
                 "Embeddings",

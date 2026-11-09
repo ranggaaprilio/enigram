@@ -1,16 +1,11 @@
 """AnswerScorer on Ragas 0.4: faithfulness, answer relevancy and answer correctness."""
 
 import math
-from typing import Any
 
-from enigram.adapters.driven.openai_llm import DEEPSEEK_NO_THINKING
+from enigram.adapters.driven.openai_llm import provider_extra_body
 from enigram.adapters.driven.voyage_embedding import VoyageRagasEmbedding
 from enigram.config import Config
 from enigram.domain.claims import JUDGE_TEMPERATURE, split_claims
-
-
-def _api_thinking(cfg: Config) -> dict[str, Any]:
-    return {} if cfg.thinking_mode == "on" else DEEPSEEK_NO_THINKING
 
 
 class RagasScorer:
@@ -27,7 +22,7 @@ class RagasScorer:
             client=AsyncOpenAI(base_url=judge.llm_base_url, api_key=judge.llm_api_key),
             temperature=JUDGE_TEMPERATURE,
             max_tokens=judge.llm_max_tokens,
-            extra_body=_api_thinking(judge),
+            extra_body=provider_extra_body(judge),
         )
         embeddings = VoyageRagasEmbedding(cfg)
         self.faithfulness = Faithfulness(llm=llm)
