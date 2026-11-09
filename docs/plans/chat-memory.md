@@ -68,7 +68,12 @@ tidak berubah.
 **Isi adapter:**
 - Model: `OpenAIChatModel` dari Pydantic AI dengan `OpenAIProvider(base_url=cfg.llm_base_url,
   api_key=cfg.llm_api_key)`. `model_settings` membawa `temperature`, `max_tokens`, dan
-  `extra_body` (thinking off), sama seperti adapter sekarang.
+  `extra_body`.
+- `extra_body` diambil dari **satu helper bersama** di `openai_llm.py`, yang juga dipakai
+  `openai_llm.py` dan `ragas_scorer.py`. Helper ini hanya mengisi flag thinking-off bila
+  penyedianya DeepSeek. Untuk penyedia lain hasilnya kosong. Tujuannya supaya adapter baru tidak
+  menyalin flag khusus DeepSeek (`DEEPSEEK_NO_THINKING`) ke tempat baru, karena penyedia lain bisa
+  menolak field itu dengan error 400.
 - Tool: dibuat dari skema JSON yang sudah ada (`Tool.from_schema`). Fungsinya hanya memanggil
   `run_tool(name, args)`, jadi `on_tool` dan `CodeAgentTools.run` tetap persis seperti sekarang.
   Bila argumen tidak valid, tool mengembalikan teks error, bukan meminta retry.
@@ -167,6 +172,8 @@ Dua PR berurutan, **tidak bertumpuk**. PR 2 dibuat dari `main` setelah PR 1 merg
   - `record_usage` dipanggil per respons,
   - meter yang melewati batas menghentikan loop,
   - `strip_think`,
+  - `extra_body` dari helper bersama: flag thinking-off terkirim untuk DeepSeek, tidak terkirim
+    untuk penyedia lain,
   - error provider menjadi `EnigramError`,
   - `on_tool` terpanggil.
 - **P2: dipakai `answer_with_agent`.** Naikkan `AGENT_VERSION`. `run_tool_loop` tetap untuk
@@ -235,3 +242,15 @@ Dua PR berurutan, **tidak bertumpuk**. PR 2 dibuat dari `main` setelah PR 1 merg
 - **D4. Eval multi-turn.** Cukup uji manual, atau perlu kasus multi-turn di golden eval?
 - **D5. Cakupan migrasi.** Usul: hanya `answer_with_agent`. Baseline `agent+repo` tetap memakai
   loop lama, dan `ChatModel.complete` (rewrite, guard, LightRAG) tidak diubah.
+- Dukungan banyak penyedia (endpoint yang kompatibel dengan OpenAI, model lokal, embedding selain
+  Voyage) ada di rencana terpisah: [llm-providers](llm-providers.md). Helper `extra_body` di
+  Bagian A dibuat di PR 1 rencana itu.
+- **D6. Migrasi lanjutan `ChatModel.complete`.** Setelah PR 2, apakah `ChatModel.complete`
+  (rewrite, guard, judge) juga dipindah ke Pydantic AI?
+  - Ya: semua panggilan LLM lewat satu jalur, dan dukungan banyak penyedia dari Pydantic AI
+    (OpenAI, Anthropic, Gemini, Ollama) benar-benar terpakai. Perlu rencana dan gate akurasi
+    sendiri.
+  - Tidak: D5 tetap berlaku, dan fleksibilitas penyedia hanya ada di agent loop.
+  - Di luar cakupan keduanya: LightRAG dan embedding Voyage, karena keduanya memakai klien
+    sendiri. Mengganti model embedding juga berarti reindex, karena `EMBED_DIM` terikat ke kolom
+    pgvector.
