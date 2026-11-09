@@ -16,6 +16,7 @@ from enigram.domain.annotation import (
     AnnotationEvent,
     SymbolReview,
 )
+from enigram.domain.answer import ContextChunk, QueryResult, parse_citation
 from enigram.domain.chat import ChatMessage, ChatSession, CustomAgent
 from enigram.domain.code import (
     IDENTIFIER,
@@ -583,11 +584,13 @@ class FakeAnnotations:
                 out[n.target_ref] = out.get(n.target_ref, 0) + 1
         return out
 
-    async def search_text(self, question, kinds, limit=5):
+    async def search_text(self, question, kinds, limit=5, note_types=None):
         words = {w.lower() for w in re.findall(r"\w+", question) if len(w) >= 4}
         hits = []
         for n in sorted(self.notes.values(), key=lambda n: n.id):
             if n.target_kind not in kinds or n.status not in ACTIVE_STATUSES:
+                continue
+            if note_types is not None and n.note_type not in note_types:
                 continue
             named = n.target_ref.lower() in question.lower()
             shared = words & {w.lower() for w in re.findall(r"\w+", n.text)}
@@ -758,6 +761,35 @@ def tool_reply(*calls, tokens=(1000, 10)):
 
 def answer_reply(text, tokens=(1500, 40)):
     return ChatReply(text, [], "stop", tokens[0], tokens[1], 0.1)
+
+
+def doc_result(question, *chunks, relations=()):
+    """A KnowledgeEngine.retrieve result: (chunk_id, citation, text) per chunk, each its own
+    reference, as LightRAG numbers them per query."""
+    return QueryResult(
+        question,
+        "",
+        [parse_citation(i, citation) for i, (_, citation, _) in enumerate(chunks, 1)],
+        [ContextChunk(i, cid, text) for i, (cid, _, text) in enumerate(chunks, 1)],
+        [],
+        list(relations),
+        found=bool(chunks),
+    )
+
+
+class FakeDocs:
+    """KnowledgeEngine.retrieve over canned results by query (else nothing); records queries."""
+
+    def __init__(self, results=None, error=None):
+        self.results = results or {}
+        self.error = error
+        self.queries = []
+
+    async def retrieve(self, question, mode="mix"):
+        self.queries.append((question, mode))
+        if self.error:
+            raise self.error
+        return self.results.get(question) or doc_result(question)
 
 
 def noul(p: float) -> Decision:

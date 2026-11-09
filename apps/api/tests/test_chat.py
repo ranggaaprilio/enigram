@@ -109,18 +109,35 @@ def test_a_mention_picks_an_agent_by_name_or_alias():
     assert split_mentions("@qa @Roles where?") == (["qa"], "@Roles where?")
     # Technical and Auto keep the answerer's own prompt; the others add a focus.
     assert AGENTS["technical"].focus is None
-    assert AGENTS["auto"].focus is None and AGENTS["auto"].route == "auto"
+    assert AGENTS["auto"].focus is None
     assert all(AGENTS[n].focus for n in ("business", "qa", "overview"))
-    assert {a.route for a in AGENTS.values()} == {"code", "auto"}
+    # Technical and QA read the code; the others search code, documents and notes in one loop.
+    assert {n for n, a in AGENTS.items() if a.route == "agent"} == {"auto", "business", "overview"}
+    assert {n for n, a in AGENTS.items() if a.route == "code"} == {"technical", "qa"}
 
 
 def test_a_focus_comes_last_in_the_code_agent_prompt():
-    from enigram.application.code_agent import system_prompt
+    from enigram.application.code_agent import agent_prompt, system_prompt
 
     plain = system_prompt(["org-app 70ae60dbb609"])
     assert system_prompt(["org-app 70ae60dbb609"], "Answer for a tester.") == (
         plain + "\nAnswer for a tester."
     )
+    loop = agent_prompt(["org-app 70ae60dbb609"])
+    assert agent_prompt(["org-app 70ae60dbb609"], "Answer for a PM.") == loop + "\nAnswer for a PM."
+
+
+def test_the_agent_route_is_a_custom_agent_choice_and_its_tools_have_steps():
+    from enigram.application.chat import TOOL_STEPS
+    from enigram.domain.chat import AGENT_ROUTES, check_custom_agent
+
+    assert "agent" in AGENT_ROUTES
+    fields = check_custom_agent(
+        name="policy", label="Policy", description="", route="agent", focus="", note_types=()
+    )
+    assert fields["route"] == "agent"
+    assert TOOL_STEPS["search_documents"] == "Searching the documents"
+    assert TOOL_STEPS["search_notes"] == "Reading team notes"
 
 
 def test_a_custom_agent_is_checked_and_its_note_types_join_the_focus():

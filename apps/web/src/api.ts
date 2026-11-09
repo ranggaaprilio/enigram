@@ -816,8 +816,9 @@ export interface ChatAgent {
   updated_at?: string
 }
 
-// Where a custom agent looks: the router picks code, documents or both; or the code only.
-export type AgentRoute = 'auto' | 'code'
+// Where a custom agent looks: the router picks code, documents or both; the code only; or one
+// agent that searches the code, documents and team notes until it has the answer.
+export type AgentRoute = 'auto' | 'code' | 'agent'
 
 export interface AgentFields {
   label: string

@@ -214,7 +214,7 @@ class ChatAgentCreate(BaseModel):
     name: str
     label: str
     description: str = ""
-    route: Literal["auto", "code"] = "auto"
+    route: Literal["auto", "code", "agent"] = "auto"
     focus: str = ""
     note_types: list[str] = []
 
@@ -224,7 +224,7 @@ class ChatAgentChange(BaseModel):
 
     label: str | None = None
     description: str | None = None
-    route: Literal["auto", "code"] | None = None
+    route: Literal["auto", "code", "agent"] | None = None
     focus: str | None = None
     note_types: list[str] | None = None
 

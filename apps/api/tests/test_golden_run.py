@@ -394,3 +394,64 @@ async def test_enigram_agent_creates_the_setup_annotation_once(cfg, deps, tmp_pa
         "golden",
     )
     assert [e.action for e in await deps.notes.events(note.id)] == ["created", "conflict"]
+
+
+@pytest.mark.usefixtures("fake_repo")
+async def test_chat_systems_answer_through_the_chat_path(cfg, deps, tmp_path, monkeypatch):
+    """B4 of the agent route: the chat's old router path and the new agent route, each as Auto
+    and as Business rules, answer through chat.answer_as with one engine per run."""
+    from contextlib import asynccontextmanager
+
+    graph = FakeCodeGraph(fixture_graph())
+    graph.repos[1].update(url=CODE_URL, ref="eval-v1", indexed_sha=PINNED)
+    _fake_graph_deps(deps, graph)
+    deps.generator = lambda: FakeChat("unused")
+    opened = []
+
+    @asynccontextmanager
+    async def open_engine(**kw):
+        opened.append(kw)
+        yield "engine"
+
+    deps.open_engine = open_engine
+    seen = []
+
+    async def fake_answer_as(agent, question, history, on_tool, *, engine, repo_names, **kw):
+        seen.append((agent.name, agent.route, history, await engine(), await repo_names()))
+        return QueryResult(question, "Yes [1].", [], [], mode="enigram-agent")
+
+    monkeypatch.setattr(golden_run, "answer_as", fake_answer_as)
+
+    for system in ("router-auto", "agent-auto", "router-business", "agent-business"):
+        run = await run_golden(cfg, deps, _code_set(tmp_path), system, split="dev")
+        data = json.loads(run.answers_path.read_text())
+        assert data["system"] == system and [i["id"] for i in data["items"]] == ["b01", "a01"]
+
+    assert [(name, route) for name, route, *_ in seen[::2]] == [
+        ("auto", "auto"),
+        ("auto", "agent"),
+        ("business", "auto"),
+        ("business", "agent"),
+    ]
+    assert all(
+        h == [] and e == "engine" and names == ["org-app@eval-v1"] for _, _, h, e, names in seen
+    )
+    assert len(opened) == 4  # one engine per run
+    assert len(await deps.notes.list()) == 1  # a01's setup note, made once
+
+
+async def test_chat_systems_answer_a_document_set_without_repos(cfg, deps, golden_env, monkeypatch):
+    path, install = golden_env
+    install(FakeRag())
+    _fake_graph_deps(deps, FakeCodeGraph())
+    seen = []
+
+    async def fake_answer_as(agent, question, history, on_tool, *, repo_names, **kw):
+        seen.append(await repo_names())
+        return QueryResult(question, "Mira [1].", [], [], mode="mix")
+
+    monkeypatch.setattr(golden_run, "answer_as", fake_answer_as)
+
+    run = await run_golden(cfg, deps, path, "agent-auto")
+
+    assert (run.answered, run.failed) == (2, 0) and seen == [[], []]

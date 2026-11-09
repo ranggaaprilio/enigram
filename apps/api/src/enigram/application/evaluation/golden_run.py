@@ -2,8 +2,11 @@
 
 Systems: `mix` and `naive` (the LightRAG document index), `code` (the code graph of the golden
 set's pinned repository, one prompt), `agent+repo` (a coding agent with read-only tools on the
-clone) and `enigram-agent` (the graph-first agent over the repository store)."""
+clone) and `enigram-agent` (the graph-first agent over the repository store). The chat's agents
+too: `router-<agent>` (the router path the chat used before 2026-11-09) and `agent-<agent>` (the
+agent route: one loop over code, documents and notes), for Auto and Business rules."""
 
+import dataclasses
 import json
 import logging
 import re
@@ -19,7 +22,8 @@ from enigram.application.annotations import (
     create_annotation,
     resolve_symbol,
 )
-from enigram.application.code_agent import answer_with_agent
+from enigram.application.chat import answer_as
+from enigram.application.code_agent import answer_with_agent, repo_name
 from enigram.application.evaluation.claims import write_label_sheet
 from enigram.application.evaluation.golden import (
     BEHAVIOR,
@@ -42,13 +46,15 @@ from enigram.application.ports import (
 from enigram.config import Config
 from enigram.domain.annotation import Annotation
 from enigram.domain.answer import QUERY_MODES, QueryResult, Source
+from enigram.domain.chat import AGENTS
 from enigram.domain.claims import split_claims
 from enigram.domain.code import parse_code_citations
 from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
 
-SYSTEMS = (*QUERY_MODES, "code", "agent+repo", "enigram-agent")
+CHAT_SYSTEMS = ("router-auto", "agent-auto", "router-business", "agent-business")
+SYSTEMS = (*QUERY_MODES, "code", "agent+repo", "enigram-agent", *CHAT_SYSTEMS)
 CODE_SYSTEMS = ("code", "agent+repo", "enigram-agent")
 # Answers that cite inline only (`path:line@sha`), never [n].
 AGENT_SYSTEMS = ("agent+repo", "enigram-agent")
@@ -334,6 +340,54 @@ async def _answer_enigram_agent(
         await store.close()
 
 
+async def _answer_chat(
+    cfg: Config, deps: Deps, golden: GoldenSet, questions: list[GoldenQuestion], system: str
+) -> tuple[list[dict[str, Any]], int]:
+    """A chat agent's answers through chat.answer_as, as a first question of a session (no
+    history): `router-*` keeps the agent on the router, `agent-*` puts it on the agent route.
+    A code set's annotation questions get their setup note first, as for enigram-agent."""
+    route, name = system.split("-", 1)
+    agent = dataclasses.replace(AGENTS[name], route="auto" if route == "router" else "agent")
+    store = await deps.open_store()
+    try:
+        graph = await deps.new_code_graph(store)
+        notes = await deps.new_annotations(store)
+        repo = await _pinned_repo(graph, golden.repo) if golden.repo else None
+        chat, decider, embedder = deps.generator(), deps.decider(), deps.code_embedder()
+        async with deps.open_engine() as engine:
+
+            async def get_engine() -> Any:
+                return engine
+
+            async def repo_names() -> list[str]:
+                return [repo_name(r, cfg.repo_hosts) for r in await graph.list_repos()]
+
+            async def on_tool(tool: str, args: dict[str, Any]) -> None:
+                return None
+
+            async def answer(q: GoldenQuestion) -> QueryResult:
+                if repo is not None and (setup := q.setup.get("annotation")):
+                    await _setup_annotation(cfg, graph, notes, repo, setup, decider)
+                return await answer_as(
+                    agent,
+                    q.question,
+                    [],
+                    on_tool,
+                    cfg=cfg,
+                    model=chat,
+                    graph=graph,
+                    notes=notes,
+                    decider=decider,
+                    embedder=embedder,
+                    engine=get_engine,
+                    repo_names=repo_names,
+                )
+
+            return await answer_golden(answer, questions, system)
+    finally:
+        await store.close()
+
+
 async def run_golden(
     cfg: Config,
     deps: Deps,
@@ -362,6 +416,8 @@ async def run_golden(
                     skipped,
                     BEHAVIOR_ANNOTATION,
                 )
+    elif system in CHAT_SYSTEMS and golden.repo is not None and categories is None:
+        categories = ENIGRAM_AGENT_CATEGORIES
     questions = select_questions(
         golden.questions, split=split, categories=categories, allow_verdict=allow_verdict
     )
@@ -373,6 +429,8 @@ async def run_golden(
         items, failed = await _answer_code(cfg, deps, golden, questions)
     elif system == "enigram-agent":
         items, failed = await _answer_enigram_agent(cfg, deps, golden, questions)
+    elif system in CHAT_SYSTEMS:
+        items, failed = await _answer_chat(cfg, deps, golden, questions, system)
     elif system == "agent+repo":
         from enigram.application.evaluation.agent_repo import AgentRepoRunner
 

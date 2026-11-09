@@ -45,6 +45,10 @@ class KnowledgeEngine(Protocol):
 
     async def query(self, question: str, mode: str, instructions: str) -> "QueryResult": ...
 
+    async def retrieve(self, question: str, mode: str = ...) -> "QueryResult":
+        """What query would read (sources, chunks, entities, relations), with no answer."""
+        ...
+
     async def clear_query_cache(self) -> int:
         """Delete the cached answers only; returns how many were dropped."""
         ...
@@ -275,10 +279,15 @@ class AnnotationRepository(Protocol):
         ...
 
     async def search_text(
-        self, question: str, kinds: tuple[str, ...], limit: int = 5
+        self,
+        question: str,
+        kinds: tuple[str, ...],
+        limit: int = 5,
+        note_types: tuple[str, ...] | None = None,
     ) -> list["Annotation"]:
-        """Entity/document notes whose target name appears in the question or whose text shares
-        stemmed words with it, best first, ACTIVE_STATUSES only."""
+        """Notes of these target kinds whose target name appears in the question or whose text
+        shares stemmed words with it, best first, ACTIVE_STATUSES only; `note_types` (None: all)
+        keeps only those NOTE_TYPES."""
         ...
 
     async def update(

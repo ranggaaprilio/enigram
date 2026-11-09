@@ -139,6 +139,28 @@ async def test_fake_annotations_log_events_and_filter():
     assert dataclasses.asdict(b)["candidates"] == ()
 
 
+async def test_fake_search_text_filters_note_types():
+    notes = FakeAnnotations()
+    base = {"target_kind": "entity", "author": "web", "owner": "web", "status": "verified"}
+    rule = await notes.create(
+        {
+            **base,
+            "target_ref": "Refund",
+            "text": "Refunds in 30 days.",
+            "note_type": "business_rule",
+        },
+        "web",
+    )
+    await notes.create(
+        {**base, "target_ref": "Other", "text": "Refunds use a queue.", "note_type": "technical"},
+        "web",
+    )
+
+    assert len(await notes.search_text("refunds", ("entity",))) == 2
+    hits = await notes.search_text("refunds", ("entity",), note_types=("business_rule",))
+    assert [n.id for n in hits] == [rule.id]
+
+
 SERVICE = "src/app.service.ts#AppService.find"
 
 

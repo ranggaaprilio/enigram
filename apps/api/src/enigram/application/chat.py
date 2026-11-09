@@ -66,6 +66,8 @@ TOOL_STEPS = {
     "read_file": "Reading a file",
     "grep": "Searching the text",
     "documents": "Searching the documents",
+    "search_documents": "Searching the documents",
+    "search_notes": "Reading team notes",
 }
 
 
@@ -415,10 +417,11 @@ async def answer_as(
 ) -> QueryResult:
     """One agent's answer. The follow-up rewritten to stand alone picks the route, asks the
     documents (LightRAG gets no history) and is what the abstain guard judges; the code agent
-    gets the question itself with the history."""
+    gets the question itself with the history. The agent route skips the router: the code
+    agent's loop gets the documents and team notes as tools too."""
     standalone = await standalone_question(model, history, question)
 
-    async def ask_code() -> QueryResult:
+    async def ask_code(docs: KnowledgeEngine | None = None) -> QueryResult:
         return await answer_with_agent(
             cfg,
             model,
@@ -432,6 +435,7 @@ async def answer_as(
             on_tool=on_tool,
             guard_question=standalone,
             focus=agent.focus,
+            docs=docs,
         )
 
     async def ask_docs() -> QueryResult:
@@ -443,6 +447,8 @@ async def answer_as(
 
     if agent.route == "code":
         return await ask_code()
+    if agent.route == "agent":
+        return await ask_code(await engine())
     return await answer_routed(
         standalone,
         scope="auto",

@@ -33,6 +33,7 @@ from enigram.application.annotations import attach_notes
 from enigram.application.code_embeddings import rank_search
 from enigram.application.code_query import CODE_IS_THE_TRUTH, ROUTE
 from enigram.application.code_summary import TRUNCATED
+from enigram.application.decisions import clip
 from enigram.application.files import atomic_write_text
 from enigram.application.ports import (
     AnnotationRepository,
@@ -41,17 +42,20 @@ from enigram.application.ports import (
     CodeEmbedder,
     CodeGraphRepository,
     DecisionProvider,
+    KnowledgeEngine,
 )
 from enigram.application.repo_store import GitTools, store_path
 from enigram.application.repo_sync import check_repo_url
 from enigram.config import Config
 from enigram.domain.annotation import (
+    NOTE_TYPES,
     NOTE_WEIGHT_RULE,
+    TARGET_KINDS,
     Annotation,
     note_line,
     parse_note_citations,
 )
-from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult
+from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult, Source
 from enigram.domain.budget import BudgetExceeded
 from enigram.domain.code import CodeCitation, CodeSymbol
 from enigram.domain.errors import EnigramError
@@ -71,6 +75,14 @@ FLOW_MAX_ENTRIES = 3
 FLOW_MAX_CHARS = 1200
 GRAPH_TOOL_NAMES = ("search_code", "find_symbol", "entrypoint_flow")
 READ_TOOL_NAMES = ("read_file", "grep")
+DOC_TOOL_NAMES = ("search_documents", "search_notes")
+# One search_documents result (a mix retrieval returned 20 chunks and 76 relations, 2026-11-09):
+# the loop resends it on every later turn, so it stays near 10k characters.
+DOC_MAX_CHUNKS = 6
+DOC_CHUNK_CHARS = 1200
+DOC_MAX_RELATIONS = 8
+DOC_RELATION_CHARS = 200
+NOTES_MAX_HITS = 8
 WIRING_KINDS = ("guarded_by", "intercepted_by", "module_imports", "provides", "provides_config")
 
 
@@ -143,6 +155,70 @@ def system_prompt(repo_lines: list[str], focus: str | None = None) -> str:
     return f"{prompt}\n{focus}" if focus else prompt
 
 
+DOC_TOOLS = [
+    _tool(
+        "search_documents",
+        "Search the indexed documents (specs, rules, decisions): numbered chunks to cite as [n], "
+        "and graph lines that point to them.",
+        {"query": "string"},
+        ["query"],
+    ),
+    _tool(
+        "search_notes",
+        "Team notes on code, entities and documents matching a name or words; note_type: "
+        + ", ".join(NOTE_TYPES)
+        + ".",
+        {"query": "string", "note_type": "string"},
+        ["query"],
+    ),
+]
+
+
+def agent_prompt(repo_lines: list[str], focus: str | None = None) -> str:
+    """The system message of the agent route: documents, team notes and (when a repository is
+    indexed) the code, in one loop that may search again until the sources answer."""
+    sources = "the indexed documents (search_documents), the team notes (search_notes)"
+    code = ""
+    if repo_lines:
+        sources += (
+            f" and the indexed TypeScript repos (name sha): {'; '.join(repo_lines)}; pass the "
+            "name as `repo`"
+        )
+        code = (
+            "For code: search_code or entrypoint_flow (find_symbol for a named symbol), then "
+            "read_file the lines it gave; grep only if the graph found nothing. "
+            + CODE_IS_THE_TRUTH
+            + "\n"
+        )
+    prompt = (
+        f"You answer questions from {sources}.\n"
+        "Use the sources the question needs: documents and notes for rules, decisions and "
+        "product behaviour, the code for what the system really does, both when they may "
+        "differ. When a result does not answer the question, search again with other words or "
+        "in another source before answering. Make independent tool calls in one turn.\n"
+        + code
+        + "End every sentence with its citation: [n] for a document chunk (the number "
+        "search_documents gave it), note#N for a team note, `path:start-end@sha12` for code. A "
+        "graph line is a lead, not a citation: cite the chunk that states it. If no source "
+        f"answers any of it, say so in one sentence ending with {NO_ANSWER_MARKER}; never put "
+        f"{NO_ANSWER_MARKER} in an answer that answers part of the question: say which part the "
+        "sources do not show instead.\n"
+        "Team notes rank above documents and summaries. If a note or a document contradicts the "
+        "code, state both. " + NOTE_WEIGHT_RULE
+    )
+    return f"{prompt}\n{focus}" if focus else prompt
+
+
+def _doc_label(source: Source | None, chunk_id: str) -> str:
+    """`Title — Section p.3-4` of a chunk's source."""
+    if source is None:
+        return chunk_id
+    label = source.title
+    if source.section and source.section != "-":
+        label += f" — {source.section}"
+    return f"{label} p.{source.pages}" if source.pages else label
+
+
 class _CountingChat:
     """Counts model turns; every call goes to the real ChatModel."""
 
@@ -174,7 +250,8 @@ def _one_line(text: str) -> str:
 
 class CodeAgentTools:
     """The agent's tools over the graph and the repository store, with the scope rule and the
-    per-question diagnostics."""
+    per-question diagnostics; with `docs` (the agent route), the document and note searches
+    too."""
 
     def __init__(
         self,
@@ -186,9 +263,15 @@ class CodeAgentTools:
         open_git: Callable[[Path, str], Any] = GitTools,
         notes: AnnotationRepository | None = None,
         embedder: CodeEmbedder | None = None,
+        docs: KnowledgeEngine | None = None,
     ) -> None:
         self.cfg, self.graph, self.repos, self.open_git = cfg, graph_repo, repos, open_git
         self.notes = notes
+        self.docs = docs
+        # A document chunk's [n], fixed for the question: chunk id -> n, and n -> its citation.
+        self.doc_refs: dict[str, int] = {}
+        self.doc_citations: dict[int, str] = {}
+        self.doc_searches = 0
         # The semantic channel of search_code; None = full text only.
         self.embedder = embedder
         self.vectors: dict[str, list[float]] = {}
@@ -480,6 +563,43 @@ class CodeAgentTools:
                 )
         return text
 
+    # -- document and note tools (the agent route) --------------------------------------------
+
+    async def search_documents(self, docs: KnowledgeEngine, query: str) -> str:
+        """The top chunks, each with its [n] for the question, then the top graph lines."""
+        self.doc_searches += 1
+        try:
+            result = await docs.retrieve(query)
+        except EnigramError as e:
+            return f"document search failed: {e}"
+        if not result.chunks:
+            return "no document matches; try other words"
+        by_ref = {s.ref: s for s in result.sources}
+        lines = []
+        for c in result.chunks[:DOC_MAX_CHUNKS]:
+            source = by_ref.get(c.ref)
+            n = self.doc_refs.setdefault(c.chunk_id, len(self.doc_refs) + 1)
+            self.doc_citations[n] = source.citation if source else c.chunk_id
+            lines.append(f"[{n}] {_doc_label(source, c.chunk_id)}\n{clip(c.text, DOC_CHUNK_CHARS)}")
+        for r in result.relations[:DOC_MAX_RELATIONS]:
+            fact = clip(_one_line(r.description), DOC_RELATION_CHARS)
+            lines.append(f"graph: {r.source} -> {r.target}: {fact}")
+        return "\n".join(lines)
+
+    async def search_notes(self, query: str, note_type: Any) -> str:
+        if note_type and note_type not in NOTE_TYPES:
+            return f"note_type must be one of {', '.join(NOTE_TYPES)}"
+        if self.notes is None:
+            return "no team notes here"
+        types = (note_type,) if note_type else None
+        found = await self.notes.search_text(query, TARGET_KINDS, NOTES_MAX_HITS, types)
+        if not found:
+            return "no team note matches; try other words"
+        self.notes_seen.update((n.id, n) for n in found)
+        return "\n".join(
+            f"- {note_line(n, full=True)} (on {n.target_kind} {n.target_ref})" for n in found
+        )
+
     # -- dispatch -----------------------------------------------------------------------------
 
     async def run(self, name: str, args: dict[str, Any]) -> str:
@@ -494,6 +614,10 @@ class CodeAgentTools:
                 out = await self.find_symbol(args["name"], args.get("repo"))
             elif name == "entrypoint_flow":
                 out = await self.entrypoint_flow(args["route"], args.get("repo"))
+            elif name == "search_documents" and self.docs is not None:
+                out = await self.search_documents(self.docs, args["query"])
+            elif name == "search_notes" and self.docs is not None:
+                out = await self.search_notes(args["query"], args.get("note_type"))
             else:
                 return f"unknown tool {name!r}"
         except KeyError as e:
@@ -503,7 +627,7 @@ class CodeAgentTools:
         return redact(out)[0]  # bodies, summaries and decorators come from the repository
 
     def diagnostics(self) -> dict[str, Any]:
-        return {
+        out = {
             "graph_first": self.first_tool in GRAPH_TOOL_NAMES,
             "graph_hits": self.graph_hits,
             "read_calls": self.read_calls,
@@ -512,6 +636,9 @@ class CodeAgentTools:
             "semantic_hits": self.semantic_hits,
             "semantic_error": self.semantic_error,
         }
+        if self.docs is not None:
+            out["doc_searches"] = self.doc_searches
+        return out
 
 
 def _select(
@@ -559,19 +686,22 @@ async def answer_with_agent(
     on_tool: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     guard_question: str | None = None,
     focus: str | None = None,
+    docs: KnowledgeEngine | None = None,
 ) -> QueryResult:
     """With `decider`, the abstain guard runs on the answer (part of the system: the guarded
     answer is what gets cached); with `embedder`, search_code also ranks by code embeddings.
     `history` (chat, plan item 8) is the conversation before `question` as user and assistant
     messages; `on_tool` hears each tool call before it runs (the chat's progress events);
     `guard_question` is what the abstain guard reads instead of `question` (a follow-up
-    rewritten to stand alone); `focus` (a chat agent's) is added to the system prompt."""
+    rewritten to stand alone); `focus` (a chat agent's) is added to the system prompt. With
+    `docs` (the chat's agent route), the documents and team notes are tools too, no repository
+    is needed, and the answer is not cached: no document index version is in the key."""
     repos = await graph_repo.list_repos()
-    if not repos:
+    if not repos and docs is None:
         raise EnigramError("No repository indexed; run `enigram repo <url>`")
     selected = _select(repos, repo_url, repo_ref, cfg.repo_hosts) if repo_url else None
     path = None
-    if cache_dir is not None:
+    if cache_dir is not None and docs is None:
         # A re-index of the same SHA (new summaries, new embeddings) moves indexed_at.
         shas = ",".join(sorted(f"{r['indexed_sha']}@{r.get('indexed_at') or ''}" for r in repos))
         picked = f"{selected['url']}@{selected['ref'] or ''}" if selected else ""
@@ -602,9 +732,15 @@ async def answer_with_agent(
         open_git=open_git,
         notes=notes,
         embedder=embedder,
+        docs=docs,
     )
+    if docs is None:
+        prompt, tool_set = system_prompt(tools.repo_lines(), focus), TOOLS
+    else:
+        prompt = agent_prompt(tools.repo_lines(), focus)
+        tool_set = [*(TOOLS if repos else []), *DOC_TOOLS]
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt(tools.repo_lines(), focus)},
+        {"role": "system", "content": prompt},
         *(history or []),
         {"role": "user", "content": question},
     ]
@@ -619,7 +755,7 @@ async def answer_with_agent(
     loop = await run_tool_loop(
         counting,
         messages,
-        TOOLS,
+        tool_set,
         run_tool,
         max_tool_calls=max_tool_calls,
         max_input_tokens=max_input_tokens,
@@ -635,6 +771,7 @@ async def answer_with_agent(
         },
         notes=tools.notes_seen,
         resolve_target=tools.target_of,
+        docs=tools.doc_citations,
     )
     cited = set(parse_note_citations(result.answer))
     result = attach_notes(result, {i: n for i, n in tools.notes_seen.items() if i in cited})

@@ -83,7 +83,7 @@ describe('Agents', () => {
     await userEvent.type(within(form).getByLabelText('Name (@name)'), 'Security')
     await userEvent.type(within(form).getByLabelText('Label'), 'Security')
     await userEvent.type(within(form).getByLabelText('Description'), 'Who may do what')
-    await userEvent.selectOptions(within(form).getByLabelText('Sources'), 'code')
+    await userEvent.selectOptions(within(form).getByLabelText('Sources'), 'agent')
     await userEvent.click(within(form).getByRole('checkbox', { name: 'Known issue' }))
     await userEvent.type(within(form).getByLabelText('Focus'), 'Name the guard.')
     await userEvent.click(save)
@@ -96,7 +96,7 @@ describe('Agents', () => {
             name: 'security', // lowercased
             label: 'Security',
             description: 'Who may do what',
-            route: 'code',
+            route: 'agent',
             focus: 'Name the guard.',
             note_types: ['known_issue'],
           },
