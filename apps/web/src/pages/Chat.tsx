@@ -1,7 +1,28 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { Columns3, Loader2, MessagesSquare, Plus, Share2 } from 'lucide-react'
+import {
+  ArrowUp,
+  Columns3,
+  Copy,
+  Ellipsis,
+  Loader2,
+  MessagesSquare,
+  Pencil,
+  Plus,
+  Search,
+  Share2,
+  Sparkles,
+  Trash2,
+} from 'lucide-react'
 import {
   createChatSession,
   deleteChatSession,
@@ -19,12 +40,24 @@ import {
 } from '../api'
 import { formatAgo } from '../format'
 import Answer from '@/components/Answer'
-import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
 import Loading from '@/components/Loading'
-import PageHeader from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
@@ -46,6 +79,8 @@ const EXAMPLES = [
 const FALLBACK_AGENTS: ChatAgent[] = [{ name: 'auto', label: 'Auto', description: '', aliases: [] }]
 const muted = 'text-[13px] text-muted-foreground'
 const PANEL_MAX = 3 // PANEL_MAX_AGENTS in the API
+const MESSAGE_MAX = 1000 // the API's limit on a message
+const COUNT_FROM = 900 // characters left are shown from here
 
 // The question being answered: shown until the API stores it, then only the agents still at
 // work, each with its latest step.
@@ -173,56 +208,87 @@ export default function Chat() {
 
   const writable = id === null || !!session?.mine
   return (
-    <section>
-      <PageHeader
-        title="Chat"
-        description="A conversation with an agent: ask, then ask on. Each agent has its own focus; every answer cites its sources and has a trace."
-      />
-      <div className="grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]">
-        <SessionList sessions={sessions} current={id} hidden={id !== null} />
-        <div className="min-w-0">
-          {id !== null && (
-            <WsLink to="/chat" className="mb-3 inline-block text-[13px] md:hidden">
-              ← All chats
-            </WsLink>
-          )}
-          {error && <ErrorAlert>{error}</ErrorAlert>}
-          {id !== null && !session ? (
-            !error && <Loading rows={3} />
+    // The page fills the window under the top bar (h-12 + the content's pt-6, its pb-20 taken
+    // back): the chats and the conversation scroll on their own, the composer stays in view.
+    // On a phone without an open chat, the list and a new chat stack and the page scrolls.
+    <section
+      className={cn(
+        '-mb-20 flex h-[calc(100dvh-4.5rem)] min-h-[24rem] gap-6',
+        id === null && 'max-md:mb-0 max-md:h-auto max-md:flex-col',
+      )}
+    >
+      <h1 className="sr-only">Chat</h1>
+      <SessionList sessions={sessions} current={id} hidden={id !== null} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        {id !== null && (
+          <WsLink to="/chat" className="mb-2 inline-block shrink-0 text-[13px] md:hidden">
+            ← All chats
+          </WsLink>
+        )}
+        {id !== null && !session ? (
+          error ? (
+            <ErrorAlert>{error}</ErrorAlert>
           ) : (
-            <>
-              {session && (
-                <SessionHeader
-                  key={session.id}
-                  session={session}
-                  agents={agents}
-                  onChange={change}
-                  onDelete={remove}
-                />
-              )}
-              {(session?.messages.length ?? 0) > 0 || turn ? (
-                <Conversation messages={session?.messages ?? []} turn={turn} label={label} />
-              ) : (
-                <Start
-                  agents={agents}
-                  picked={session?.agent ?? picked}
-                  onAgent={session ? (agent) => void change({ agent }) : setPicked}
-                  onPick={(q) => void send(q)}
-                />
-              )}
+            <Loading rows={3} />
+          )
+        ) : (
+          <>
+            {session && (
+              <SessionHeader
+                key={session.id}
+                session={session}
+                agents={agents}
+                onChange={change}
+                onDelete={remove}
+              />
+            )}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="mx-auto w-full max-w-3xl py-4">
+                {(session?.messages.length ?? 0) > 0 || turn ? (
+                  <Conversation messages={session?.messages ?? []} turn={turn} label={label} />
+                ) : (
+                  <Start
+                    agents={agents}
+                    picked={session?.agent ?? picked}
+                    onAgent={session ? (agent) => void change({ agent }) : setPicked}
+                    onPick={(q) => void send(q)}
+                  />
+                )}
+              </div>
+            </div>
+            <div className="sticky bottom-0 mx-auto w-full max-w-3xl shrink-0 bg-background">
+              {error && <ErrorAlert>{error}</ErrorAlert>}
               {writable ? (
                 <Composer busy={turn !== null} agents={agents} onSend={(q) => void send(q)} />
               ) : (
-                <p className={cn(muted, 'mt-6')}>
+                <p className={cn(muted, 'm-0 border-t py-4 text-center')}>
                   Shared by {session?.owner ?? 'someone'}: you can read it, not write in it.
                 </p>
               )}
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
       </div>
     </section>
   )
+}
+
+// The chats under a day heading: today, the six days before, and older.
+function byDay(sessions: ChatSession[], now = Date.now()) {
+  const today = new Date(now)
+  today.setHours(0, 0, 0, 0)
+  const start = today.getTime()
+  const week = start - 6 * 86_400_000
+  const groups = [
+    { label: 'Today', items: [] as ChatSession[] },
+    { label: 'Previous 7 days', items: [] as ChatSession[] },
+    { label: 'Older', items: [] as ChatSession[] },
+  ]
+  for (const s of sessions) {
+    const at = new Date(s.updated_at).getTime()
+    groups[at >= start ? 0 : at >= week ? 1 : 2].items.push(s)
+  }
+  return groups.filter((g) => g.items.length)
 }
 
 function SessionList(props: {
@@ -231,39 +297,78 @@ function SessionList(props: {
   hidden: boolean // on a phone, an open chat takes the whole width
 }) {
   const { sessions, current } = props
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const found = sessions?.filter((s) => s.title.toLowerCase().includes(q)) ?? []
   return (
-    <nav aria-label="Chats" className={cn('min-w-0', props.hidden && 'max-md:hidden')}>
-      <Button asChild size="sm" className="mb-3 w-full hover:no-underline">
+    <nav
+      aria-label="Chats"
+      className={cn(
+        'flex w-full min-w-0 flex-col md:w-60 md:shrink-0',
+        props.hidden && 'max-md:hidden',
+      )}
+    >
+      <Button asChild size="sm" className="mb-2 w-full shrink-0 hover:no-underline">
         <WsLink to="/chat">
           <Plus aria-hidden /> New chat
         </WsLink>
       </Button>
-      {sessions === null ? (
-        <Loading rows={3} />
-      ) : sessions.length === 0 ? (
-        <p className={muted}>No chats yet.</p>
-      ) : (
-        <ul className="m-0 flex list-none flex-col gap-1 p-0">
-          {sessions.map((s) => (
-            <li key={s.id}>
-              <WsLink
-                to={`/chat/${s.id}`}
-                aria-current={s.id === current ? 'page' : undefined}
-                className={cn(
-                  'block rounded-md px-2 py-1.5 text-foreground hover:bg-accent hover:no-underline',
-                  s.id === current && 'bg-accent',
-                )}
-              >
-                <span className="line-clamp-2 text-sm">{s.title}</span>
-                <span className="text-[12px] text-muted-foreground">
-                  {formatAgo(s.updated_at)}
-                  {!s.mine ? ` · ${s.owner ?? 'shared'}` : s.shared ? ' · shared' : ''}
-                </span>
-              </WsLink>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="relative mb-3 shrink-0">
+        <Search
+          className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden
+        />
+        <Input
+          type="search"
+          aria-label="Search chats"
+          placeholder="Search chats"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="h-8 pl-8 text-sm"
+        />
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {sessions === null ? (
+          <Loading rows={3} />
+        ) : sessions.length === 0 ? (
+          <p className={muted}>No chats yet: ask something to start one.</p>
+        ) : found.length === 0 ? (
+          <p className={muted}>{`No chats match “${query.trim()}”.`}</p>
+        ) : (
+          byDay(found).map((group) => (
+            <section key={group.label} className="mb-3">
+              <h2 className="m-0 px-2 pb-1 text-[12px] font-medium text-muted-foreground">
+                {group.label}
+              </h2>
+              <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+                {group.items.map((s) => (
+                  <li key={s.id}>
+                    <WsLink
+                      to={`/chat/${s.id}`}
+                      aria-current={s.id === current ? 'page' : undefined}
+                      className={cn(
+                        'block rounded-md px-2 py-1.5 text-foreground hover:bg-accent hover:no-underline',
+                        s.id === current && 'bg-accent',
+                      )}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate text-sm">{s.title}</span>
+                        {s.shared && (
+                          <Share2 className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                        )}
+                      </span>
+                      <span className="block text-[12px] text-muted-foreground">
+                        {formatAgo(s.updated_at)}
+                        {!s.mine ? ` · ${s.owner ?? 'shared'}` : s.shared ? ' · shared' : ''}
+                      </span>
+                    </WsLink>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
+      </div>
     </nav>
   )
 }
@@ -278,6 +383,18 @@ function SessionHeader(props: {
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(session.title)
   const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const actions = useRef<HTMLButtonElement>(null) // the ⋯ button: focus comes back to it
+  const handOff = useRef(false) // a menu item moved focus on (title field, dialog)
+
+  async function confirmDelete() {
+    setDeleting(true)
+    try {
+      await props.onDelete()
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   async function rename(event: FormEvent) {
     event.preventDefault()
@@ -286,7 +403,7 @@ function SessionHeader(props: {
   }
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2 border-b pb-3">
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b pb-3">
       {renaming ? (
         <form onSubmit={rename} className="flex min-w-0 flex-1 gap-2">
           <Input
@@ -304,7 +421,7 @@ function SessionHeader(props: {
           </Button>
         </form>
       ) : (
-        <h2 className="m-0 min-w-0 flex-1 truncate text-base">{session.title}</h2>
+        <h2 className="m-0 min-w-0 flex-1 truncate text-base max-md:basis-full">{session.title}</h2>
       )}
       {session.mine ? (
         <NativeSelect
@@ -335,54 +452,83 @@ function SessionHeader(props: {
           <Button
             type="button"
             size="sm"
-            variant="secondary"
-            onClick={() => {
-              setTitle(session.title)
-              setRenaming(true)
-            }}
-          >
-            Rename
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
+            variant="ghost"
             aria-pressed={session.shared}
             title="Every member of this workspace can read it, not write in it"
             onClick={() => void props.onChange({ shared: !session.shared })}
           >
+            <Share2 aria-hidden />
             {session.shared ? 'Stop sharing' : 'Share'}
           </Button>
-          {confirming ? (
-            <span className="flex items-center gap-2 rounded-md bg-warning-bg px-3 py-1 text-[13px] text-warning">
-              Delete this chat?
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
               <Button
+                ref={actions}
                 type="button"
-                size="sm"
-                variant="soft-destructive"
-                onClick={() => void props.onDelete()}
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Chat actions"
               >
-                Yes
+                <Ellipsis aria-hidden />
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => setConfirming(false)}
-              >
-                No
-              </Button>
-            </span>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              variant="soft-destructive"
-              onClick={() => setConfirming(true)}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={(e) => {
+                if (handOff.current) e.preventDefault() // keep it in the title field or dialog
+                handOff.current = false
+              }}
             >
-              Delete
-            </Button>
-          )}
+              <DropdownMenuItem
+                onSelect={() => {
+                  handOff.current = true
+                  setTitle(session.title)
+                  setRenaming(true)
+                }}
+              >
+                <Pencil aria-hidden /> Rename
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() => {
+                  handOff.current = true
+                  setConfirming(true)
+                }}
+              >
+                <Trash2 aria-hidden /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Dialog open={confirming} onOpenChange={setConfirming}>
+            <DialogContent
+              className="sm:max-w-md"
+              onCloseAutoFocus={(e) => {
+                e.preventDefault() // opened from the menu, it gives focus back to the ⋯ button
+                actions.current?.focus()
+              }}
+            >
+              <DialogTitle>Delete this chat?</DialogTitle>
+              <DialogDescription>
+                “{session.title}” and its answers are deleted
+                {session.shared ? ', also for the members it is shared with' : ''}. This cannot be
+                undone.
+              </DialogDescription>
+              <DialogFooter>
+                <Button type="button" variant="secondary" onClick={() => setConfirming(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={deleting}
+                  onClick={() => void confirmDelete()}
+                >
+                  Delete
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>
@@ -440,7 +586,7 @@ function Conversation(props: {
         return (
           <Fragment key={x.question?.id ?? `a${x.answers[0]?.id}`}>
             {x.question && (
-              <li className="ml-auto max-w-[85%] rounded-md bg-muted px-4 py-2.5">
+              <li className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-muted px-4 py-2.5">
                 <span className="sr-only">You: </span>
                 <span className="whitespace-pre-wrap">{x.question.text}</span>
               </li>
@@ -462,7 +608,7 @@ function Conversation(props: {
                   </li>
                 ))}
                 {pending.map((agent) => (
-                  <li key={agent} role="status" className={muted}>
+                  <li key={agent} role="status">
                     <Working agent={agent} step={turn?.steps[agent]} label={label} />
                   </li>
                 ))}
@@ -472,8 +618,8 @@ function Conversation(props: {
         )
       })}
       {turn?.question && (
-        <li role="status" className={cn(muted, 'flex flex-col gap-2')}>
-          <span className="ml-auto max-w-[85%] rounded-md bg-muted px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground">
+        <li role="status" className="flex flex-col gap-5">
+          <span className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-muted px-4 py-2.5 whitespace-pre-wrap">
             {turn.question}
           </span>
           {turn.pending.map((agent) => (
@@ -486,21 +632,55 @@ function Conversation(props: {
   )
 }
 
+// Who answers: one mark for every agent, its name next to it.
+function AgentName({ children }: { children: string }) {
+  return (
+    <span className="flex items-center gap-2 text-[13px] font-medium">
+      <span className="flex size-6 items-center justify-center rounded-md border bg-card">
+        <Sparkles className="size-3.5" aria-hidden />
+      </span>
+      <span>{children}</span>
+    </span>
+  )
+}
+
 function AgentAnswer(props: { message: ChatMessage; label: (agent: string | null) => string }) {
   const m = props.message
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(m.text)
+      toast.success('Copied')
+    } catch {
+      toast.error('Could not copy: select the text instead')
+    }
+  }
   return (
     <>
-      <p className={cn(muted, 'm-0 font-medium')}>{props.label(m.agent)}</p>
+      <AgentName>{props.label(m.agent)}</AgentName>
       {m.error ? (
-        <ErrorAlert>{m.error}</ErrorAlert>
+        <div className="mt-2">
+          <ErrorAlert>{m.error}</ErrorAlert>
+        </div>
       ) : (
         <div className="[&>div]:mt-1">
           <Answer result={asResult(m)} />
         </div>
       )}
-      <p className={cn(muted, 'mt-2 mb-0 flex flex-wrap gap-3')}>
-        {m.tokens > 0 && <span>{m.tokens.toLocaleString('en-US')} tokens</span>}
+      <p className={cn(muted, 'mt-1 mb-0 flex flex-wrap items-center gap-x-3 gap-y-1')}>
+        {!m.error && m.text && (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            aria-label="Copy answer"
+            className="-ml-2 text-muted-foreground"
+            onClick={() => void copy()}
+          >
+            <Copy aria-hidden /> Copy
+          </Button>
+        )}
         {m.query_id !== null && <WsLink to={`/trace/${m.query_id}`}>View trace</WsLink>}
+        {m.tokens > 0 && <span>{m.tokens.toLocaleString('en-US')} tokens</span>}
       </p>
     </>
   )
@@ -512,9 +692,12 @@ function Working(props: {
   label: (agent: string | null) => string
 }) {
   return (
-    <span className="flex items-center gap-2">
-      <Loader2 className="size-4 animate-spin text-ring" aria-hidden />
-      {props.label(props.agent)}: {props.step ?? 'Thinking'}…
+    <span className="flex flex-col gap-2">
+      <AgentName>{props.label(props.agent)}</AgentName>
+      <span className={cn(muted, 'flex items-center gap-2 pl-8')}>
+        <Loader2 className="size-3.5 animate-spin text-ring" aria-hidden />
+        {props.step ?? 'Thinking'}…
+      </span>
     </span>
   )
 }
@@ -532,7 +715,7 @@ function Panel(props: {
   const current = agents.includes(shown) ? shown : agents[0]
   const total = answers.reduce((sum, m) => sum + m.tokens, 0)
   return (
-    <section aria-label="Panel" className="rounded-md border p-3">
+    <section aria-label="Panel" className="rounded-lg border p-4">
       <div
         role="tablist"
         aria-label="Panel answers"
@@ -559,11 +742,7 @@ function Panel(props: {
           </div>
         ))}
         {pending.map((agent) => (
-          <div
-            key={agent}
-            role="status"
-            className={cn(muted, agent !== current && 'max-lg:hidden')}
-          >
+          <div key={agent} role="status" className={cn(agent !== current && 'max-lg:hidden')}>
             <Working agent={agent} step={props.steps[agent]} label={label} />
           </div>
         ))}
@@ -581,52 +760,68 @@ function Start(props: {
   onAgent: (agent: string) => void
   onPick: (question: string) => void
 }) {
+  const id = useId()
   return (
-    <Empty
-      action={
-        <div className="flex flex-col items-center gap-4">
-          <div role="radiogroup" aria-label="Agent" className="flex flex-wrap justify-center gap-2">
-            {props.agents.map((a) => (
-              <Button
-                key={a.name}
-                type="button"
-                role="radio"
-                aria-checked={props.picked === a.name}
-                variant={props.picked === a.name ? 'default' : 'secondary'}
-                size="sm"
-                title={a.description}
-                onClick={() => props.onAgent(a.name)}
-              >
+    <div className="flex flex-col items-center gap-6 pt-6 text-center sm:pt-12">
+      <div className="flex flex-col items-center gap-2">
+        <span className="flex size-10 items-center justify-center rounded-lg border bg-card">
+          <MessagesSquare className="size-5" aria-hidden />
+        </span>
+        <h2 className="m-0">Pick an agent and ask</h2>
+        <p className="m-0 max-w-[56ch] text-muted-foreground">
+          Each agent answers from the indexed code and documents with its own focus, and remembers
+          what was asked before in this chat.
+        </p>
+      </div>
+      <div
+        role="radiogroup"
+        aria-label="Agent"
+        className="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-3"
+      >
+        {props.agents.map((a) => {
+          const on = props.picked === a.name
+          return (
+            <button
+              key={a.name}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              aria-labelledby={`${id}-${a.name}`}
+              aria-describedby={a.description ? `${id}-${a.name}-d` : undefined}
+              onClick={() => props.onAgent(a.name)}
+              className={cn(
+                'flex cursor-pointer flex-col gap-0.5 rounded-lg border px-3 py-2.5 text-left transition-colors outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                on && 'border-foreground bg-accent',
+              )}
+            >
+              <span id={`${id}-${a.name}`} className="text-sm font-medium">
                 {a.label}
-              </Button>
-            ))}
-          </div>
-          <p className="m-0 max-w-[60ch] text-[13px]">
-            {props.agents.find((a) => a.name === props.picked)?.description}
-          </p>
-          <div className="flex flex-wrap justify-center gap-2">
-            {EXAMPLES.map((example) => (
-              <Button
-                key={example}
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-auto min-h-8 py-1.5 whitespace-normal"
-                onClick={() => props.onPick(example)}
-              >
-                {example}
-              </Button>
-            ))}
-          </div>
+              </span>
+              {a.description && (
+                <span id={`${id}-${a.name}-d`} className="text-[13px] text-muted-foreground">
+                  {a.description}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <div className="w-full text-left">
+        <p className={cn(muted, 'mt-0 mb-2')}>Try one of these:</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {EXAMPLES.map((example) => (
+            <button
+              key={example}
+              type="button"
+              onClick={() => props.onPick(example)}
+              className="cursor-pointer rounded-lg border bg-card px-3 py-2.5 text-left text-sm transition-colors outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              {example}
+            </button>
+          ))}
         </div>
-      }
-    >
-      <span className="mb-2 flex items-center justify-center gap-2 font-medium text-foreground">
-        <MessagesSquare className="size-4" aria-hidden /> Pick an agent and ask
-      </span>
-      Each agent answers from the indexed code and documents with its own focus, and remembers what
-      was asked before in this chat. Try one of these:
-    </Empty>
+      </div>
+    </div>
   )
 }
 
@@ -660,62 +855,84 @@ function Composer(props: { busy: boolean; agents: ChatAgent[]; onSend: (text: st
   }
 
   return (
-    <form onSubmit={submit} className="mt-6 flex flex-col gap-2">
-      {panel && (
-        <div
-          role="group"
-          aria-label="Panel agents"
-          className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2"
-        >
-          <span className={muted}>
-            Ask up to {PANEL_MAX} agents at once ({panel.length} picked):
-          </span>
-          {agents.map((a) => {
-            const on = panel.includes(a.name)
-            return (
-              <Button
-                key={a.name}
-                type="button"
-                size="sm"
-                aria-pressed={on}
-                variant={on ? 'default' : 'secondary'}
-                disabled={!on && panel.length >= PANEL_MAX}
-                title={a.description}
-                onClick={() => toggle(a.name)}
-              >
-                {a.label}
-              </Button>
-            )
-          })}
+    <form onSubmit={submit} className="pt-2 pb-4">
+      <div className="rounded-xl border bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/25">
+        {panel && (
+          <div
+            role="group"
+            aria-label="Panel agents"
+            className="flex flex-wrap items-center gap-1.5 border-b px-3 py-2"
+          >
+            <span className={cn(muted, 'mr-1')}>
+              Ask up to {PANEL_MAX} agents at once ({panel.length} picked):
+            </span>
+            {agents.map((a) => {
+              const on = panel.includes(a.name)
+              return (
+                <Button
+                  key={a.name}
+                  type="button"
+                  size="xs"
+                  aria-pressed={on}
+                  variant={on ? 'default' : 'secondary'}
+                  disabled={!on && panel.length >= PANEL_MAX}
+                  title={a.description}
+                  onClick={() => toggle(a.name)}
+                >
+                  {a.label}
+                </Button>
+              )
+            })}
+          </div>
+        )}
+        {/* field-sizing-content (in Textarea): it grows with the text, up to max-h, then scrolls. */}
+        <Textarea
+          aria-label="Message"
+          rows={1}
+          maxLength={MESSAGE_MAX}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Ask, ask on about the last answer, or start with @qa to ask another agent"
+          className="max-h-44 min-h-11 resize-none rounded-none border-0 bg-transparent px-3.5 pt-3 pb-1 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+        />
+        <div className="flex items-center gap-2 px-2 pb-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            aria-pressed={panel !== null}
+            title="One question to several agents at once; each answer costs its own tokens"
+            className="text-muted-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
+            onClick={() => setPanel((p) => (p ? null : []))}
+          >
+            <Columns3 aria-hidden /> Panel
+          </Button>
+          <span className="flex-1" />
+          {text.length >= COUNT_FROM && (
+            <span
+              className={cn(
+                'text-[12px] tabular-nums',
+                text.length >= MESSAGE_MAX ? 'text-destructive' : 'text-muted-foreground',
+              )}
+            >
+              {`${text.length} / ${MESSAGE_MAX}`}
+            </span>
+          )}
+          <Button
+            type="submit"
+            size="icon-sm"
+            aria-label="Send"
+            className="rounded-lg"
+            disabled={busy || !text.trim() || panel?.length === 1}
+          >
+            {busy ? <Loader2 className="animate-spin" aria-hidden /> : <ArrowUp aria-hidden />}
+          </Button>
         </div>
-      )}
-      <Textarea
-        aria-label="Message"
-        rows={3}
-        maxLength={1000}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="Ask, ask on about the last answer, or start with @qa to ask another agent"
-      />
-      <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" disabled={busy || !text.trim() || panel?.length === 1}>
-          Send
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          aria-pressed={panel !== null}
-          title="One question to several agents at once; each answer costs its own tokens"
-          onClick={() => setPanel((p) => (p ? null : []))}
-        >
-          <Columns3 aria-hidden /> Panel
-        </Button>
-        <span className={cn(muted, 'max-sm:hidden')}>
-          Enter to send · Shift+Enter for a new line · {mentions} for one message, several for a
-          panel
-        </span>
       </div>
+      <p className="mt-1.5 mb-0 text-center text-[12px] text-muted-foreground max-sm:hidden">
+        Enter to send · Shift+Enter for a new line · {mentions} for one message, several for a panel
+      </p>
     </form>
   )
 }

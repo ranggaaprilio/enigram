@@ -156,7 +156,61 @@ describe('Chat', () => {
     renderAt('/chat/2')
     expect(await screen.findByText(/Shared by bob@example.com/)).toBeInTheDocument()
     expect(screen.queryByLabelText('Message')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Chat actions' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull()
+  })
+
+  it('groups the chats by when they were last used and filters them by title', async () => {
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString()
+    const today = new Date()
+    today.setHours(0, 1, 0, 0) // today whatever the clock says (a minute ahead is still today)
+    mockFetch({
+      'GET /api/chat/sessions': {
+        body: [
+          session(1, { title: 'Refresh flow', updated_at: today.toISOString() }),
+          session(2, { title: 'Upload limit', updated_at: ago(3) }),
+          session(3, { title: 'Release gate', updated_at: ago(30) }),
+        ],
+      },
+    })
+    renderAt('/chat')
+    const chats = await screen.findByRole('navigation', { name: 'Chats' })
+    await within(chats).findByText('Refresh flow')
+    const groups = within(chats)
+      .getAllByRole('heading')
+      .map((h) => h.textContent)
+    expect(groups).toEqual(['Today', 'Previous 7 days', 'Older'])
+
+    await userEvent.type(within(chats).getByRole('searchbox', { name: 'Search chats' }), 're')
+    expect(within(chats).getByText('Refresh flow')).toBeInTheDocument()
+    expect(within(chats).getByText('Release gate')).toBeInTheDocument()
+    expect(within(chats).queryByText('Upload limit')).toBeNull()
+    await userEvent.type(within(chats).getByRole('searchbox', { name: 'Search chats' }), 'zzz')
+    expect(within(chats).getByText('No chats match “rezzz”.')).toBeInTheDocument()
+  })
+
+  it('copies an answer', async () => {
+    mockFetch({
+      'GET /api/chat/sessions': { body: [session(1)] },
+      'GET /api/chat/sessions/1': { body: { ...session(1), messages: [QUESTION, ANSWER] } },
+    })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderAt('/chat/1')
+    const messages = await screen.findByRole('list', { name: 'Conversation' })
+    await userEvent.click(within(messages).getByRole('button', { name: 'Copy answer' }))
+    expect(writeText).toHaveBeenCalledWith(ANSWER.text)
+  })
+
+  it('counts the characters left near the limit', async () => {
+    mockFetch({ 'GET /api/chat/sessions': { body: [] } })
+    renderAt('/chat')
+    const box = await screen.findByLabelText('Message')
+    await userEvent.click(box)
+    await userEvent.paste('x'.repeat(800))
+    expect(screen.queryByText(/\/ 1000/)).toBeNull()
+    await userEvent.paste('x'.repeat(150))
+    expect(screen.getByText('950 / 1000')).toBeInTheDocument()
   })
 
   it('starts a chat with the first question and shows its steps, then the answer', async () => {
@@ -245,9 +299,12 @@ describe('Chat', () => {
       'DELETE /api/chat/sessions/1': { body: null },
     })
     renderAt('/chat/1')
-    await userEvent.click(await screen.findByRole('button', { name: 'Rename' }))
+    // Rename and Delete sit in the chat's menu; Share stays on the header.
+    await userEvent.click(await screen.findByRole('button', { name: 'Chat actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }))
     const title = screen.getByLabelText('Chat title')
     await userEvent.clear(title)
+    expect(title).toHaveFocus()
     await userEvent.type(title, 'Users access{Enter}')
     expect(await screen.findByRole('heading', { name: 'Users access' })).toBeInTheDocument()
 
@@ -258,9 +315,16 @@ describe('Chat', () => {
       { shared: true },
     ])
 
-    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Chat actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }))
+    let confirm = await screen.findByRole('dialog', { name: 'Delete this chat?' })
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Chat actions' })).toHaveFocus())
     expect(calls(fetch)).not.toContain('DELETE /api/chat/sessions/1')
-    await userEvent.click(screen.getByRole('button', { name: 'Yes' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Chat actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }))
+    confirm = await screen.findByRole('dialog', { name: 'Delete this chat?' })
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent(/^\/chat$/))
     expect(calls(fetch)).toContain('DELETE /api/chat/sessions/1')
   })
