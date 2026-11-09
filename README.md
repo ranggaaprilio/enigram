@@ -367,6 +367,7 @@ write the same index.
 | `POST /workspaces` `{"name"}` | Create a workspace (201; 403 unless `owner`; 422 unless 1-32 of `a-z`, `0-9`, `-`, starting with a letter or digit; 409 exists) |
 | `GET /me` | The caller (name, kind, owner, default workspace) and its role per workspace; `principal: null` without keys |
 | `GET /members` | The workspace's members and their roles (`admin`) |
+| `GET /setup` | What the API's `.env` sets, one row per variable (group, label, variable, value, set); a secret has no value, only whether it is set (an owner's only: it is the whole server's) |
 | `PUT /members/{name}` `{"role"}` | Add a key to the workspace or change its role (`admin`; 422 for the last admin, 404 for an unknown name) |
 | `DELETE /members/{name}` | Remove a key from the workspace (`admin`; 422 for the last admin) |
 | `POST /keys` `{"name", "role"?}` | A new key, member of this workspace (`viewer` unless set); the key is in this answer only (201, `admin`) |
@@ -531,7 +532,7 @@ URL on port 5173 instead. The passwords and client secret are fixed: never publi
 `apps/web/` is a React app served by nginx in the `web` service, which also proxies `/api/*` to the
 API. Its sidebar (a drawer on a phone, see [`docs/design.md`](docs/design.md)) groups the pages
 into *Overview* (Dashboard, the home page), *Answers* (Chat, Trace), *Library* (Documents, Knowledge, Graph, and Memory for contributors), *Review* (Inbox, with the
-number of waiting notes for maintainers) and, for admins, *Settings* (Members, Agents); the account menu at its foot shows the key's role and picks the light, dark
+number of waiting notes for maintainers) and, for admins, *Settings* (Members, Agents, Setup); the account menu at its foot shows the key's role and picks the light, dark
 or system theme. **⌘K / Ctrl+K** (or *Search* in the top bar) opens a palette that goes to any
 page, switches workspace on the same page, or finds a feature, symbol, entity or document and
 opens it, all from the keyboard:
@@ -589,6 +590,12 @@ opens it, all from the keyboard:
   to the built-in ones (which cannot change). *New agent* sets its @name, label, description,
   sources (Auto or Code only), the note types it leans on and its focus; every member can then
   pick it in Chat or name it with `@name`. *Delete* asks first and moves its chats to Auto.
+- **Settings → Setup** (`/setup`, admins): the API address agents and GitHub reach (default
+  port 8080 of this host, kept per browser), the MCP URL of this workspace and its `claude mcp
+  add` command to copy, each repository's webhook secret (*Make secret* or *Rotate secret* asks
+  first, then shows the secret once with the payload URL and the GitHub/GitLab steps), and for an
+  owner what the API's `.env` sets (`GET /setup`: models, access, repositories, token caps; a
+  secret only as set or not). Settings stay in `.env`: change one there and restart the API and the worker.
 - **Overview → Dashboard** (`/dashboard`, `GET /stats`), the page `/` and a workspace open: one workspace over the last 7, 30 or 90
   days, in this order: what needs a person (proposals, re-checks, orphaned or conflicting notes,
   failed jobs; each opens its page), questions (asked, not answered, typical and slowest answer
@@ -696,7 +703,8 @@ and runs the [annotation staleness check](#annotations). The parse itself is alw
 (seconds, no tokens); summaries are rebuilt only where a body hash changed. Two triggers start a
 job without anyone clicking:
 
-- **Webhook.** `POST /repos/{id}/secret` (with your key) returns a secret once. In GitHub
+- **Webhook.** `POST /repos/{id}/secret` (with your key, or *Settings → Setup* in the web UI)
+  returns a secret once. In GitHub
   (Settings → Webhooks) add `https://<host>/repos/{id}/webhook`, content type `application/json`,
   that secret, push events only; GitLab: the same URL as a push-event webhook with the secret as
   its token. The path is open (no Bearer key) and checks `X-Hub-Signature-256` or
