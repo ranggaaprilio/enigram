@@ -27,6 +27,7 @@ import Knowledge from './pages/Knowledge'
 import Memory from './pages/Memory'
 import Members from './pages/Members'
 import Review from './pages/Review'
+import Setup from './pages/Setup'
 import { TraceDetail, TraceList } from './pages/Trace'
 import { WORKSPACE_NAME } from './workspace'
 
@@ -220,6 +221,7 @@ function WorkspaceShell({ home }: { home: string }) {
                 <Route path="memory" element={<Memory />} />
                 <Route path="members" element={<Members />} />
                 <Route path="agents" element={<Agents />} />
+                <Route path="setup" element={<Setup />} />
                 <Route path="*" element={<Empty>Not found.</Empty>} />
               </Routes>
             )}

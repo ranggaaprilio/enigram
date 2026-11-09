@@ -115,6 +115,7 @@ peran `maintainer`.
 | Route | Minimal | Catatan |
 |---|---|---|
 | `GET /members` | `admin` | Anggota workspace dan perannya |
+| `GET /setup` | `owner` | Isi `.env` API untuk halaman Setup; secret hanya terisi atau tidak, tanpa nilai |
 | `PUT /members/{name}` `{role}` | `admin` | Menambah key yang sudah ada atau mengubah perannya; admin terakhir tidak bisa diturunkan |
 | `DELETE /members/{name}` | `admin` | Admin terakhir tidak bisa dikeluarkan |
 | `POST /keys` | `admin` | Key baru, langsung anggota workspace ini; key ditampilkan sekali |

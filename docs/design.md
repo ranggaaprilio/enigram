@@ -22,7 +22,7 @@ Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spe
   - Top: the workspace picker and *New workspace*.
   - Middle: page groups. *Overview* (Dashboard, the home page: `/` and a workspace without a
     page open it), *Answers* (Ask, Chat, Trace), *Library* (Documents, Knowledge, Graph, Memory),
-    *Review* (Inbox) and *Settings* (Members).
+    *Review* (Inbox) and *Settings* (Members, Agents, Setup).
   - Bottom: the user menu (who is signed in, the role in this workspace, the theme).
 - Below 768px the sidebar is a drawer opened from the menu button; the top bar shows the page
   title.
