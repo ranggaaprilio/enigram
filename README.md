@@ -1,4 +1,37 @@
-# Enigram
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo-light.svg" alt="Enigram logo" width="88" height="88">
+  </picture>
+</p>
+
+<h1 align="center">Enigram</h1>
+
+<p align="center">
+  <strong>Ask your codebase and its docs. Get answers pinned to the commit, with your team's notes on top.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ranggaaprilio/enigram/actions/workflows/ci.yml"><img src="https://github.com/ranggaaprilio/enigram/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-blue" alt="License: AGPL-3.0-only"></a>
+  <img src="https://img.shields.io/badge/MCP-Claude%20Code-black" alt="MCP: Claude Code">
+  <img src="https://img.shields.io/badge/self--hosted-Postgres-336791" alt="Self-hosted on Postgres">
+</p>
+
+<p align="center">
+  <a href="#quickstart-docker">Quickstart</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#where-your-data-goes">Your data</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshot-chat-dark.png">
+    <img src="docs/assets/screenshot-chat-light.png" alt="The Chat page: a question about who may call the /users endpoints, answered by the Technical agent with a source pinned to file:line@sha, then a panel of the Business rules and QA agents" width="900">
+  </picture>
+</p>
 
 Enigram indexes a TypeScript repository (a code graph built with ts-morph, plus a summary and a
 step-by-step flow per entry point) and its Markdown and PDF documents, and answers questions with
@@ -23,6 +56,25 @@ offer MCP access. What Enigram combines:
 
 Accuracy against a coding agent with repository access is being evaluated (`docs/evaluation.md`);
 there is no verdict yet.
+
+## How it works
+
+```mermaid
+flowchart LR
+  repo["Git repository<br/>TypeScript code"] --> cg["Code graph<br/>ts-morph"]
+  cg --> sum["Summaries and flows<br/>per entry point"]
+  docs["Markdown and PDF<br/>documents"] --> rag["LightRAG<br/>entity graph"]
+  notes["Team notes<br/>on symbols"] --> pg[("Postgres<br/>+ pgvector")]
+  cg --> pg
+  sum --> pg
+  rag --> pg
+  pg --> agents["Agents<br/>Technical · Business · QA · Overview"]
+  agents --> out["Answers with citations<br/>file:line@sha · origin per sentence"]
+  out --> ui["Web UI · REST · CLI · MCP"]
+```
+
+Notes beat code and documents in every answer. When the code under a note changes, the note is
+flagged for review; when the symbol is gone, it is orphaned with relink candidates.
 
 ## Quickstart (Docker)
 
