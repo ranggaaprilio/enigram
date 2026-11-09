@@ -6,6 +6,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -16,6 +17,8 @@ import {
   Ellipsis,
   Loader2,
   MessagesSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   Search,
@@ -81,6 +84,15 @@ const muted = 'text-[13px] text-muted-foreground'
 const PANEL_MAX = 3 // PANEL_MAX_AGENTS in the API
 const MESSAGE_MAX = 1000 // the API's limit on a message
 const COUNT_FROM = 900 // characters left are shown from here
+const LIST_KEY = 'enigram-chat-list' // 'closed' when the chat list is collapsed, kept per browser
+
+function listWasOpen() {
+  try {
+    return localStorage.getItem(LIST_KEY) !== 'closed'
+  } catch {
+    return true
+  }
+}
 
 // The question being answered: shown until the API stores it, then only the agents still at
 // work, each with its latest step.
@@ -103,6 +115,18 @@ export default function Chat() {
   const [picked, setPicked] = useState('auto') // a new chat's agent
   const label = (name: string | null) => agents.find((a) => a.name === name)?.label ?? name ?? ''
   const started = useRef<number | null>(null) // a session this page just made: no reload
+  const [listOpen, setListOpen] = useState(listWasOpen)
+
+  function toggleList() {
+    const open = !listOpen
+    setListOpen(open)
+    try {
+      if (open) localStorage.removeItem(LIST_KEY)
+      else localStorage.setItem(LIST_KEY, 'closed')
+    } catch {
+      // storage blocked: the list still toggles for this visit
+    }
+  }
 
   async function loadSessions() {
     try {
@@ -207,6 +231,35 @@ export default function Chat() {
   }
 
   const writable = id === null || !!session?.mine
+  // Left of the chat's title from md up, the same button whether the list is open or not.
+  const lead = (
+    <span className="flex shrink-0 items-center gap-1 max-md:hidden">
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="ghost"
+        aria-label="Chat list"
+        title={listOpen ? 'Hide chats' : 'Show chats'}
+        aria-expanded={listOpen}
+        aria-controls="chat-list"
+        onClick={toggleList}
+      >
+        {listOpen ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
+      </Button>
+      {!listOpen && (
+        <Button
+          asChild
+          size="icon-sm"
+          variant="ghost"
+          className="text-foreground hover:no-underline"
+        >
+          <WsLink to="/chat" aria-label="New chat" title="New chat">
+            <Plus aria-hidden />
+          </WsLink>
+        </Button>
+      )}
+    </span>
+  )
   return (
     // The page fills the window under the top bar (h-12 + the content's pt-6, its pb-20 taken
     // back): the chats and the conversation scroll on their own, the composer stays in view.
@@ -218,7 +271,7 @@ export default function Chat() {
       )}
     >
       <h1 className="sr-only">Chat</h1>
-      <SessionList sessions={sessions} current={id} hidden={id !== null} />
+      <SessionList sessions={sessions} current={id} hidden={id !== null} collapsed={!listOpen} />
       <div className="flex min-w-0 flex-1 flex-col">
         {id !== null && (
           <WsLink to="/chat" className="mb-2 inline-block shrink-0 text-[13px] md:hidden">
@@ -233,16 +286,22 @@ export default function Chat() {
           )
         ) : (
           <>
-            {session && (
+            {session ? (
               <SessionHeader
                 key={session.id}
                 session={session}
                 agents={agents}
+                lead={lead}
                 onChange={change}
                 onDelete={remove}
               />
+            ) : (
+              <div className="flex shrink-0 items-center gap-2 border-b pb-3 max-md:hidden">
+                {lead}
+                <span className="text-base font-semibold">New chat</span>
+              </div>
             )}
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="relative min-h-0 flex-1 overflow-y-auto">
               <div className="mx-auto w-full max-w-3xl py-4">
                 {(session?.messages.length ?? 0) > 0 || turn ? (
                   <Conversation messages={session?.messages ?? []} turn={turn} label={label} />
@@ -295,6 +354,7 @@ function SessionList(props: {
   sessions: ChatSession[] | null
   current: number | null
   hidden: boolean // on a phone, an open chat takes the whole width
+  collapsed: boolean // hidden from md up by the reader's choice; a phone still shows it on /chat
 }) {
   const { sessions, current } = props
   const [query, setQuery] = useState('')
@@ -302,10 +362,12 @@ function SessionList(props: {
   const found = sessions?.filter((s) => s.title.toLowerCase().includes(q)) ?? []
   return (
     <nav
+      id="chat-list"
       aria-label="Chats"
       className={cn(
         'flex w-full min-w-0 flex-col md:w-60 md:shrink-0',
         props.hidden && 'max-md:hidden',
+        props.collapsed && 'md:hidden',
       )}
     >
       <Button asChild size="sm" className="mb-2 w-full shrink-0 hover:no-underline">
@@ -327,7 +389,7 @@ function SessionList(props: {
           className="h-8 pl-8 text-sm"
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="relative min-h-0 flex-1 overflow-y-auto">
         {sessions === null ? (
           <Loading rows={3} />
         ) : sessions.length === 0 ? (
@@ -376,6 +438,7 @@ function SessionList(props: {
 function SessionHeader(props: {
   session: ChatSessionDetail
   agents: ChatAgent[]
+  lead: ReactNode // before the title: the chat list's button
   onChange: (body: { title?: string; shared?: boolean; agent?: string }) => Promise<void>
   onDelete: () => Promise<void>
 }) {
@@ -404,6 +467,7 @@ function SessionHeader(props: {
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b pb-3">
+      {props.lead}
       {renaming ? (
         <form onSubmit={rename} className="flex min-w-0 flex-1 gap-2">
           <Input

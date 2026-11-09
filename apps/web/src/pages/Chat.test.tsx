@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
@@ -187,6 +187,34 @@ describe('Chat', () => {
     expect(within(chats).queryByText('Upload limit')).toBeNull()
     await userEvent.type(within(chats).getByRole('searchbox', { name: 'Search chats' }), 'zzz')
     expect(within(chats).getByText('No chats match “rezzz”.')).toBeInTheDocument()
+  })
+
+  it('collapses the chat list on a wide screen and remembers it', async () => {
+    mockFetch({
+      'GET /api/chat/sessions': { body: [session(1)] },
+      'GET /api/chat/sessions/1': { body: { ...session(1), messages: [QUESTION, ANSWER] } },
+    })
+    renderAt('/chat/1')
+    // One button, left of the chat's title, whether the list is open or not.
+    const toggle = await screen.findByRole('button', { name: 'Chat list' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(toggle).toHaveAttribute('aria-controls', 'chat-list')
+    const chats = screen.getByRole('navigation', { name: 'Chats' })
+    expect(within(chats).queryByRole('button', { name: 'Chat list' })).toBeNull()
+    await userEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveFocus()
+    // On a phone the list still opens with /chat: it is hidden from md up only.
+    expect(chats).toHaveClass('md:hidden')
+    expect(localStorage.getItem('enigram-chat-list')).toBe('closed')
+
+    cleanup()
+    renderAt('/chat') // a new chat has the button too
+    const again = await screen.findByRole('button', { name: 'Chat list' })
+    expect(again).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(again)
+    expect(screen.getByRole('navigation', { name: 'Chats' })).not.toHaveClass('md:hidden')
+    expect(localStorage.getItem('enigram-chat-list')).toBeNull()
   })
 
   it('copies an answer', async () => {
