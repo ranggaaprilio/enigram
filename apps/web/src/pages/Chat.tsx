@@ -242,7 +242,7 @@ export default function Chat() {
                 onDelete={remove}
               />
             )}
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="relative min-h-0 flex-1 overflow-y-auto">
               <div className="mx-auto w-full max-w-3xl py-4">
                 {(session?.messages.length ?? 0) > 0 || turn ? (
                   <Conversation messages={session?.messages ?? []} turn={turn} label={label} />
@@ -327,7 +327,7 @@ function SessionList(props: {
           className="h-8 pl-8 text-sm"
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="relative min-h-0 flex-1 overflow-y-auto">
         {sessions === null ? (
           <Loading rows={3} />
         ) : sessions.length === 0 ? (
