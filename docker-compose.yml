@@ -70,7 +70,7 @@ services:
       - api
     restart: unless-stopped
 
-  # A local OIDC provider to try sign-in (README "Sign-in", "Try it locally with Keycloak"); off
+  # A local OIDC provider to try sign-in (docs/deployment.md "Sign-in", "Try it locally with Keycloak"); off
   # unless asked: `docker compose --profile keycloak up -d keycloak`. Development mode, fixed
   # passwords and client secret: never publish it.
   keycloak:
