@@ -91,6 +91,7 @@ from enigram.application.repo_auth import check_token, save_token
 from enigram.application.repo_sync import check_ref, check_repo_url
 from enigram.application.review import review_queue
 from enigram.application.routing import answer_routed, scope_mode
+from enigram.application.setup import setup_status
 from enigram.application.targets import find_targets
 from enigram.application.webhooks import parse_push, verify_webhook
 from enigram.bootstrap import build_deps
@@ -711,6 +712,15 @@ def create_app(
             raise _raise_http(e) from e
         log.info("[api] %s: key %s made by %s", ws.cfg.workspace, body.name, _actor(request))
         return {"name": body.name, "role": body.role, "key": key}
+
+    @app.get("/setup")
+    async def get_setup(request: Request, ws: Admin) -> dict[str, Any]:
+        """What this process's .env sets, for the Setup page; secrets as set or not only. The
+        whole server's settings, so an owner's only, as /stats/workspaces."""
+        caller = _caller(request)
+        if caller.principal is not None and not caller.principal.owner:
+            raise HTTPException(403, "Only an owner sees the server's settings")
+        return setup_status(ws.cfg)
 
     @app.delete("/keys/{name}", status_code=204)
     async def revoke_key(request: Request, ws: Admin, name: str) -> None:
