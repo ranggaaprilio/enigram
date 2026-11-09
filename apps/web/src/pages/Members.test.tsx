@@ -10,10 +10,23 @@ import Members from './Members'
 const MEMBERS = [
   { name: 'me', kind: 'key', role: 'admin', owner: false },
   { name: 'qa-team', kind: 'key', role: 'contributor', owner: false },
+  {
+    name: 'ann@example.com',
+    kind: 'user',
+    role: 'viewer',
+    owner: false,
+    display_name: 'Ann Lee',
+    signed_in: true,
+  },
+  { name: 'bob@example.com', kind: 'user', role: 'contributor', owner: false, signed_in: false },
 ]
 
-function renderAs(role: Role, routes: Record<string, Reply>) {
-  const fetch = mockFetch({ 'GET /api/members': { body: MEMBERS }, ...routes })
+function renderAs(role: Role, routes: Record<string, Reply>, login = true) {
+  const fetch = mockFetch({
+    'GET /api/members': { body: MEMBERS },
+    'GET /api/auth/config': { body: { login } },
+    ...routes,
+  })
   render(
     asRole(
       role,
@@ -79,15 +92,55 @@ describe('Members', () => {
     expect(sent(fetch, 'DELETE')).toEqual([['/api/keys/me', null]])
   })
 
-  it('keeps the form when the API refuses an existing key', async () => {
-    renderAs('admin', {
-      'PUT /api/members/nobody': { status: 404, body: { detail: "No principal 'nobody'" } },
-    })
-    const form = await screen.findByRole('form', { name: 'Add an existing key' })
-    await userEvent.type(within(form).getByLabelText('Key name'), 'nobody')
-    await userEvent.click(within(form).getByRole('button', { name: 'Add' }))
+  it('splits people from keys; a person has a status and no revoke', async () => {
+    renderAs('admin', {})
+    const people = await screen.findByRole('region', { name: 'People' })
+    const keys = screen.getByRole('region', { name: 'API keys' })
 
-    expect(await screen.findByText("No principal 'nobody'")).toBeInTheDocument()
-    expect(within(form).getByLabelText('Key name')).toHaveValue('nobody')
+    expect(within(people).getByText('Ann Lee')).toBeInTheDocument()
+    expect(within(people).getByText('active')).toBeInTheDocument()
+    expect(within(people).getByText('invited')).toBeInTheDocument()
+    expect(within(people).queryByRole('button', { name: 'Revoke key' })).toBeNull()
+    expect(within(keys).getByText('qa-team')).toBeInTheDocument()
+    expect(within(keys).queryByText('bob@example.com')).toBeNull()
+    expect(screen.queryByRole('form', { name: 'Add an existing key' })).toBeNull()
+  })
+
+  it('invites a person by email and gives the link to send', async () => {
+    const fetch = renderAs('admin', {
+      'POST /api/members': { status: 201, body: { name: 'cy@example.com', role: 'maintainer' } },
+    })
+    const form = await screen.findByRole('form', { name: 'Invite a person' })
+    await userEvent.type(within(form).getByLabelText('Email'), 'cy@example.com')
+    await userEvent.selectOptions(within(form).getByLabelText('Role'), 'maintainer')
+    await userEvent.click(within(form).getByRole('button', { name: 'Invite' }))
+
+    expect(await screen.findByText('Send cy@example.com this link')).toBeInTheDocument()
+    expect(screen.getByLabelText('Workspace link')).toHaveTextContent(/\/w\/default$/)
+    expect(sent(fetch, 'POST')).toEqual([
+      ['/api/members', { email: 'cy@example.com', role: 'maintainer' }],
+    ])
+  })
+
+  it('keeps the email when the API refuses the invite', async () => {
+    renderAs('admin', {
+      'POST /api/members': {
+        status: 422,
+        body: { detail: 'eve@other.com may not sign in here (OIDC_ALLOWED_DOMAINS)' },
+      },
+    })
+    const form = await screen.findByRole('form', { name: 'Invite a person' })
+    await userEvent.type(within(form).getByLabelText('Email'), 'eve@other.com')
+    await userEvent.click(within(form).getByRole('button', { name: 'Invite' }))
+
+    expect(await screen.findByText(/may not sign in here/)).toBeInTheDocument()
+    expect(within(form).getByLabelText('Email')).toHaveValue('eve@other.com')
+  })
+
+  it('hides People without sign-in', async () => {
+    renderAs('admin', {}, false)
+    expect(await screen.findByText('qa-team')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'People' })).toBeNull()
+    expect(screen.queryByRole('form', { name: 'Invite a person' })).toBeNull()
   })
 })

@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { toast } from 'sonner'
-import { Copy } from 'lucide-react'
 import { useParams } from 'react-router'
 import { useAccess } from '../access'
 import {
@@ -11,6 +9,7 @@ import {
   type RepoRow,
   type SetupRow,
 } from '../api'
+import CopyBlock from '@/components/CopyBlock'
 import Empty from '@/components/Empty'
 import ErrorAlert from '@/components/ErrorAlert'
 import Loading from '@/components/Loading'
@@ -70,36 +69,6 @@ function SetBadge({ set }: { set: boolean }) {
     <StatusBadge status="done">Set</StatusBadge>
   ) : (
     <StatusBadge status="unset">Not set</StatusBadge>
-  )
-}
-
-function CopyBlock({ label, text }: { label: string; text: string }) {
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text)
-      toast.success('Copied')
-    } catch {
-      toast.error('Could not copy: select the text instead')
-    }
-  }
-  return (
-    <div className="flex items-start gap-2">
-      <code
-        aria-label={label}
-        className="block flex-1 rounded-sm bg-card px-3 py-2 text-[13px] [overflow-wrap:anywhere]"
-      >
-        {text}
-      </code>
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        aria-label={`Copy ${label}`}
-        onClick={() => void copy()}
-      >
-        <Copy aria-hidden />
-      </Button>
-    </div>
   )
 }
 

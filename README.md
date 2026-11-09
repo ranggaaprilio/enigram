@@ -368,6 +368,7 @@ write the same index.
 | `GET /me` | The caller (name, kind, owner, default workspace) and its role per workspace; `principal: null` without keys |
 | `GET /members` | The workspace's members and their roles (`admin`) |
 | `GET /setup` | What the API's `.env` sets, one row per variable (group, label, variable, value, set); a secret has no value, only whether it is set (an owner's only: it is the whole server's) |
+| `POST /members` `{"email", "role"}` | Invite a person by email, before or after their first sign-in (`admin`; 422 without OIDC, for a domain outside `OIDC_ALLOWED_DOMAINS`, a key's name or a revoked person) |
 | `PUT /members/{name}` `{"role"}` | Add a key to the workspace or change its role (`admin`; 422 for the last admin, 404 for an unknown name) |
 | `DELETE /members/{name}` | Remove a key from the workspace (`admin`; 422 for the last admin) |
 | `POST /keys` `{"name", "role"?}` | A new key, member of this workspace (`viewer` unless set); the key is in this answer only (201, `admin`) |
@@ -475,8 +476,10 @@ the same roles in the workspace each tool call uses; MCP over stdio has none. Wi
 
 The web UI follows the role from `GET /me`: actions the role may not take are hidden (the API still
 checks each one), *New workspace* shows only for an owner, and an admin gets **Settings → Members**
-to change roles, add an existing key, make a new key (shown once) and revoke keys, the same as
-`enigram principals` but per workspace.
+in two parts: *People* (only with sign-in, below) to invite a person by email and change or remove
+their role, and *API keys* to make a key (shown once), change its role, remove it or revoke it,
+the same as `enigram principals` but per workspace. A key already in another workspace is added
+with `enigram principals role`.
 
 #### Sign-in
 
@@ -495,7 +498,9 @@ web UI with their work account instead of sharing the `web` key:
    https).
 
 The first sign-in makes the person a principal of kind `user` named by their email, a `viewer` of
-`WORKSPACE`; an admin raises the role on Members (an email works in *Add an existing key*). Make
+`WORKSPACE`. To give someone a role before that, an admin invites their email on Members →
+*People*: the person shows as *invited* until they sign in, then gets that role (no email is sent;
+the admin sends the workspace link). Make
 the first owner after their first sign-in with `uv run enigram principals owner <email>`. A
 session lasts `SESSION_DAYS` (7) and ends at *Sign out* in the account menu or when the person is
 revoked. Notes and ✓ reviews then carry the person's name from the provider, not a typed one.

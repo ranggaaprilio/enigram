@@ -78,6 +78,7 @@ MATRIX = [
     ("POST", "/repos/1/secret", None, "admin"),
     ("POST", "/repos", {"url": "https://github.com/org/app", "token": "ghp_abc123"}, "admin"),
     ("GET", "/members", None, "admin"),
+    ("POST", "/members", {"email": "bob@example.com", "role": "viewer"}, "admin"),
     ("PUT", "/members/web", {"role": "contributor"}, "admin"),
     ("DELETE", "/members/web", None, "admin"),
     ("POST", "/keys", {"name": "qa-team", "role": "viewer"}, "admin"),

@@ -431,12 +431,18 @@ export type Role = 'viewer' | 'contributor' | 'maintainer' | 'admin'
 
 export interface Member {
   name: string
-  kind: string
+  kind: string // 'user' (a person, by email) or 'key'
   role: Role
   owner: boolean
+  display_name?: string | null
+  signed_in?: boolean // a user: false while invited and not yet signed in
 }
 
 export const listMembers = () => request<Member[]>('/members')
+
+// A person by email, before or after they first sign in (needs OIDC).
+export const inviteMember = (email: string, role: Role) =>
+  sendJson<{ name: string; role: Role }>('/members', { email, role })
 
 export const setMember = (name: string, role: Role) =>
   request<{ name: string; role: Role }>(`/members/${encodeURIComponent(name)}`, {

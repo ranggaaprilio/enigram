@@ -116,6 +116,7 @@ peran `maintainer`.
 |---|---|---|
 | `GET /members` | `admin` | Anggota workspace dan perannya |
 | `GET /setup` | `owner` | Isi `.env` API untuk halaman Setup; secret hanya terisi atau tidak, tanpa nilai |
+| `POST /members` `{email, role}` | `admin` | Mengundang orang lewat email sebelum/sesudah login pertama; hanya bila OIDC aktif, domain dari `OIDC_ALLOWED_DOMAINS` |
 | `PUT /members/{name}` `{role}` | `admin` | Menambah key yang sudah ada atau mengubah perannya; admin terakhir tidak bisa diturunkan |
 | `DELETE /members/{name}` | `admin` | Admin terakhir tidak bisa dikeluarkan |
 | `POST /keys` | `admin` | Key baru, langsung anggota workspace ini; key ditampilkan sekali |
@@ -183,6 +184,10 @@ Pemilik mengikuti semua usulan:
   issuer, audience, kedaluwarsa, nonce); email harus dari `OIDC_ALLOWED_DOMAINS`.
 - Login pertama: principal jenis `user` bernama email, `viewer` di workspace proses. Nama yang
   sama dengan key ditolak; user yang dicabut ditolak.
+- Undangan (2026-11-09): admin mengundang email di Members → *People*; principal `user` dibuat
+  dengan peran yang dipilih, dan login pertamanya memakai principal itu (bukan `viewer`). Status
+  *invited* sampai login (`principals.signed_in_at`). Tanpa email keluar; admin mengirim link
+  workspace. Bagian *People* tersembunyi tanpa OIDC; *Add an existing key* dihapus dari UI (CLI).
 - Sesi: cookie `enigram_session` (HttpOnly, SameSite=Lax, Secure bila redirect https), hash-nya di
   tabel `sessions`, `SESSION_DAYS` hari. Tulis lewat cookie wajib header `X-Requested-With`.
 - `by` pada note dan review: nama tampilan user dari penyedia, tidak bisa diisi orang lain.

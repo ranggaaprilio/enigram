@@ -310,10 +310,94 @@ def test_the_login_cookie_holds_no_more_than_the_flow_needs(login_env):
     assert (kept["state"], kept["nonce"], kept["verifier"]) == provider.asked[-1]
 
 
+def _laptop_admin(store):
+    pid = next(r["id"] for r in store.principals.rows.values() if r["name"] == "laptop-a")
+    store.principals.members[("default", pid)] = "admin"
+    return _bearer(LAPTOP_KEY)
+
+
+def test_an_invited_person_signs_in_with_the_role_given(login_env):
+    client, store, provider = login_env
+    admin = _laptop_admin(store)
+
+    invited = client.post(
+        "/members", json={"email": " Bob@Example.com ", "role": "contributor"}, headers=admin
+    )
+    before = {m["name"]: m for m in client.get("/members", headers=admin).json()}
+    provider.who = Identity("bob@example.com", "Bob")
+    _sign_in(client)
+    after = {m["name"]: m for m in client.get("/members", headers=admin).json()}
+
+    assert invited.status_code == 201, invited.text
+    assert invited.json() == {"name": "bob@example.com", "role": "contributor"}
+    bob = before["bob@example.com"]
+    assert (bob["kind"], bob["signed_in"]) == ("user", False)
+    assert client.get("/me").json()["roles"] == {"default": "contributor"}  # not viewer
+    assert after["bob@example.com"]["signed_in"] is True
+
+
+def test_inviting_someone_already_signed_in_sets_the_role(login_env):
+    client, store, _ = login_env
+    admin = _laptop_admin(store)
+    _sign_in(client)  # ann, viewer
+
+    again = client.post(
+        "/members", json={"email": "ann@example.com", "role": "maintainer"}, headers=admin
+    )
+
+    assert again.status_code == 201
+    assert client.get("/me").json()["roles"] == {"default": "maintainer"}
+
+
+@pytest.mark.parametrize(
+    ("email", "message"),
+    [
+        ("eve@other.com", "may not sign in"),
+        ("not-an-email", "an email"),
+        ("laptop-a", "an email"),
+    ],
+)
+def test_an_invite_needs_an_allowed_email(login_env, email, message):
+    client, store, _ = login_env
+    known = len(store.principals.rows)
+
+    response = client.post(
+        "/members", json={"email": email, "role": "viewer"}, headers=_laptop_admin(store)
+    )
+
+    assert response.status_code == 422 and message in response.json()["detail"]
+    assert len(store.principals.rows) == known
+
+
+def test_an_invite_refuses_a_key_name_and_a_revoked_person(login_env):
+    client, store, _ = login_env
+    admin = _laptop_admin(store)
+    row = {"key_hash": None, "owner": False, "default_workspace": "default"}
+    store.principals.rows[50] = {**row, "id": 50, "name": "bot@example.com", "kind": "key"}
+    store.principals.rows[51] = {**row, "id": 51, "name": "old@example.com", "kind": "user"}
+    store.principals.rows[50]["revoked"] = False
+    store.principals.rows[51]["revoked"] = True
+
+    key, gone = (
+        client.post("/members", json={"email": email, "role": "viewer"}, headers=admin)
+        for email in ("bot@example.com", "old@example.com")
+    )
+
+    assert key.status_code == 422 and "API key" in key.json()["detail"]
+    assert gone.status_code == 422 and "revoked" in gone.json()["detail"]
+
+
 def test_without_oidc_there_is_no_sign_in(keyed_env):
     client, _, _ = keyed_env
     assert client.get("/auth/config").json() == {"login": False}
     assert client.get("/auth/login", follow_redirects=False).status_code == 404
+
+
+def test_without_oidc_nobody_is_invited(keyed_env):
+    client, store, _ = keyed_env
+    body = {"email": "bob@example.com", "role": "viewer"}
+    response = client.post("/members", json=body, headers=_laptop_admin(store))
+    assert response.status_code == 422 and "sign-in" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(

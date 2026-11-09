@@ -110,7 +110,14 @@ async def revoke(principals: PrincipalRepository, name: str) -> None:
 async def members(principals: PrincipalRepository, workspace: str) -> list[dict[str, object]]:
     """The keys with a role in `workspace` (revoked ones left out), by name."""
     return [
-        {"name": p.name, "kind": p.kind, "role": roles[workspace], "owner": p.owner}
+        {
+            "name": p.name,
+            "kind": p.kind,
+            "role": roles[workspace],
+            "owner": p.owner,
+            "display_name": p.display_name,
+            "signed_in": p.signed_in,
+        }
         for p, revoked, roles in await principals.list()
         if not revoked and workspace in roles
     ]
