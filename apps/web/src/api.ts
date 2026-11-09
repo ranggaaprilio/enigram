@@ -573,6 +573,22 @@ export const deleteAnnotation = (id: number) =>
 
 export const listRepos = () => request<RepoRow[]>('/repos')
 
+// A new webhook secret, in this answer only; the previous one stops working (admins only).
+export const rotateWebhookSecret = (repoId: number) =>
+  request<{ secret: string }>(`/repos/${repoId}/secret`, { method: 'POST' })
+
+// GET /setup: what the API's .env sets, one row per variable; a secret has no value, only `set`.
+export interface SetupRow {
+  group: string
+  label: string
+  env: string
+  value: string | null
+  set: boolean
+  secret: boolean
+}
+
+export const getSetup = () => request<{ workspace: string; settings: SetupRow[] }>('/setup')
+
 export const listFeatures = (repoId: number, q = '') =>
   request<FeatureList>(`/repos/${repoId}/features${q ? `?q=${encodeURIComponent(q)}` : ''}`)
 

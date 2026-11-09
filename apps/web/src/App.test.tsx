@@ -182,6 +182,7 @@ describe('App frame', () => {
       ['Inbox', '/w/ws-a/review'],
       ['Members', '/w/ws-a/members'], // no /me here: the API alone decides
       ['Agents', '/w/ws-a/agents'],
+      ['Setup', '/w/ws-a/setup'],
     ])
     expect(within(nav).getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
       'aria-current',

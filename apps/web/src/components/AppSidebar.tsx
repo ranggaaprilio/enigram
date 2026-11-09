@@ -15,6 +15,7 @@ import {
   Network,
   Inbox,
   LayoutDashboard,
+  Settings,
   Sun,
   LogOut,
   Users,
@@ -87,6 +88,7 @@ export const NAV: { label: string; pages: Page[] }[] = [
     pages: [
       { to: '/members', label: 'Members', icon: Users, minimum: 'admin' },
       { to: '/agents', label: 'Agents', icon: Bot, minimum: 'admin' },
+      { to: '/setup', label: 'Setup', icon: Settings, minimum: 'admin' },
     ],
   },
 ]
