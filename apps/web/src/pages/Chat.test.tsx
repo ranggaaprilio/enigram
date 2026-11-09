@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
@@ -187,6 +187,27 @@ describe('Chat', () => {
     expect(within(chats).queryByText('Upload limit')).toBeNull()
     await userEvent.type(within(chats).getByRole('searchbox', { name: 'Search chats' }), 'zzz')
     expect(within(chats).getByText('No chats match “rezzz”.')).toBeInTheDocument()
+  })
+
+  it('collapses the chat list on a wide screen and remembers it', async () => {
+    mockFetch({ 'GET /api/chat/sessions': { body: [session(1)] } })
+    renderAt('/chat')
+    const hide = await screen.findByRole('button', { name: 'Hide chats' })
+    expect(hide).toHaveAttribute('aria-expanded', 'true')
+    await userEvent.click(hide)
+    const show = screen.getByRole('button', { name: 'Show chats' })
+    expect(show).toHaveAttribute('aria-expanded', 'false')
+    expect(show).toHaveFocus() // the button that hid the list is gone
+    // On a phone the list still opens with /chat: it is hidden from md up only.
+    expect(screen.getByRole('navigation', { name: 'Chats' })).toHaveClass('md:hidden')
+    expect(localStorage.getItem('enigram-chat-list')).toBe('closed')
+
+    cleanup()
+    renderAt('/chat')
+    await userEvent.click(await screen.findByRole('button', { name: 'Show chats' }))
+    expect(screen.getByRole('button', { name: 'Hide chats' })).toHaveFocus()
+    expect(screen.getByRole('navigation', { name: 'Chats' })).not.toHaveClass('md:hidden')
+    expect(localStorage.getItem('enigram-chat-list')).toBeNull()
   })
 
   it('copies an answer', async () => {

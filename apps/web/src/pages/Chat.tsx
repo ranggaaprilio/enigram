@@ -6,6 +6,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -16,6 +17,8 @@ import {
   Ellipsis,
   Loader2,
   MessagesSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   Search,
@@ -81,6 +84,15 @@ const muted = 'text-[13px] text-muted-foreground'
 const PANEL_MAX = 3 // PANEL_MAX_AGENTS in the API
 const MESSAGE_MAX = 1000 // the API's limit on a message
 const COUNT_FROM = 900 // characters left are shown from here
+const LIST_KEY = 'enigram-chat-list' // 'closed' when the chat list is collapsed, kept per browser
+
+function listWasOpen() {
+  try {
+    return localStorage.getItem(LIST_KEY) !== 'closed'
+  } catch {
+    return true
+  }
+}
 
 // The question being answered: shown until the API stores it, then only the agents still at
 // work, each with its latest step.
@@ -103,6 +115,29 @@ export default function Chat() {
   const [picked, setPicked] = useState('auto') // a new chat's agent
   const label = (name: string | null) => agents.find((a) => a.name === name)?.label ?? name ?? ''
   const started = useRef<number | null>(null) // a session this page just made: no reload
+  const [listOpen, setListOpen] = useState(listWasOpen)
+  const toggled = useRef(false) // the list was just shown or hidden here: move focus along
+  const showList = useRef<HTMLButtonElement>(null)
+  const hideList = useRef<HTMLButtonElement>(null)
+
+  function toggleList() {
+    const open = !listOpen
+    setListOpen(open)
+    toggled.current = true
+    try {
+      if (open) localStorage.removeItem(LIST_KEY)
+      else localStorage.setItem(LIST_KEY, 'closed')
+    } catch {
+      // storage blocked: the list still toggles for this visit
+    }
+  }
+
+  // The button that was pressed is gone: its counterpart takes the focus.
+  useEffect(() => {
+    if (!toggled.current) return
+    toggled.current = false
+    ;(listOpen ? hideList : showList).current?.focus()
+  }, [listOpen])
 
   async function loadSessions() {
     try {
@@ -218,7 +253,51 @@ export default function Chat() {
       )}
     >
       <h1 className="sr-only">Chat</h1>
-      <SessionList sessions={sessions} current={id} hidden={id !== null} />
+      <SessionList
+        sessions={sessions}
+        current={id}
+        hidden={id !== null}
+        collapsed={!listOpen}
+        toggle={
+          <Button
+            ref={hideList}
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Hide chats"
+            title="Hide chats"
+            aria-expanded
+            aria-controls="chat-list"
+            className="shrink-0 max-md:hidden"
+            onClick={toggleList}
+          >
+            <PanelLeftClose aria-hidden />
+          </Button>
+        }
+      />
+      {!listOpen && (
+        // Collapsed (from md up): a rail to open the list again or start a chat.
+        <div className="hidden shrink-0 flex-col gap-1 md:flex">
+          <Button
+            ref={showList}
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Show chats"
+            title="Show chats"
+            aria-expanded={false}
+            aria-controls="chat-list"
+            onClick={toggleList}
+          >
+            <PanelLeftOpen aria-hidden />
+          </Button>
+          <Button asChild size="icon-sm" variant="ghost" className="hover:no-underline">
+            <WsLink to="/chat" aria-label="New chat" title="New chat">
+              <Plus aria-hidden />
+            </WsLink>
+          </Button>
+        </div>
+      )}
       <div className="flex min-w-0 flex-1 flex-col">
         {id !== null && (
           <WsLink to="/chat" className="mb-2 inline-block shrink-0 text-[13px] md:hidden">
@@ -295,6 +374,8 @@ function SessionList(props: {
   sessions: ChatSession[] | null
   current: number | null
   hidden: boolean // on a phone, an open chat takes the whole width
+  collapsed: boolean // hidden from md up by the reader's choice; a phone still shows it on /chat
+  toggle: ReactNode // the button that collapses it
 }) {
   const { sessions, current } = props
   const [query, setQuery] = useState('')
@@ -302,17 +383,22 @@ function SessionList(props: {
   const found = sessions?.filter((s) => s.title.toLowerCase().includes(q)) ?? []
   return (
     <nav
+      id="chat-list"
       aria-label="Chats"
       className={cn(
         'flex w-full min-w-0 flex-col md:w-60 md:shrink-0',
         props.hidden && 'max-md:hidden',
+        props.collapsed && 'md:hidden',
       )}
     >
-      <Button asChild size="sm" className="mb-2 w-full shrink-0 hover:no-underline">
-        <WsLink to="/chat">
-          <Plus aria-hidden /> New chat
-        </WsLink>
-      </Button>
+      <div className="mb-2 flex shrink-0 gap-1">
+        <Button asChild size="sm" className="min-w-0 flex-1 hover:no-underline">
+          <WsLink to="/chat">
+            <Plus aria-hidden /> New chat
+          </WsLink>
+        </Button>
+        {props.toggle}
+      </div>
       <div className="relative mb-3 shrink-0">
         <Search
           className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
