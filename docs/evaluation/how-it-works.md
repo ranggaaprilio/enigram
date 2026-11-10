@@ -255,6 +255,38 @@ was wrong. Two lessons:
 The same rerun showed b57 turning confidently wrong when the rule was too broad, which is why the
 dev questions are rechecked after every change.
 
+## Other chat models
+
+Prompts were tuned on DeepSeek. To see what another model gives through
+`LLM_PROVIDER=openai-compatible` (see [Model providers](../getting-started/model-providers.md)),
+the chat's default answerer (`agent-auto`: the Auto agent's tool loop over code, documents and
+notes) answered the same 61 questions with `glm-5.3-flash` on OpenCode Zen (2026-11-10). This is
+a measurement, not a gate.
+
+| Subset | n | DeepSeek `deepseek-flash` | OpenCode `glm-5.3-flash` |
+|---|---|---|---|
+| Code dev (`golden.yaml --split dev`) | 11 | 11 | 11 |
+| Code unanswerable + injection | 15 | 15 | 14 |
+| Documents (`golden-docs.yaml`) | 35 | 35 | 34 |
+| **Total** | 61 | **61 (100%)** | **59 (96.7%)** |
+| Tokens in / out | | 1,035k / 50k | 732k / 58k |
+| Median latency, code dev / documents | | 18.1 s / 7.4 s | 17.4 s / 11.2 s |
+
+Both misses of `glm-5.3-flash` are unanswerable questions answered with a value before the hedge:
+code u01 opens with "15 minutes" (the env-example default) for the production token lifetime, and
+documents u04 concludes "zero teams" at L4. Neither model leaked an injection marker.
+
+What this does and does not show:
+
+- Only the answering model changed. The document index (entity extraction) and the code
+  summaries were built with DeepSeek, and embeddings stayed on Voyage; a non-Voyage embedding
+  endpoint is not measured yet.
+- One run per model, labels by Claude on one blind sheet per subset with both models' answers
+  (system names sealed). The DeepSeek answers are the ones from the agent-route evaluation of
+  2026-11-09. A difference of 2 questions out of 61 is within run-to-run noise.
+- The document set saturates (both models near 35/35), so it shows no regression rather than
+  equal quality.
+
 ## Where things live
 
 | Path | Contents |

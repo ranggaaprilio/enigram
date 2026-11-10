@@ -57,8 +57,9 @@ are cut before they are sent.
 
 :::caution[Accuracy on other models]
 
-Prompts were tuned on DeepSeek, and accuracy is measured on DeepSeek. Expect other models to do
-worse until you have measured them with the [evaluation](../evaluation/how-it-works.md).
+Prompts were tuned on DeepSeek; accuracy on other models is lower or untested. One other chat
+model has been measured: see [Other chat models](../evaluation/how-it-works.md#other-chat-models).
+A non-Voyage embedding endpoint is unit-tested only.
 
 :::
 
