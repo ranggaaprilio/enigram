@@ -1,5 +1,5 @@
 """Annotation use cases shared by the API, MCP, the CLI and the golden runner: create, propose
-(agents over MCP) and change by role (docs/rbac.md, domain.may_verify), one event per change."""
+(agents over MCP) and change by role (plans/rbac.md, domain.may_verify), one event per change."""
 
 import asyncio
 import dataclasses
@@ -359,7 +359,7 @@ async def change_annotation(
     status = changes.get("status")
     if status is not None and status not in CHANGE_STATUSES:
         raise EnigramError(f"status must be one of {CHANGE_STATUSES}")
-    # docs/rbac.md, PATCH /annotations per field.
+    # plans/rbac.md, PATCH /annotations per field.
     maintainer = at_least(role, "maintainer")
     trusted = may_verify(actor, note, role)
     if ("text" in changes or "by" in changes) and not (maintainer or actor == note.author):

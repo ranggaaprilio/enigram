@@ -245,7 +245,7 @@ function NoteRow(props: {
 }) {
   const { note: n } = props
   const [confirming, setConfirming] = useState<'reject' | 'delete' | null>(null)
-  // docs/rbac.md: maintainers verify, reject, mark conflicts and relink, never on an agent
+  // plans/rbac.md: maintainers verify, reject, mark conflicts and relink, never on an agent
   // proposal of their own key; the author or a maintainer deletes.
   const access = useAccess()
   const maintainer = access.can('maintainer')

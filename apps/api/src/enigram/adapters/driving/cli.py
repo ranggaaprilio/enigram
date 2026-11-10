@@ -109,7 +109,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     principals = sub.add_parser(
-        "principals", help="API keys and their roles per workspace (docs/rbac.md)"
+        "principals", help="API keys and their roles per workspace (plans/rbac.md)"
     )
     psub = principals.add_subparsers(dest="principals_command", required=True)
     psub.add_parser("list", help="every principal with its roles")

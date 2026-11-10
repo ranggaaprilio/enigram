@@ -321,7 +321,7 @@ class ApiKeyMiddleware:
 
     The principal's name goes to `scope["state"]["api_key"]` (`request.state.api_key`), so
     routes and MCP tools can log who asked without ever seeing the key, and its roles to
-    `scope["state"]["caller"]` for the role checks (docs/rbac.md).
+    `scope["state"]["caller"]` for the role checks (plans/rbac.md).
     """
 
     def __init__(self, app: ASGIApp):
@@ -464,7 +464,7 @@ def _role(request: Request) -> str:
     return request.state.role
 
 
-# The minimum role of a route (docs/rbac.md); each has every right of the ones before it.
+# The minimum role of a route (plans/rbac.md); each has every right of the ones before it.
 Viewer = Annotated[Workspace, Depends(_need("viewer"))]
 Contributor = Annotated[Workspace, Depends(_need("contributor"))]
 Maintainer = Annotated[Workspace, Depends(_need("maintainer"))]
@@ -508,7 +508,7 @@ def create_app(
     @asynccontextmanager
     async def mcp_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
         # Entered once by session_manager.run() below, after app.state is set. Each tool call
-        # opens its workspace (docs/rbac.md): the tool argument, the connection's (/mcp/w/<ws>
+        # opens its workspace (plans/rbac.md): the tool argument, the connection's (/mcp/w/<ws>
         # or the header), the key's default, else the process workspace.
         home = await mcp_workspace(cfg.workspace)
         yield replace(home, open_workspace=mcp_workspace, workspace_names=workspace_names)
@@ -564,7 +564,7 @@ def create_app(
         # The process workspace: an open path must not tell which workspace names exist.
         return {"status": "ok", "workspace": cfg.workspace}
 
-    # Per-person login (docs/rbac.md, R4). Behind nginx these are /api/auth/...; the redirects
+    # Per-person login (plans/rbac.md, R4). Behind nginx these are /api/auth/...; the redirects
     # go to paths of the web UI.
 
     def _secure() -> bool:
@@ -680,7 +680,7 @@ def create_app(
             "roles": {w: caller.role_in(w) for w in caller.workspaces(names)},
         }
 
-    # Members and keys of a workspace (docs/rbac.md, R3): its admins manage them.
+    # Members and keys of a workspace (plans/rbac.md, R3): its admins manage them.
 
     @app.get("/members")
     async def list_members(request: Request, ws: Admin) -> list[dict[str, Any]]:
@@ -1157,7 +1157,7 @@ def create_app(
         conflicting), each with the summary it was written against and the summary now."""
         return jsonable_encoder(await review_queue(ws.cfg, ws.code_graph, ws.notes))
 
-    # Plan item 7, M1: agent memories for people. A maintainer sees every key's (docs/rbac.md);
+    # Plan item 7, M1: agent memories for people. A maintainer sees every key's (plans/rbac.md);
     # anyone else only their own, and another key's memory looks missing.
     @app.get("/memories")
     async def memories(
@@ -1382,7 +1382,7 @@ def create_app(
             raise HTTPException(404, f"No query {query_id}")
         return row
 
-    # Chat (plan item 8, C1; docs/rbac.md): any member chats in their own sessions; a shared
+    # Chat (plan item 8, C1; plans/rbac.md): any member chats in their own sessions; a shared
     # one is read-only for the others; another person's private session looks missing.
 
     @app.get("/chat/agents")
@@ -1391,7 +1391,7 @@ def create_app(
         an admin made it (`custom`, C4; then also its route, focus and note types)."""
         return jsonable_encoder(await list_agents(ws.chat))
 
-    # C4: custom agents, an admin's (docs/rbac.md); the built-in ones cannot be changed.
+    # C4: custom agents, an admin's (plans/rbac.md); the built-in ones cannot be changed.
     @app.post("/chat/agents", status_code=201)
     async def new_chat_agent(ws: Admin, request: Request, body: ChatAgentCreate) -> dict[str, Any]:
         fields = body.model_dump() | {"note_types": tuple(body.note_types)}

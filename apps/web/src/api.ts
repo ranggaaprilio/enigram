@@ -426,7 +426,7 @@ export const logout = () => request<null>('/auth/logout', { method: 'POST' })
 
 export const loginUrl = (next: string) => `/api/auth/login?next=${encodeURIComponent(next)}`
 
-// Members and keys of the current workspace (docs/rbac.md): its admins only.
+// Members and keys of the current workspace (plans/rbac.md): its admins only.
 export type Role = 'viewer' | 'contributor' | 'maintainer' | 'admin'
 
 export interface Member {

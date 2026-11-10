@@ -1,3 +1,9 @@
+---
+title: Golden set and evaluation runs
+sidebar_label: Golden set and runs
+description: The commands to check the golden sets, answer them per system, label blind, and score.
+---
+
 # Golden set and evaluation runs
 
 ## Golden set
@@ -5,7 +11,7 @@
 There are two hand-written golden sets (committed):
 
 - `eval/golden.yaml`: questions about one TypeScript repository at a pinned commit, with symbols
-  as evidence. Format, lock and labelling protocol are in [`eval/README.md`](../eval/README.md).
+  as evidence. Format, lock and labelling protocol are in [`eval/README.md`](https://github.com/ranggaaprilio/enigram/blob/main/eval/README.md).
   `golden check` clones the pinned repository once into `data/eval/repos/` and checks that it is
   at `pinned_sha` and that every evidence symbol is declared there; it needs no index.
   `golden check --graph` checks the symbols by qualified name in the code graph instead (after
@@ -85,7 +91,7 @@ meant for Phase 7:
 | faithfulness, answer relevancy, answer correctness | Ragas 0.4 with the judge model (`JUDGE_MODEL`, e.g. deepseek-v4-pro; defaults to the generator) |
 | context recall, context precision | Deterministic: retrieved chunks vs. the golden evidence chunks |
 | claim faithfulness (LLM) | The judge model judges each sentence of the answer against the retrieved context |
-| claim faithfulness (decision) | The [decision layer](notes-and-decisions.md#decision-layer) asks `claim_relation` per sentence in one request; grounded = `supports` |
+| claim faithfulness (decision) | The [decision layer](../reference/decision-layer.md) asks `claim_relation` per sentence in one request; grounded = `supports` |
 | abstention | The judge model decides whether each answer declines to answer: the share of `unanswerable` questions refused (higher is better) and of answerable ones refused (false abstention, lower is better). Reported only, no target |
 
 Both claim judges grade against the same context: the retrieved chunks, or, for `agent+repo` and

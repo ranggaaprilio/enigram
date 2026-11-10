@@ -21,7 +21,7 @@ VIAS = ("api", "mcp")  # how a note was written: the HTTP/CLI routes, or an agen
 # known issues claim how the code acts; technical is the developers' default.
 NOTE_TYPES = ("business_rule", "expected_behavior", "known_issue", "technical")
 DEFAULT_NOTE_TYPE = "technical"
-# How much an answer leans on a note, by its type (docs/plans/plan.md item 11, decided
+# How much an answer leans on a note, by its type (plans/plan.md item 11, decided
 # 2026-11-08): a business rule or expected behaviour is what the team decided; a known issue or a
 # technical note is a developer's reading of the code, which the code itself can overrule.
 # note_line puts the type in front of the status so the model can apply it.
@@ -103,7 +103,7 @@ def summary_hash(kind: str, text: str) -> str:
 
 
 def may_verify(actor: str, note: Annotation, role: str | None) -> bool:
-    """Who may verify or reject a note (docs/rbac.md): a maintainer; an agent proposal (via
+    """Who may verify or reject a note (plans/rbac.md): a maintainer; an agent proposal (via
     "mcp") only a maintainer other than the proposing key."""
     if not at_least(role, "maintainer"):
         return False

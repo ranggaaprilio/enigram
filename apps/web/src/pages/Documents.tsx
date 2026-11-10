@@ -76,7 +76,7 @@ export default function Documents() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uploads, setUploads] = useState<Upload[]>([])
   const [dragging, setDragging] = useState(false)
-  // docs/rbac.md: maintainers upload, index and delete; a private repository's token: admins.
+  // plans/rbac.md: maintainers upload, index and delete; a private repository's token: admins.
   const access = useAccess()
   const canEdit = access.can('maintainer')
   const [confirming, setConfirming] = useState<string | null>(null)

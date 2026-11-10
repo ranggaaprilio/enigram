@@ -92,7 +92,7 @@ export default function Graph() {
   const [panel, setPanel] = useState<Panel | null>(null)
   const [selected, setSelected] = useState<string[]>([])
   const [mergeTarget, setMergeTarget] = useState('')
-  const canEdit = useAccess().can('maintainer') // docs/rbac.md: graph edits
+  const canEdit = useAccess().can('maintainer') // plans/rbac.md: graph edits
 
   function update(next: { q?: string; type?: string; tab?: Tab }) {
     const merged = { q, type, tab, ...next }

@@ -4,7 +4,7 @@
 /* Dark is the .dark class on <html> (theme.ts): the user's choice, or the system's by default. */
 @custom-variant dark (&:is(.dark *));
 
-/* shadcn/ui theme from docs/design.md: neutral surfaces, one blue accent, status colours only
+/* shadcn/ui theme from docs/project/design.md: neutral surfaces, one blue accent, status colours only
    for status. Every token is defined for both themes. */
 :root {
   --background: #ffffff;

@@ -1,4 +1,4 @@
-"""RBAC R2 (docs/rbac.md): one key and one MCP connection use several workspaces; the tool
+"""RBAC R2 (plans/rbac.md): one key and one MCP connection use several workspaces; the tool
 argument, the connection (/mcp/w/<ws> or the header) and the key's default pick one, each
 checked against the key's membership."""
 

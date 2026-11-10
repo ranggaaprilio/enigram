@@ -1,4 +1,4 @@
-"""Per-person login for the web UI (docs/rbac.md, R4): who may sign in, the principal a person
+"""Per-person login for the web UI (plans/rbac.md, R4): who may sign in, the principal a person
 becomes, and the web sessions that replace the shared ENIGRAM_WEB_KEY."""
 
 import logging
@@ -44,7 +44,7 @@ def allowed(oidc: OidcConfig, email: str) -> bool:
 
 async def sign_in(principals: PrincipalRepository, cfg: Config, who: Identity) -> Principal:
     """The user principal of `who`. The first sign-in creates it as a `viewer` of the process
-    workspace (new members are viewers, docs/rbac.md); an admin raises the role on Members."""
+    workspace (new members are viewers, plans/rbac.md); an admin raises the role on Members."""
     assert cfg.oidc is not None
     if not allowed(cfg.oidc, who.email):
         raise Forbidden(f"{who.email} may not sign in here (OIDC_ALLOWED_DOMAINS)")

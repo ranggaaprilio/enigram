@@ -287,7 +287,7 @@ def create_server(
 
     async def _open(ctx: Context[AppContext], workspace: str | None, minimum: str) -> AppContext:
         """The adapters of the workspace a tool call uses (its argument, else the connection's,
-        else the key's default, else the server's), after the role check of docs/rbac.md: 404
+        else the key's default, else the server's), after the role check of plans/rbac.md: 404
         for a workspace the caller is no member of, as for one that does not exist."""
         app = ctx.request_context.lifespan_context
         caller = _caller(ctx)

@@ -1,8 +1,16 @@
+---
+title: How evaluation works
+sidebar_label: How evaluation works
+description: How Enigram measures whether its answers about a code repository are any good, against a coding agent with the same model.
+---
+
 # How evaluation works
 
 This guide explains how Enigram measures whether its answers about a code repository are any
-good. It is the "why and how" companion to `eval/README.md`, which holds the exact file format,
-the lock record and the protocol rules.
+good. It is the "why and how" companion to
+[`eval/README.md`](https://github.com/ranggaaprilio/enigram/blob/main/eval/README.md), which holds
+the exact file format, the lock record and the protocol rules. The commands are in
+[Golden set and runs](golden-set.md).
 
 ## The question evaluation answers
 

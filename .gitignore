@@ -10,3 +10,6 @@ apps/web/dist/
 .claude/PRPs
 tools/ts-graph/node_modules/
 *.tsbuildinfo
+website/node_modules/
+website/build/
+website/.docusaurus/

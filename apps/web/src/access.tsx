@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { Me, Role } from './api'
 
-// What the caller may do in the current workspace (docs/rbac.md), from GET /me. The UI hides
+// What the caller may do in the current workspace (plans/rbac.md), from GET /me. The UI hides
 // what the role does not allow; the API still checks every request.
 export interface Access {
   name: string | null // the key's name; null without keys or before /me answers

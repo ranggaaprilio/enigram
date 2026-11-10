@@ -1,5 +1,5 @@
 # ruff: noqa: F811 - fake_memory and keyed_env come from test_api as fixtures
-"""Per-person login (docs/rbac.md, R4): the OIDC adapter against a provider faked with a real
+"""Per-person login (plans/rbac.md, R4): the OIDC adapter against a provider faked with a real
 RSA key, and the sign-in flow through the API with a fake provider."""
 
 import base64
