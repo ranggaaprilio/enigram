@@ -54,7 +54,7 @@ interface Page {
   to: string
   label: string
   icon: LucideIcon
-  minimum?: Role // shown only to this role and above (docs/rbac.md)
+  minimum?: Role // shown only to this role and above (plans/rbac.md)
 }
 
 export const NAV: { label: string; pages: Page[] }[] = [
@@ -204,7 +204,7 @@ const THEMES: { value: Theme; label: string; icon: LucideIcon }[] = [
 function UserMenu({ me, workspace }: { me: Me | null | undefined; workspace: string }) {
   const [theme, setTheme] = useTheme()
 
-  // Without keys the API is open and everyone acts as admin (docs/rbac.md).
+  // Without keys the API is open and everyone acts as admin (plans/rbac.md).
   const p = me?.principal
   const name = p ? p.display_name || p.name : me ? 'Local' : 'Account'
   const role = me ? (me.principal ? me.roles[workspace] : 'admin') : undefined

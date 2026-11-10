@@ -675,7 +675,7 @@ function SymbolPanel({
   const summary = view.summary.flow ?? view.summary.symbol
   const review = view.review
   const body = view.symbol.body
-  // docs/rbac.md: contributors review and write notes; a ✓ is undone by whoever set it or a
+  // plans/rbac.md: contributors review and write notes; a ✓ is undone by whoever set it or a
   // maintainer.
   const access = useAccess()
   const contributor = access.can('contributor')

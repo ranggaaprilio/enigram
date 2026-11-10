@@ -22,7 +22,8 @@ THINKING_MODES = ("off", "on")
 
 # Chat completions; embeddings come from EMBED_PROVIDER (DeepSeek serves no embedding model).
 # openai-compatible: any /v1/chat/completions endpoint (OpenAI, OpenRouter, Ollama, vLLM, ...)
-# at <PREFIX>_BASE_URL with <PREFIX>_MODEL; see docs/setup.md for what the model must support.
+# at <PREFIX>_BASE_URL with <PREFIX>_MODEL; what the model must support:
+# docs/getting-started/model-providers.md.
 LLM_PROVIDERS = ("deepseek", "openai-compatible")
 # The OpenAI SDK refuses an empty key; local servers (Ollama, vLLM) accept any value.
 NO_API_KEY = "unused"
@@ -174,7 +175,7 @@ class Config:
     # Fernet key that encrypts the access tokens of private repositories (REPO_CREDENTIALS_KEY);
     # empty: only public repositories can be indexed.
     repo_credentials_key: str = field(repr=False)
-    # Per-person login for the web UI (docs/rbac.md, R4): an OpenID Connect provider. Empty
+    # Per-person login for the web UI (plans/rbac.md, R4): an OpenID Connect provider. Empty
     # issuer: no login, the UI uses ENIGRAM_WEB_KEY as before.
     oidc: "OidcConfig | None"
     # Token caps counted from every provider call (0 = off): per worker job, per day for the

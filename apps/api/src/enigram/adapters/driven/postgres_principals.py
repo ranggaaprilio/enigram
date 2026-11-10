@@ -1,4 +1,4 @@
-"""API keys and their roles per workspace (docs/rbac.md), in the job store's database. Global:
+"""API keys and their roles per workspace (plans/rbac.md), in the job store's database. Global:
 one principal can be a member of several workspaces. Keys are stored as SHA-256 hashes."""
 
 import json

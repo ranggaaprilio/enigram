@@ -22,7 +22,7 @@ export default function WorkspacePicker(props: {
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const owner = useAccess().owner // docs/rbac.md: only an owner creates workspaces
+  const owner = useAccess().owner // plans/rbac.md: only an owner creates workspaces
   // /w/<ws>/<page>/...: a switch opens the same page; ids and queries belong to the old workspace.
   const page = pathname.split('/')[3] || 'dashboard'
   const names = props.workspaces.map((w) => w.name)

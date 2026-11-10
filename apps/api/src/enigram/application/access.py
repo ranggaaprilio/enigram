@@ -1,4 +1,4 @@
-"""Principals and roles (docs/rbac.md): importing ENIGRAM_API_KEYS, resolving a presented key to
+"""Principals and roles (plans/rbac.md): importing ENIGRAM_API_KEYS, resolving a presented key to
 a Caller, and the management actions behind `enigram principals`."""
 
 import logging
@@ -104,7 +104,7 @@ async def revoke(principals: PrincipalRepository, name: str) -> None:
     await principals.revoke((await _named(principals, name)).id)
 
 
-# The members page (docs/rbac.md, R3): an admin of the workspace manages who is in it.
+# The members page (plans/rbac.md, R3): an admin of the workspace manages who is in it.
 
 
 async def members(principals: PrincipalRepository, workspace: str) -> list[dict[str, object]]:

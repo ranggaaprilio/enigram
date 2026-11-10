@@ -1,4 +1,4 @@
-# Two ways in (docs/rbac.md):
+# Two ways in (docs/self-hosting/access-control.md):
 # - ENIGRAM_WEB_KEY set: no login, nginx adds the UI's API key to every /api call, so only this
 #   machine may use it: any other Host (a DNS-rebinding page) is dropped, and a foreign Origin (a
 #   cross-site form post) is refused. Keep the port on localhost.

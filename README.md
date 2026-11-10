@@ -24,7 +24,7 @@
   <a href="#supported-today">Supported today</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#where-your-data-goes">Your data</a> ·
-  <a href="#documentation">Documentation</a> ·
+  <a href="https://ranggaaprilio.github.io/enigram/"><strong>Documentation</strong></a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -62,7 +62,8 @@ offer MCP access. What Enigram combines:
 - Docs-vs-code conflict detection lists document passages that contradict the code.
 - Open source (AGPL-3.0-only) and self-hosted: the index, notes and clones stay in your Postgres.
 
-Accuracy against a coding agent with repository access is being evaluated (`docs/evaluation.md`);
+Accuracy against a coding agent with repository access is being evaluated
+([How evaluation works](docs/evaluation/how-it-works.md));
 there is no verdict yet.
 
 ## Supported today
@@ -72,10 +73,10 @@ there is no verdict yet.
 | Code | TypeScript projects with a `tsconfig.json` (monorepos too: every project is merged into one graph) | Other languages. A repository without a `tsconfig.json` gets its Markdown indexed, not its code |
 | Entry points | **NestJS** (routes, `@Cron`, events, jobs, `bootstrap`), **Next.js** App Router (pages, route handlers, middleware, server actions), **Express** (routes with their mount paths) | Other frameworks: their flows start from the exported functions nothing in the repository calls, so summaries and flows are coarser |
 | Documents | Markdown and PDF | Other formats |
-| Models | DeepSeek (chat) and Voyage AI (embeddings) by default; any OpenAI-compatible chat or embedding endpoint (OpenAI, OpenRouter, Ollama, vLLM, ...), see [Other model providers](docs/setup.md#other-model-providers). Accuracy is measured on DeepSeek and one other chat model ([results](docs/evaluation.md#other-chat-models)) | Native Anthropic or Gemini SDKs; a non-Voyage embedding endpoint is unit-tested only |
+| Models | DeepSeek (chat) and Voyage AI (embeddings) by default; any OpenAI-compatible chat or embedding endpoint (OpenAI, OpenRouter, Ollama, vLLM, ...), see [Model providers](docs/getting-started/model-providers.md). Accuracy is measured on DeepSeek and one other chat model ([results](docs/evaluation/how-it-works.md#other-chat-models)) | Native Anthropic or Gemini SDKs; a non-Voyage embedding endpoint is unit-tested only |
 | Size | Up to 2,000 TypeScript files and 50,000 lines per repository | Larger repositories |
 
-Details: [`docs/repositories.md`](docs/repositories.md).
+Details: [Index a Git repository](docs/guides/repositories.md).
 
 ## How it works
 
@@ -120,9 +121,9 @@ curl --max-time 180 -H 'content-type: application/json' \
 ```
 
 - Indexing a repository spends DeepSeek tokens on summaries, capped per job by
-  `MAX_TOKENS_PER_JOB` (see [Token caps](docs/deployment.md#token-caps)).
+  `MAX_TOKENS_PER_JOB` (see [Token caps](docs/self-hosting/deployment.md#token-caps)).
 - The API and Postgres listen on 127.0.0.1 only. With no `ENIGRAM_API_KEYS` every route is open,
-  so set keys (see [API keys](docs/deployment.md#api-keys)) before `API_BIND=0.0.0.0`.
+  so set keys (see [API keys](docs/self-hosting/access-control.md#api-keys)) before `API_BIND=0.0.0.0`.
 - An existing `pgdata` volume keeps the password it was created with; keep that password in
   `.env`.
 
@@ -130,13 +131,13 @@ curl --max-time 180 -H 'content-type: application/json' \
 
 Do not index code you are not allowed to send to these providers. To keep it in-house, point
 `LLM_BASE_URL` and `EMBED_BASE_URL` at a local server (see
-[Other model providers](docs/setup.md#other-model-providers)).
+[Model providers](docs/getting-started/model-providers.md)).
 
 | Destination | When | What is sent |
 |---|---|---|
 | DeepSeek, or the `LLM_BASE_URL` endpoint | always | Document chunks (entity extraction), code bodies (summaries and flows), questions, retrieved context, note texts, judge prompts |
 | Voyage AI, or the `EMBED_BASE_URL` endpoint | always | Document chunks, memories, code summaries and symbols (embeddings) |
-| TypeSafe Jev | only with `DECISION_PROVIDER=jev` and `TYPESAFE_API_KEY` | The question, evidence, code bodies, claims and note texts (see [Decision layer](docs/notes-and-decisions.md#decision-layer)) |
+| TypeSafe Jev | only with `DECISION_PROVIDER=jev` and `TYPESAFE_API_KEY` | The question, evidence, code bodies, claims and note texts (see [Decision layer](docs/reference/decision-layer.md)) |
 | Git hosts in `REPO_HOSTS` | `POST /repos`, re-syncs, polling | `git` clone, fetch and `ls-remote` requests |
 | Hugging Face | the first PDF | Download of Docling's layout models (nothing is uploaded) |
 
@@ -146,24 +147,31 @@ provider call.
 
 ## Documentation
 
+Read it at **https://ranggaaprilio.github.io/enigram/**, or as Markdown in [`docs/`](docs/):
+
 | Topic | Where |
 |---|---|
-| Run without Docker, index storage, reset | [`docs/setup.md`](docs/setup.md) |
-| Command line: index books, quality report, ask | [`docs/cli.md`](docs/cli.md) |
-| Index a Git repository, re-index on every commit, private repositories | [`docs/repositories.md`](docs/repositories.md) |
-| Run as a service: HTTP API, token caps, API keys, roles, sign-in | [`docs/deployment.md`](docs/deployment.md) |
-| The web UI, page by page | [`docs/web-ui.md`](docs/web-ui.md) |
-| Use from Claude Code (MCP), agent memory, proposals | [`docs/mcp.md`](docs/mcp.md) |
-| Notes, the decision layer, correcting the graph, replacing a document | [`docs/notes-and-decisions.md`](docs/notes-and-decisions.md) |
-| Roles and rights in detail | [`docs/rbac.md`](docs/rbac.md) |
-| Golden set and evaluation runs | [`docs/golden-set.md`](docs/golden-set.md), [`docs/evaluation.md`](docs/evaluation.md) |
-| UI design reference | [`docs/design.md`](docs/design.md) |
+| Run without Docker, index storage, reset | [Run without Docker](docs/getting-started/local-setup.md) |
+| Other chat and embedding providers | [Model providers](docs/getting-started/model-providers.md) |
+| The web UI, page by page | [Web UI tour](docs/guides/web-ui.md) |
+| Index a Git repository, re-index on every commit, private repositories | [Git repositories](docs/guides/repositories.md) |
+| Team notes: types, verification, staleness, conflicts | [Team notes](docs/guides/notes.md) |
+| Correcting the graph, replacing a document | [Correcting answers](docs/guides/correcting-knowledge.md) |
+| Use from Claude Code (MCP), agent memory, proposals | [Claude Code (MCP)](docs/guides/mcp.md) |
+| Command line: index documents, quality report, ask | [Command line](docs/guides/cli.md) |
+| Run as a service: workspaces, token caps | [Deployment](docs/self-hosting/deployment.md) |
+| API keys, roles, sign-in | [Access control](docs/self-hosting/access-control.md) |
+| Every endpoint, role and decision | [HTTP API](docs/reference/http-api.md), [Roles](docs/reference/roles.md), [Decision layer](docs/reference/decision-layer.md) |
+| Golden set and evaluation runs | [How evaluation works](docs/evaluation/how-it-works.md), [Golden set](docs/evaluation/golden-set.md) |
+| UI design reference | [Design](docs/project/design.md) |
+
+Design plans and decision records are in [`plans/`](plans/).
 
 ## Development
 
 The backend is in `apps/api/`, the UI in `apps/web/`; run commands from the repository root (see
-CONTRIBUTING.md for the layout, `make` for shortcuts, and [`docs/setup.md`](docs/setup.md) for a
-setup without Docker).
+CONTRIBUTING.md for the layout, `make` for shortcuts, and [Run without Docker](docs/getting-started/local-setup.md)
+for a setup without Docker).
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
@@ -184,4 +192,4 @@ Enigram is licensed under the GNU Affero General Public License v3.0 only ([`LIC
 If you run a modified version as a network service, AGPL section 13 requires offering its source
 to its users. Contributions require the CLA ([`CLA.md`](CLA.md)). "Enigram" and its logo are not
 covered by the license: see [`TRADEMARK.md`](TRADEMARK.md). Third-party licenses:
-[`docs/third-party-licenses.md`](docs/third-party-licenses.md).
+[`docs/project/third-party-licenses.md`](docs/project/third-party-licenses.md).

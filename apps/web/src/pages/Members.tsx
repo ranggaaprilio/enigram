@@ -65,7 +65,7 @@ function RoleSelect(props: {
 
 type Act = (run: () => Promise<unknown>, message?: string) => Promise<boolean>
 
-// docs/rbac.md: the admins of a workspace manage its members. People (sign-in by email) and API
+// plans/rbac.md: the admins of a workspace manage its members. People (sign-in by email) and API
 // keys (agents, scripts) are apart: a person is invited, a key is made. Every write reloads.
 export default function Members() {
   const { workspace = '' } = useParams()

@@ -1,5 +1,5 @@
 """Agent memories for people (plan item 7, M1): list, search, read, delete and make a note of
-one. Who sees what (docs/rbac.md, decided 2026-11-07, option A): a maintainer or admin sees and
+one. Who sees what (plans/rbac.md, decided 2026-11-07, option A): a maintainer or admin sees and
 deletes every key's memories in the workspace; anyone else only their own."""
 
 from dataclasses import asdict

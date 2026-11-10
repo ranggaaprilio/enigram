@@ -1,6 +1,6 @@
 import type { AnnotationPatch } from './api'
 
-// What a note change did, for its toast (docs/design.md, U2: a toast for the outcome of an
+// What a note change did, for its toast (docs/project/design.md, U2: a toast for the outcome of an
 // action; errors stay where they happened).
 export function patchMessage(body: AnnotationPatch): string {
   if (body.status === 'verified')

@@ -1,8 +1,13 @@
+---
+title: Web UI design reference
+sidebar_label: UI design reference
+description: Principles, layout, type, colour and accessibility rules of the Enigram web UI, for contributors.
+---
+
 # Web UI design reference
 
-Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spec used since
-2026-11-05. Enigram is a work tool people keep open all day: the reference is a dense, quiet app
-(Linear, the Vercel dashboard), not a landing page.
+Enigram is a work tool people keep open all day: the reference is a dense, quiet app (Linear, the
+Vercel dashboard), not a landing page. Decided 2026-11-08.
 
 ## Principles
 
@@ -21,7 +26,7 @@ Decided 2026-11-08 (roadmap item 4, stage U1); replaces the Framer marketing spe
   per browser.
   - Top: the workspace picker and *New workspace*.
   - Middle: page groups. *Overview* (Dashboard, the home page: `/` and a workspace without a
-    page open it), *Answers* (Ask, Chat, Trace), *Library* (Documents, Knowledge, Graph, Memory),
+    page open it), *Answers* (Chat, Trace), *Library* (Documents, Knowledge, Graph, Memory),
     *Review* (Inbox) and *Settings* (Members, Agents, Setup).
   - Bottom: the user menu (who is signed in, the role in this workspace, the theme).
 - Below 768px the sidebar is a drawer opened from the menu button; the top bar shows the page

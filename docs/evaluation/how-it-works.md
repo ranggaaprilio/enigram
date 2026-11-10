@@ -1,8 +1,16 @@
+---
+title: How evaluation works
+sidebar_label: How evaluation works
+description: How Enigram measures whether its answers about a code repository are any good, against a coding agent with the same model.
+---
+
 # How evaluation works
 
 This guide explains how Enigram measures whether its answers about a code repository are any
-good. It is the "why and how" companion to `eval/README.md`, which holds the exact file format,
-the lock record and the protocol rules.
+good. It is the "why and how" companion to
+[`eval/README.md`](https://github.com/ranggaaprilio/enigram/blob/main/eval/README.md), which holds
+the exact file format, the lock record and the protocol rules. The commands are in
+[Golden set and runs](golden-set.md).
 
 ## The question evaluation answers
 
@@ -250,7 +258,7 @@ dev questions are rechecked after every change.
 ## Other chat models
 
 Prompts were tuned on DeepSeek. To see what another model gives through
-`LLM_PROVIDER=openai-compatible` (see [Other model providers](setup.md#other-model-providers)),
+`LLM_PROVIDER=openai-compatible` (see [Model providers](../getting-started/model-providers.md)),
 the chat's default answerer (`agent-auto`: the Auto agent's tool loop over code, documents and
 notes) answered the same 61 questions with `glm-5.3-flash` on OpenCode Zen (2026-11-10). This is
 a measurement, not a gate.

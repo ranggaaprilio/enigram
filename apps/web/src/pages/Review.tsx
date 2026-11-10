@@ -203,7 +203,7 @@ function InboxItem({
   const { note, reason } = item
   const access = useAccess()
   const [relinkTo, setRelinkTo] = useState(note.candidates[0]?.id ?? '')
-  // docs/rbac.md: maintainers decide, never on an agent proposal of their own key.
+  // plans/rbac.md: maintainers decide, never on an agent proposal of their own key.
   const ownProposal = note.via === 'mcp' && access.name !== null && note.author === access.name
   const mayDecide = access.can('maintainer') && !ownProposal
   const symbol = note.target_kind === 'symbol'

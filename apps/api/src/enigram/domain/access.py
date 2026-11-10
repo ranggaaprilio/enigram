@@ -1,4 +1,4 @@
-"""Who may do what (docs/rbac.md): a principal (an API key, later a logged-in user) holds one
+"""Who may do what (plans/rbac.md): a principal (an API key, later a logged-in user) holds one
 role per workspace; roles are ordered, each with every right of the ones below. An `owner` is
 global and acts as `admin` in every workspace."""
 

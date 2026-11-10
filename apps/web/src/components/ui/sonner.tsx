@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react'
 import { Toaster as Sonner, type ToasterProps } from 'sonner'
 
 // Toasts in the app's own tokens, so they follow the light/dark class like the rest of the UI
-// (docs/design.md: a shadow only on floating layers).
+// (docs/project/design.md: a shadow only on floating layers).
 function Toaster(props: ToasterProps) {
   return (
     <Sonner

@@ -1,3 +1,8 @@
+---
+title: Third-party licenses
+description: Audit of the licenses of Enigram's runtime dependencies.
+---
+
 # Third-party licenses
 
 Audit of the runtime dependencies, done 2026-11-05 against `uv.lock`, `apps/web/package-lock.json`

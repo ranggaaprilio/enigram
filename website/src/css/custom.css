@@ -1,0 +1,60 @@
+/* Colours follow the web UI (docs/project/design.md): neutral greys, one blue accent. */
+:root {
+  --ifm-color-primary: #2563eb;
+  --ifm-color-primary-dark: #1d4ed8;
+  --ifm-color-primary-darker: #1e40af;
+  --ifm-color-primary-darkest: #1e3a8a;
+  --ifm-color-primary-light: #3b82f6;
+  --ifm-color-primary-lighter: #60a5fa;
+  --ifm-color-primary-lightest: #93c5fd;
+
+  --ifm-font-family-base: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ifm-heading-font-weight: 600;
+  --ifm-code-font-size: 90%;
+  --ifm-global-radius: 8px;
+  --ifm-navbar-shadow: none;
+
+  --ifm-background-color: #ffffff;
+  --ifm-color-emphasis-200: #e4e4e7;
+  --ifm-toc-border-color: #e4e4e7;
+  --ifm-hr-background-color: #e4e4e7;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #60a5fa;
+  --ifm-color-primary-dark: #3b82f6;
+  --ifm-color-primary-darker: #2563eb;
+  --ifm-color-primary-darkest: #1d4ed8;
+  --ifm-color-primary-light: #93c5fd;
+  --ifm-color-primary-lighter: #bfdbfe;
+  --ifm-color-primary-lightest: #dbeafe;
+
+  --ifm-background-color: #0b0b0c;
+  --ifm-background-surface-color: #111113;
+  --ifm-color-emphasis-200: #27272a;
+  --ifm-toc-border-color: #27272a;
+  --ifm-hr-background-color: #27272a;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+}
+
+.navbar {
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+}
+
+.footer--dark {
+  --ifm-footer-background-color: #0b0b0c;
+}
+
+/* Wide reference tables scroll inside themselves instead of widening the page. */
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: 0.875rem;
+}
+
+.markdown img {
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: var(--ifm-global-radius);
+}

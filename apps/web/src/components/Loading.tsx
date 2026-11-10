@@ -1,6 +1,6 @@
 import { Skeleton } from '@/components/ui/skeleton'
 
-// The one loading state (docs/design.md, U2): grey rows where the content will be. The text is
+// The one loading state (docs/project/design.md, U2): grey rows where the content will be. The text is
 // for screen readers.
 export default function Loading({ rows = 3 }: { rows?: number }) {
   return (

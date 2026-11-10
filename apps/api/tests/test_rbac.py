@@ -1,5 +1,5 @@
 # ruff: noqa: F811 - fake_memory and notes_env come from test_api as fixtures
-"""docs/rbac.md as a test table: every route refuses the role just below its minimum (403, or
+"""plans/rbac.md as a test table: every route refuses the role just below its minimum (403, or
 404 for no membership at all) and lets the minimum role through its gate."""
 
 import asyncio

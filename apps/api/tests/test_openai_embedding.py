@@ -1,4 +1,4 @@
-"""EMBED_PROVIDER=openai-compatible (docs/plans/llm-providers.md, L2), against a fake server."""
+"""EMBED_PROVIDER=openai-compatible (plans/llm-providers.md, L2), against a fake server."""
 
 import dataclasses
 import json

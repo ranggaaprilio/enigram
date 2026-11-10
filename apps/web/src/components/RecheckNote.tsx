@@ -38,7 +38,7 @@ export default function RecheckNote(props: {
 }) {
   const { note, summary } = props
   const [busy, setBusy] = useState(false)
-  // docs/rbac.md: the three outcomes verify or reject the note, which needs a maintainer.
+  // plans/rbac.md: the three outcomes verify or reject the note, which needs a maintainer.
   const maintainer = useAccess().can('maintainer')
   const then = note.summary_text ?? null
   // As the page and the server: the flow, else the symbol's own. "Still right" keeps this one.

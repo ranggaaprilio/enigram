@@ -1,4 +1,4 @@
-"""OpenID Connect login (docs/rbac.md, R4): the authorization code flow with PKCE against any
+"""OpenID Connect login (plans/rbac.md, R4): the authorization code flow with PKCE against any
 standard provider (Google, Microsoft Entra, Keycloak, ...), found through its discovery document.
 The ID token comes straight from the token endpoint and is still checked in full: signature
 (the provider's JWKS), issuer, audience, expiry and nonce."""

@@ -536,7 +536,7 @@ async def test_check_providers_survives_a_jev_outage(cfg, clean_env, monkeypatch
     assert result.decision == (f"llm_judge ({cfg.judge_model}); jev unavailable: Cannot reach jev")
 
 
-# --- LLM_PROVIDER=openai-compatible (docs/plans/llm-providers.md, L1) ---
+# --- LLM_PROVIDER=openai-compatible (plans/llm-providers.md, L1) ---
 
 
 @pytest.fixture

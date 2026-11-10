@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils'
 
-// The enigram mark (docs/design.md): a small graph, three nodes joined, the top one filled, the
+// The enigram mark (docs/project/design.md): a small graph, three nodes joined, the top one filled, the
 // cited answer. Drawn on lucide's 24px grid in the text colour; public/favicon.svg is the same.
 export default function Logo({ className }: { className?: string }) {
   return (
