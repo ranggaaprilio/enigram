@@ -226,11 +226,11 @@ async def _check_tool_call(cfg: Config) -> ChatReply:
 
 
 async def check_providers(cfg: Config) -> ProviderCheck:
-    """Fail fast on a misconfigured chat endpoint or Voyage before any slow parsing or
+    """Fail fast on a misconfigured chat or embedding endpoint before any slow parsing or
     indexing."""
     import numpy as np
 
-    from enigram.adapters.driven.voyage_embedding import make_embedding_func
+    from enigram.adapters.driven.embedding import make_embedding_func
 
     warnings: list[str] = []
     served = await _list_models(cfg.llm_provider, cfg.llm_base_url, cfg.llm_api_key)

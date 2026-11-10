@@ -2,8 +2,8 @@
 
 import math
 
+from enigram.adapters.driven.embedding import ragas_embedding
 from enigram.adapters.driven.openai_llm import provider_extra_body
-from enigram.adapters.driven.voyage_embedding import VoyageRagasEmbedding
 from enigram.config import Config
 from enigram.domain.claims import JUDGE_TEMPERATURE, split_claims
 
@@ -24,7 +24,7 @@ class RagasScorer:
             max_tokens=judge.llm_max_tokens,
             extra_body=provider_extra_body(judge),
         )
-        embeddings = VoyageRagasEmbedding(cfg)
+        embeddings = ragas_embedding(cfg)
         self.faithfulness = Faithfulness(llm=llm)
         self.answer_relevancy = AnswerRelevancy(llm=llm, embeddings=embeddings)
         self.answer_correctness = AnswerCorrectness(llm=llm, embeddings=embeddings)

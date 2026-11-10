@@ -20,7 +20,7 @@ LIGHTRAG_CHUNK_TOKEN_SIZE = 1200
 # get no thinking parameter either way.
 THINKING_MODES = ("off", "on")
 
-# Chat completions; embeddings are on Voyage (DeepSeek serves no embedding model).
+# Chat completions; embeddings come from EMBED_PROVIDER (DeepSeek serves no embedding model).
 # openai-compatible: any /v1/chat/completions endpoint (OpenAI, OpenRouter, Ollama, vLLM, ...)
 # at <PREFIX>_BASE_URL with <PREFIX>_MODEL; see docs/setup.md for what the model must support.
 LLM_PROVIDERS = ("deepseek", "openai-compatible")
@@ -28,6 +28,10 @@ LLM_PROVIDERS = ("deepseek", "openai-compatible")
 NO_API_KEY = "unused"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
+# voyage, or openai-compatible: any /v1/embeddings endpoint at EMBED_BASE_URL. The Voyage
+# model defaults do not apply there, so EMBED_MODEL, EMBED_DIM, CODE_EMBED_MODEL and
+# CODE_EMBED_DIM must be set.
+EMBED_PROVIDERS = ("voyage", "openai-compatible")
 DEFAULT_EMBED_MODEL = "voyage-4-lite"
 # Code text (flow summaries, symbols) for the semantic part of search_code.
 DEFAULT_CODE_EMBED_MODEL = "voyage-code-4"
@@ -142,7 +146,10 @@ class Config:
     embed_max_tokens: int
     code_embed_model: str
     code_embed_dim: int
-    voyage_api_key: str = field(repr=False)
+    embed_provider: str
+    embed_base_url: str  # "" for voyage
+    embed_api_key: str = field(repr=False)  # "" for voyage
+    voyage_api_key: str = field(repr=False)  # "" unless EMBED_PROVIDER=voyage
     chunk_max_tokens: int
     llm_max_async: int
     llm_max_tokens: int
@@ -236,6 +243,27 @@ class Config:
             (llm_base_url, llm_api_key, llm_model) if same else ("", "", ""),
         )
         llm_max_tokens = _int("LLM_MAX_TOKENS", 2048)
+        embed_provider = os.environ.get("EMBED_PROVIDER", "voyage").strip() or "voyage"
+        if embed_provider not in EMBED_PROVIDERS:
+            raise EnigramError(
+                f"EMBED_PROVIDER must be one of {EMBED_PROVIDERS}, got {embed_provider!r}"
+            )
+        if embed_provider == "voyage":
+            embed_base_url, embed_api_key = "", ""
+            voyage_api_key = _required("VOYAGE_API_KEY")
+        else:
+            for name in (
+                "EMBED_BASE_URL",
+                "EMBED_MODEL",
+                "EMBED_DIM",
+                "CODE_EMBED_MODEL",
+                "CODE_EMBED_DIM",
+            ):
+                if not os.environ.get(name, "").strip():
+                    raise EnigramError(f"{name} is not set (EMBED_PROVIDER={embed_provider}).")
+            embed_base_url = os.environ["EMBED_BASE_URL"].strip().rstrip("/")
+            embed_api_key = os.environ.get("EMBED_API_KEY", "").strip() or NO_API_KEY
+            voyage_api_key = ""
         storage = os.environ.get("STORAGE_BACKEND", "file").strip() or "file"
         if storage not in STORAGE_BACKENDS:
             raise EnigramError(
@@ -277,11 +305,17 @@ class Config:
             llm_model=llm_model,
             embed_model=os.environ.get("EMBED_MODEL", "").strip() or DEFAULT_EMBED_MODEL,
             embed_dim=_int("EMBED_DIM", 1024),
-            embed_max_tokens=_int("EMBED_MAX_TOKENS", 32000),
+            # Voyage takes 32k tokens; OpenAI's embedding models 8191.
+            embed_max_tokens=_int(
+                "EMBED_MAX_TOKENS", 32000 if embed_provider == "voyage" else 8191
+            ),
             code_embed_model=os.environ.get("CODE_EMBED_MODEL", "").strip()
             or DEFAULT_CODE_EMBED_MODEL,
             code_embed_dim=_int("CODE_EMBED_DIM", 1024),
-            voyage_api_key=_required("VOYAGE_API_KEY"),
+            embed_provider=embed_provider,
+            embed_base_url=embed_base_url,
+            embed_api_key=embed_api_key,
+            voyage_api_key=voyage_api_key,
             chunk_max_tokens=_int("CHUNK_MAX_TOKENS", 800),
             llm_max_async=_int("LLM_MAX_ASYNC", 2),
             # Extraction answers run 600-1000 tokens; the cap stops runaway repetition well
