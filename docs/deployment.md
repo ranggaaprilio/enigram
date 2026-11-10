@@ -5,7 +5,8 @@ worker and the web UI on `http://localhost:3000`. Uploads land in `data/books/`;
 pipeline as `enigram index`, and every query is stored with its retrieval trace.
 
 The service needs `STORAGE_BACKEND=postgres` (the job queue lives there, and only Postgres lets
-the API see what the worker indexed). Models are online (DeepSeek, Voyage); the image also
+the API see what the worker indexed). Models are online by default (DeepSeek, Voyage; see
+[Other model providers](setup.md#other-model-providers)); the image also
 carries Node and the `tools/ts-graph` sidecar. The first PDF downloads Docling's layout models into
 the `model-cache` volume. Do not run `enigram index` on the host while the worker runs: both would
 write the same index.
@@ -104,8 +105,8 @@ A worker from before workspaces locked only its own `WORKSPACE`: stop it before 
 
 ## Token caps
 
-Every DeepSeek call (LightRAG extraction and answers, summaries, the code agent, judges) is
-counted, and three caps bound the spend; `0` turns one off.
+Every chat-model call (LightRAG extraction and answers, summaries, the code agent, judges) and
+every code embedding is counted, and three caps bound the spend; `0` turns one off.
 
 | Variable | Default | Effect |
 |---|---|---|

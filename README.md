@@ -46,9 +46,9 @@ step-by-step flow per entry point) and its Markdown and PDF documents, and answe
 citations pinned to the indexed commit (`file:line@sha`). People can attach notes to symbols:
 notes take precedence over code and documents in every answer, are flagged when the code under
 them changes, and every sentence of an answer shows where it came from (`[code]`, `[summary]`,
-`[human]`, `[document]`). It is used from a web UI, REST, the CLI and MCP (Claude Code). Models are
-online: DeepSeek (chat) and Voyage (embeddings); documents go through
-[LightRAG](https://github.com/HKUDS/LightRAG) (GraphRAG).
+`[human]`, `[document]`). It is used from a web UI, REST, the CLI and MCP (Claude Code). By default
+the models are online, DeepSeek (chat) and Voyage (embeddings); any OpenAI-compatible endpoint can
+replace either. Documents go through [LightRAG](https://github.com/HKUDS/LightRAG) (GraphRAG).
 
 ## Why Enigram
 
@@ -72,7 +72,7 @@ there is no verdict yet.
 | Code | TypeScript projects with a `tsconfig.json` (monorepos too: every project is merged into one graph) | Other languages. A repository without a `tsconfig.json` gets its Markdown indexed, not its code |
 | Entry points | **NestJS** (routes, `@Cron`, events, jobs, `bootstrap`), **Next.js** App Router (pages, route handlers, middleware, server actions), **Express** (routes with their mount paths) | Other frameworks: their flows start from the exported functions nothing in the repository calls, so summaries and flows are coarser |
 | Documents | Markdown and PDF | Other formats |
-| Models | DeepSeek (chat) and Voyage AI (embeddings), online | Local models, other providers |
+| Models | DeepSeek (chat) and Voyage AI (embeddings) by default; any OpenAI-compatible chat or embedding endpoint (OpenAI, OpenRouter, Ollama, vLLM, ...), see [Other model providers](docs/setup.md#other-model-providers). Accuracy is measured on DeepSeek and one other chat model ([results](docs/evaluation.md#other-chat-models)) | Native Anthropic or Gemini SDKs; a non-Voyage embedding endpoint is unit-tested only |
 | Size | Up to 2,000 TypeScript files and 50,000 lines per repository | Larger repositories |
 
 Details: [`docs/repositories.md`](docs/repositories.md).
@@ -128,12 +128,14 @@ curl --max-time 180 -H 'content-type: application/json' \
 
 ## Where your data goes
 
-There is no local-model mode. Do not index code you are not allowed to send to these providers.
+Do not index code you are not allowed to send to these providers. To keep it in-house, point
+`LLM_BASE_URL` and `EMBED_BASE_URL` at a local server (see
+[Other model providers](docs/setup.md#other-model-providers)).
 
 | Destination | When | What is sent |
 |---|---|---|
-| DeepSeek | always | Document chunks (entity extraction), code bodies (summaries and flows), questions, retrieved context, note texts, judge prompts |
-| Voyage AI | always | Document chunks, memories, code summaries and symbols (embeddings) |
+| DeepSeek, or the `LLM_BASE_URL` endpoint | always | Document chunks (entity extraction), code bodies (summaries and flows), questions, retrieved context, note texts, judge prompts |
+| Voyage AI, or the `EMBED_BASE_URL` endpoint | always | Document chunks, memories, code summaries and symbols (embeddings) |
 | TypeSafe Jev | only with `DECISION_PROVIDER=jev` and `TYPESAFE_API_KEY` | The question, evidence, code bodies, claims and note texts (see [Decision layer](docs/notes-and-decisions.md#decision-layer)) |
 | Git hosts in `REPO_HOSTS` | `POST /repos`, re-syncs, polling | `git` clone, fetch and `ls-remote` requests |
 | Hugging Face | the first PDF | Download of Docling's layout models (nothing is uploaded) |
