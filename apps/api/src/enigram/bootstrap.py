@@ -4,6 +4,7 @@ from collections.abc import Callable
 from functools import partial
 
 from enigram.adapters.driven.docling_parser import DoclingParser
+from enigram.adapters.driven.embedding import code_embedder, make_embedding_func
 from enigram.adapters.driven.jev_decider import JevDecider
 from enigram.adapters.driven.lightrag_engine import (
     QUERY_MAX_ENTITY_TOKENS,
@@ -24,7 +25,6 @@ from enigram.adapters.driven.postgres_principals import PostgresPrincipals
 from enigram.adapters.driven.postgres_stats import PostgresStats
 from enigram.adapters.driven.ragas_scorer import RagasScorer
 from enigram.adapters.driven.ts_graph_sidecar import TsGraphSidecar
-from enigram.adapters.driven.voyage_embedding import VoyageCodeEmbedder, make_embedding_func
 from enigram.application.decisions import FallbackDecider
 from enigram.application.ports import (
     AnnotationRepository,
@@ -135,7 +135,7 @@ def build_deps(cfg: Config) -> Deps:
         judge=partial(OpenAIChatModel, cfg.judge),
         answer_scorer=partial(RagasScorer, cfg),
         decider=partial(_decider, cfg),
-        code_embedder=partial(VoyageCodeEmbedder, cfg),
+        code_embedder=partial(code_embedder, cfg),
         identity_provider=_identity_provider(cfg),
         query_budget={
             "max_entity_tokens": QUERY_MAX_ENTITY_TOKENS,

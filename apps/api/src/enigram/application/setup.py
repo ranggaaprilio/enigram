@@ -61,7 +61,21 @@ def setup_status(cfg: Config) -> dict[str, Any]:
                 f"{cfg.code_embed_model}, {cfg.code_embed_dim} dimensions",
                 True,
             ),
-            _secret("Models", "Voyage API key", "VOYAGE_API_KEY", cfg.voyage_api_key),
+            *(
+                [_secret("Models", "Voyage API key", "VOYAGE_API_KEY", cfg.voyage_api_key)]
+                if cfg.embed_provider == "voyage"
+                else [
+                    _row(
+                        "Models", "Embedding endpoint", "EMBED_BASE_URL", cfg.embed_base_url, True
+                    ),
+                    _secret(
+                        "Models",
+                        "Embedding API key",
+                        "EMBED_API_KEY",
+                        "" if cfg.embed_api_key == NO_API_KEY else cfg.embed_api_key,
+                    ),
+                ]
+            ),
             _row(
                 "Models",
                 "Judge model",

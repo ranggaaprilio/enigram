@@ -27,7 +27,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser(
         "check",
-        help="verify the chat, Voyage and decision endpoints, tool calling and embedding dim",
+        help="verify the chat, embedding and decision endpoints, tool calling and embedding dim",
     )
 
     index = sub.add_parser("index", help="parse PDF/Markdown files and build the LightRAG graph")
@@ -276,7 +276,7 @@ async def _check(cfg: Config) -> int:
         if result.tool_calls_ok
         else "✗ tool calling failed (see log): the agent answers through tool calls"
     )
-    print(f"✓ voyage {result.embed_model} dim {result.embed_dim}")
+    print(f"✓ {cfg.embed_provider} {result.embed_model} dim {result.embed_dim}")
     print(f"{'✗' if 'jev unavailable' in result.decision else '✓'} decision {result.decision}")
     for warning in result.warnings:
         print(f"! {warning}")
