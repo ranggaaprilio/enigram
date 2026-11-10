@@ -16,11 +16,16 @@ from enigram.domain.errors import EnigramError
 # 1.5x margin is only a safety net that keeps one Docling chunk == one LightRAG chunk.
 LIGHTRAG_CHUNK_TOKEN_SIZE = 1200
 
-# off sends thinking.type=disabled to DeepSeek; on leaves its thinking on.
+# off sends thinking.type=disabled to DeepSeek; on leaves its thinking on. Other providers
+# get no thinking parameter either way.
 THINKING_MODES = ("off", "on")
 
 # Chat completions; embeddings are on Voyage (DeepSeek serves no embedding model).
-LLM_PROVIDERS = ("deepseek",)
+# openai-compatible: any /v1/chat/completions endpoint (OpenAI, OpenRouter, Ollama, vLLM, ...)
+# at <PREFIX>_BASE_URL with <PREFIX>_MODEL; see docs/setup.md for what the model must support.
+LLM_PROVIDERS = ("deepseek", "openai-compatible")
+# The OpenAI SDK refuses an empty key; local servers (Ollama, vLLM) accept any value.
+NO_API_KEY = "unused"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
 DEFAULT_EMBED_MODEL = "voyage-4-lite"
@@ -32,7 +37,7 @@ CHUNK_TOKENIZER = "tiktoken:cl100k_base"
 # Where LightRAG keeps the index: JSON/GraphML files under rag_dir, or PostgreSQL (pgvector).
 STORAGE_BACKENDS = ("file", "postgres")
 
-# The decision layer: Jev (TypeSafe System One) with the DeepSeek judge as automatic fallback,
+# The decision layer: Jev (TypeSafe System One) with the LLM judge as automatic fallback,
 # or the judge alone (the default when DECISION_PROVIDER is empty).
 DECISION_PROVIDERS = ("jev", "llm_judge")
 JEV_BASE_URL = "https://api.typesafe.ai/v1"
@@ -171,7 +176,7 @@ class Config:
     daily_token_budget: int
     per_key_daily_tokens: int
     # The decision layer (DECISION_PROVIDER): jev = TypeSafe System One (TYPESAFE_API_KEY,
-    # JEV_MODEL, JEV_BASE_URL) with the DeepSeek judge as automatic fallback; llm_judge (the
+    # JEV_MODEL, JEV_BASE_URL) with the LLM judge as automatic fallback; llm_judge (the
     # default) = the judge only.
     decision_provider: str
     jev_api_key: str = field(repr=False)
@@ -197,19 +202,38 @@ class Config:
         if llm_provider not in LLM_PROVIDERS:
             raise EnigramError(f"LLM_PROVIDER must be one of {LLM_PROVIDERS}, got {llm_provider!r}")
 
-        def endpoint(provider: str, model_var: str, fallback_model: str = "") -> tuple[str, ...]:
-            model = os.environ.get(model_var, "").strip() or fallback_model
-            return DEEPSEEK_BASE_URL, _required("DEEPSEEK_API_KEY"), model or DEEPSEEK_DEFAULT_MODEL
+        def endpoint(
+            provider: str, prefix: str, fallback: tuple[str, str, str] = ("", "", "")
+        ) -> tuple[str, str, str]:
+            """(base_url, api_key, model) for <prefix>_*; `fallback` fills what is unset."""
+            base_fallback, key_fallback, model_fallback = fallback
+            model = os.environ.get(f"{prefix}_MODEL", "").strip() or model_fallback
+            if provider == "deepseek":
+                return (
+                    DEEPSEEK_BASE_URL,
+                    _required("DEEPSEEK_API_KEY"),
+                    model or DEEPSEEK_DEFAULT_MODEL,
+                )
+            base_url = os.environ.get(f"{prefix}_BASE_URL", "").strip() or base_fallback
+            if not base_url:
+                raise EnigramError(f"{prefix}_BASE_URL is not set ({prefix}_PROVIDER={provider}).")
+            if not model:
+                raise EnigramError(f"{prefix}_MODEL is not set ({prefix}_PROVIDER={provider}).")
+            api_key = os.environ.get(f"{prefix}_API_KEY", "").strip() or key_fallback or NO_API_KEY
+            return base_url.rstrip("/"), api_key, model
 
-        llm_base_url, llm_api_key, llm_model = endpoint(llm_provider, "LLM_MODEL")
+        llm_base_url, llm_api_key, llm_model = endpoint(llm_provider, "LLM")
         # The judge defaults to the generator; set JUDGE_* so a model never grades its own answers.
         judge_provider = os.environ.get("JUDGE_PROVIDER", "").strip() or llm_provider
         if judge_provider not in LLM_PROVIDERS:
             raise EnigramError(
                 f"JUDGE_PROVIDER must be one of {LLM_PROVIDERS}, got {judge_provider!r}"
             )
+        same = judge_provider == llm_provider
         judge_base_url, judge_api_key, judge_model = endpoint(
-            judge_provider, "JUDGE_MODEL", llm_model if judge_provider == llm_provider else ""
+            judge_provider,
+            "JUDGE",
+            (llm_base_url, llm_api_key, llm_model) if same else ("", "", ""),
         )
         llm_max_tokens = _int("LLM_MAX_TOKENS", 2048)
         storage = os.environ.get("STORAGE_BACKEND", "file").strip() or "file"

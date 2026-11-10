@@ -348,6 +348,17 @@ async def test_embedding_func_empty_input_skips_api(cfg):
     assert vectors.shape == (0, 1024) and client.calls == []
 
 
+async def _tool_call_ok(cfg):
+    return openai_llm.ChatReply(
+        text="",
+        tool_calls=[openai_llm.ToolCall(id="c1", name="echo", arguments='{"word": "OK"}')],
+        finish_reason="tool_calls",
+        tokens_in=40,
+        tokens_out=8,
+        secs=0.1,
+    )
+
+
 async def test_check_providers_reports_missing_models(cfg, monkeypatch):
     async def fake_models(name, base_url, api_key):
         return ["deepseek-v4-pro"]
@@ -367,6 +378,7 @@ async def test_check_providers_probes_completion_json_and_embedding(cfg, monkeyp
     monkeypatch.setattr(openai_llm, "_list_models", fake_models)
     monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
     monkeypatch.setattr(voyage_embedding, "_client", lambda cfg: FakeVoyage())
+    monkeypatch.setattr(openai_llm, "_check_tool_call", _tool_call_ok)
 
     result = await openai_llm.check_providers(cfg)
 
@@ -396,6 +408,7 @@ async def test_check_providers_includes_decision(cfg, clean_env, monkeypatch):
     monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
     monkeypatch.setattr(openai_llm, "check_jev", fake_check_jev)
     monkeypatch.setattr(voyage_embedding, "_client", lambda cfg: FakeVoyage())
+    monkeypatch.setattr(openai_llm, "_check_tool_call", _tool_call_ok)
 
     result = await openai_llm.check_providers(cfg)
 
@@ -516,7 +529,230 @@ async def test_check_providers_survives_a_jev_outage(cfg, clean_env, monkeypatch
     monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
     monkeypatch.setattr(openai_llm, "check_jev", jev_down)
     monkeypatch.setattr(voyage_embedding, "_client", lambda cfg: FakeVoyage())
+    monkeypatch.setattr(openai_llm, "_check_tool_call", _tool_call_ok)
 
     result = await openai_llm.check_providers(cfg)
 
     assert result.decision == (f"llm_judge ({cfg.judge_model}); jev unavailable: Cannot reach jev")
+
+
+# --- LLM_PROVIDER=openai-compatible (docs/plans/llm-providers.md, L1) ---
+
+
+@pytest.fixture
+def compat_env(clean_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("VOYAGE_API_KEY", "vo-key-not-real")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("LLM_BASE_URL", "http://ollama.test:11434/v1/")
+    monkeypatch.setenv("LLM_MODEL", "local-model")
+    return clean_env
+
+
+def test_config_openai_compatible_needs_no_deepseek_key(compat_env):
+    cfg = Config.from_env(compat_env)
+    assert (cfg.llm_provider, cfg.llm_base_url, cfg.llm_model) == (
+        "openai-compatible",
+        "http://ollama.test:11434/v1",
+        "local-model",
+    )
+    # A local server takes any key; the OpenAI SDK refuses an empty one.
+    assert cfg.llm_api_key == "unused"
+    assert (cfg.judge_provider, cfg.judge_base_url, cfg.judge_api_key, cfg.judge_model) == (
+        "openai-compatible",
+        "http://ollama.test:11434/v1",
+        "unused",
+        "local-model",
+    )
+
+
+def test_config_openai_compatible_key_and_judge_overrides(compat_env, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "sk-not-real")
+    monkeypatch.setenv("JUDGE_MODEL", "bigger-model")
+    cfg = Config.from_env(compat_env)
+    assert (cfg.llm_api_key, cfg.judge_api_key) == ("sk-not-real", "sk-not-real")
+    assert cfg.judge_model == "bigger-model"
+    assert "sk-not-real" not in repr(cfg)
+
+    monkeypatch.setenv("JUDGE_BASE_URL", "https://judge.test/v1")
+    monkeypatch.setenv("JUDGE_API_KEY", "judge-key-not-real")
+    cfg = Config.from_env(compat_env)
+    assert (cfg.judge_base_url, cfg.judge_api_key) == (
+        "https://judge.test/v1",
+        "judge-key-not-real",
+    )
+    assert cfg.llm_base_url == "http://ollama.test:11434/v1"
+
+
+@pytest.mark.parametrize("missing", ["LLM_BASE_URL", "LLM_MODEL"])
+def test_config_openai_compatible_requires_url_and_model(compat_env, monkeypatch, missing):
+    monkeypatch.delenv(missing)
+    with pytest.raises(EnigramError, match=missing):
+        Config.from_env(compat_env)
+
+
+def test_config_deepseek_judge_with_compatible_generator(compat_env, monkeypatch):
+    monkeypatch.setenv("JUDGE_PROVIDER", "deepseek")
+    with pytest.raises(EnigramError, match="DEEPSEEK_API_KEY"):
+        Config.from_env(compat_env)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
+    cfg = Config.from_env(compat_env)
+    assert (cfg.judge_base_url, cfg.judge_model) == ("https://api.deepseek.com", "deepseek-flash")
+
+
+def test_config_compatible_judge_with_deepseek_generator(cfg, clean_env, monkeypatch):
+    monkeypatch.setenv("JUDGE_PROVIDER", "openai-compatible")
+    with pytest.raises(EnigramError, match="JUDGE_BASE_URL"):
+        Config.from_env(clean_env)
+
+    monkeypatch.setenv("JUDGE_BASE_URL", "https://judge.test/v1")
+    monkeypatch.setenv("JUDGE_MODEL", "judge-model")
+    loaded = Config.from_env(clean_env)
+    # Nothing is inherited from DeepSeek: another provider gets its own key.
+    assert (loaded.judge_base_url, loaded.judge_api_key) == ("https://judge.test/v1", "unused")
+    assert loaded.llm_base_url == "https://api.deepseek.com"
+
+
+@pytest.mark.parametrize(
+    ("provider", "thinking", "expected"),
+    [
+        ("deepseek", "off", {"thinking": {"type": "disabled"}}),
+        ("deepseek", "on", {}),
+        ("openai-compatible", "off", {}),
+        ("openai-compatible", "on", {}),
+    ],
+)
+def test_provider_extra_body(cfg, provider, thinking, expected):
+    changed = dataclasses.replace(cfg, llm_provider=provider, thinking_mode=thinking)
+    assert openai_llm.provider_extra_body(changed) == expected
+
+
+def test_provider_extra_body_returns_a_copy(cfg):
+    openai_llm.provider_extra_body(cfg)["thinking"] = "changed"
+    assert openai_llm.DEEPSEEK_NO_THINKING == {"thinking": {"type": "disabled"}}
+
+
+async def test_llm_func_sends_no_thinking_field_to_other_providers(compat_env, monkeypatch):
+    seen = {}
+
+    async def fake_complete(model, prompt, **kwargs):
+        seen.update(kwargs)
+        return "result"
+
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    cfg = Config.from_env(compat_env)
+    await openai_llm.make_llm_func(cfg)("hello", extra_body={"custom": True})
+
+    assert seen["extra_body"] == {"custom": True}
+    assert seen["base_url"] == "http://ollama.test:11434/v1"
+    seen.clear()
+    await openai_llm.make_llm_func(cfg)("hello")
+    assert "extra_body" not in seen
+
+
+async def test_chat_sends_no_thinking_field_to_other_providers(compat_env, monkeypatch):
+    completions = FakeCompletions(_response("ok"))
+    _fake_client(monkeypatch, completions)
+    model = openai_llm.OpenAIChatModel(Config.from_env(compat_env))
+
+    await model.chat([{"role": "user", "content": "q"}])
+    # Only DeepSeek refuses a forced tool call in thinking mode.
+    await openai_llm.OpenAIChatModel(dataclasses.replace(model.cfg, thinking_mode="on")).chat(
+        [], tool_choice="required"
+    )
+
+    assert all("extra_body" not in sent for sent in completions.calls)
+    assert completions.calls[1]["tool_choice"] == "required"
+
+
+def _stub_providers(monkeypatch, models):
+    async def fake_models(name, base_url, api_key):
+        return models
+
+    async def fake_complete(model, prompt, **kwargs):
+        return '{"status": "ok"}'
+
+    monkeypatch.setattr(openai_llm, "_list_models", fake_models)
+    monkeypatch.setattr(openai_llm, "openai_complete_if_cache", fake_complete)
+    monkeypatch.setattr(voyage_embedding, "_client", lambda cfg: FakeVoyage())
+
+
+async def test_check_providers_without_models_list_warns(compat_env, monkeypatch):
+    _stub_providers(monkeypatch, None)
+    monkeypatch.setattr(openai_llm, "_check_tool_call", _tool_call_ok)
+
+    result = await openai_llm.check_providers(Config.from_env(compat_env))
+
+    assert result.models == ["local-model"] and result.tool_calls_ok
+    assert result.warnings == [
+        "http://ollama.test:11434/v1 has no /models list; model names not checked"
+    ]
+
+
+async def test_check_providers_checks_judge_only_on_the_same_endpoint(compat_env, monkeypatch):
+    monkeypatch.setenv("JUDGE_BASE_URL", "https://judge.test/v1")
+    monkeypatch.setenv("JUDGE_MODEL", "judge-model")
+    _stub_providers(monkeypatch, ["local-model"])
+    monkeypatch.setattr(openai_llm, "_check_tool_call", _tool_call_ok)
+
+    result = await openai_llm.check_providers(Config.from_env(compat_env))
+
+    assert result.models == ["local-model"] and result.warnings == []
+
+
+@pytest.mark.parametrize(
+    "probe",
+    [
+        "no-tool-call",
+        "error",
+    ],
+)
+async def test_check_providers_reports_failed_tool_calling(compat_env, monkeypatch, probe):
+    _stub_providers(monkeypatch, ["local-model"])
+
+    async def probe_fn(cfg):
+        if probe == "error":
+            raise EnigramError("openai-compatible chat failed: 400")
+        return openai_llm.ChatReply(
+            text="OK", tool_calls=[], finish_reason="stop", tokens_in=5, tokens_out=1, secs=0.1
+        )
+
+    monkeypatch.setattr(openai_llm, "_check_tool_call", probe_fn)
+
+    result = await openai_llm.check_providers(Config.from_env(compat_env))
+
+    assert not result.tool_calls_ok
+
+
+async def test_check_providers_warns_on_missing_usage_and_thinking(compat_env, monkeypatch):
+    monkeypatch.setenv("THINKING_MODE", "on")
+    _stub_providers(monkeypatch, ["local-model"])
+
+    async def no_usage(cfg):
+        reply = await _tool_call_ok(cfg)
+        return dataclasses.replace(reply, tokens_in=0, tokens_out=0)
+
+    monkeypatch.setattr(openai_llm, "_check_tool_call", no_usage)
+
+    result = await openai_llm.check_providers(Config.from_env(compat_env))
+
+    assert result.tool_calls_ok
+    assert result.warnings == [
+        "THINKING_MODE=on has no effect with LLM_PROVIDER=openai-compatible",
+        "the endpoint reports no token usage; token budgets will not count it",
+    ]
+
+
+async def test_check_tool_call_offers_one_tool_without_forcing_it(cfg, monkeypatch):
+    call = SimpleNamespace(id="c1", function=SimpleNamespace(name="echo", arguments="{}"))
+    completions = FakeCompletions(_response(None, [call], "tool_calls"))
+    _fake_client(monkeypatch, completions)
+
+    reply = await openai_llm._check_tool_call(cfg)
+
+    assert [c.name for c in reply.tool_calls] == ["echo"]
+    sent = completions.calls[0]
+    assert [t["function"]["name"] for t in sent["tools"]] == ["echo"]
+    # The agent loop leaves tool_choice to the endpoint (auto); the probe does the same.
+    assert "tool_choice" not in sent

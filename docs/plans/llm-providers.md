@@ -81,17 +81,20 @@ Judge memakai variabel yang sama dengan awalan `JUDGE_` (`JUDGE_BASE_URL`, `JUDG
 
 Helper ini menggantikan tiga tempat yang sekarang menulis flag itu sendiri: `prepare_request`,
 `OpenAIChatModel.chat`, dan `_api_thinking` di `ragas_scorer.py`. Adapter Pydantic AI di rencana
-chat-memory memakai helper yang sama. Pesan error `tool_choice=required` hanya muncul untuk
-DeepSeek dengan thinking menyala.
+chat-memory memakai helper yang sama. Penolakan `tool_choice=required` di
+`OpenAIChatModel.chat` hanya berlaku untuk DeepSeek dengan thinking menyala.
 
 **Syarat model.** Model yang dipilih harus mendukung:
 
-- tool calling, termasuk `tool_choice="required"` (dipakai agent loop),
+- tool calling (agent loop menjawab lewat tool call, dengan `tool_choice` default `auto`;
+  `tool_choice="required"` tidak dipakai di mana pun),
 - JSON mode (`response_format={"type": "json_object"}`, dipakai LightRAG dan judge),
 - konteks yang cukup untuk budget agent (120k token input kumulatif, dibagi ke beberapa panggilan).
 
-`doctor` menambah satu cek: satu panggilan dengan satu tool dan `tool_choice="required"`. Bila
-gagal, `doctor` gagal dengan pesan yang menyebut syarat ini. Cek JSON mode yang sudah ada tetap.
+`doctor` menambah satu cek: satu panggilan yang menawarkan satu tool, tanpa memaksa
+`tool_choice`, sama seperti agent loop. Bila model tidak memanggil tool itu, `doctor` gagal dengan
+pesan yang menyebut syarat ini. `doctor` juga memberi peringatan bila endpoint tidak melaporkan
+`usage`. Cek JSON mode yang sudah ada tetap.
 Bila `/models` tidak ada di server (404), `doctor` mencetak peringatan, bukan gagal.
 
 **Ganti model pada index yang sudah ada.** `guard_llm_model` tetap menolak. Ini disengaja: entity

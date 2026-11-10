@@ -1,10 +1,11 @@
-"""The OpenAI-compatible chat endpoint (DeepSeek): request settings, the callback LightRAG
-calls, the ChatModel the judges and the code use cases use, and the startup check."""
+"""The OpenAI-compatible chat endpoint (DeepSeek or LLM_BASE_URL): request settings, the
+callback LightRAG calls, the ChatModel the judges and the code use cases use, and the startup
+check."""
 
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -25,14 +26,21 @@ CHAT_TIMEOUT_SECS = 120
 CHAT_MAX_RETRIES = 3
 
 
-def prepare_request(cfg: Config, prompt: str, kwargs: dict[str, Any]) -> str:
-    """Fill in the output cap and thinking control; caller-set values win.
+def provider_extra_body(cfg: Config) -> dict[str, Any]:
+    """The provider-specific request fields for cfg's endpoint: DeepSeek's thinking switch when
+    THINKING_MODE=off (its reasoning otherwise eats max_tokens), nothing for other providers,
+    which may reject unknown fields with a 400."""
+    if cfg.llm_provider == "deepseek" and cfg.thinking_mode != "on":
+        return dict(DEEPSEEK_NO_THINKING)
+    return {}
 
-    Thinking is off unless THINKING_MODE=on: DeepSeek's reasoning otherwise eats max_tokens.
-    """
+
+def prepare_request(cfg: Config, prompt: str, kwargs: dict[str, Any]) -> str:
+    """Fill in the output cap and the provider's extra fields; caller-set values win."""
     kwargs.setdefault("max_tokens", cfg.llm_max_tokens)
-    if cfg.thinking_mode != "on":
-        kwargs["extra_body"] = {**DEEPSEEK_NO_THINKING, **(kwargs.get("extra_body") or {})}
+    extra = provider_extra_body(cfg)
+    if extra:
+        kwargs["extra_body"] = {**extra, **(kwargs.get("extra_body") or {})}
     return prompt
 
 
@@ -115,14 +123,15 @@ class OpenAIChatModel:
     ) -> ChatReply:
         cfg = self.cfg
         forced = tool_choice == "required" or isinstance(tool_choice, dict)
-        if forced and cfg.thinking_mode == "on":
+        if forced and cfg.llm_provider == "deepseek" and cfg.thinking_mode == "on":
             raise EnigramError(
                 "tool_choice=required needs THINKING_MODE=off "
                 "(DeepSeek returns 400 in thinking mode)"
             )
         kwargs: dict[str, Any] = {"max_tokens": max_tokens or cfg.llm_max_tokens}
-        if cfg.thinking_mode != "on":
-            kwargs["extra_body"] = DEEPSEEK_NO_THINKING
+        extra = provider_extra_body(cfg)
+        if extra:
+            kwargs["extra_body"] = extra
         if tools:
             kwargs["tools"] = tools
         if tool_choice:
@@ -166,9 +175,28 @@ class ProviderCheck:
     embed_model: str
     embed_dim: int
     decision: str  # "jev (jev-latest)" or "llm_judge (<judge model>)"
+    tool_calls_ok: bool = True
+    # Not fatal, but worth reading: no /models list, no usage reported, THINKING_MODE ignored.
+    warnings: list[str] = field(default_factory=list)
 
 
-async def _list_models(name: str, base_url: str, api_key: str) -> list[str]:
+# The agent loop answers through tool calls; a model that never makes one cannot answer.
+_PROBE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "echo",
+        "description": "Echo a word back.",
+        "parameters": {
+            "type": "object",
+            "properties": {"word": {"type": "string"}},
+            "required": ["word"],
+        },
+    },
+}
+
+
+async def _list_models(name: str, base_url: str, api_key: str) -> list[str] | None:
+    """The model ids the endpoint serves, or None when it has no /models (404)."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
@@ -178,6 +206,8 @@ async def _list_models(name: str, base_url: str, api_key: str) -> list[str]:
         raise ProviderUnavailableError(f"Cannot reach {name} at {base_url}: {e}") from e
     if resp.status_code == 401:
         raise ProviderUnavailableError(f"{name} rejected the API key (401)")
+    if resp.status_code == 404:
+        return None
     if resp.status_code != 200:
         raise ProviderUnavailableError(
             f"GET /models returned {resp.status_code}: {resp.text[:200]}"
@@ -185,16 +215,38 @@ async def _list_models(name: str, base_url: str, api_key: str) -> list[str]:
     return [m["id"] for m in resp.json().get("data", [])]
 
 
+async def _check_tool_call(cfg: Config) -> ChatReply:
+    """One call offering a one-parameter tool, as the agent loop does (tool_choice left to
+    the endpoint's default, auto)."""
+    return await OpenAIChatModel(cfg).chat(
+        [{"role": "user", "content": "Call the echo tool with the word OK."}],
+        tools=[_PROBE_TOOL],
+        max_tokens=256,
+    )
+
+
 async def check_providers(cfg: Config) -> ProviderCheck:
-    """Fail fast on a misconfigured DeepSeek or Voyage before any slow parsing or indexing."""
+    """Fail fast on a misconfigured chat endpoint or Voyage before any slow parsing or
+    indexing."""
     import numpy as np
 
     from enigram.adapters.driven.voyage_embedding import make_embedding_func
 
-    models = sorted(await _list_models(cfg.llm_provider, cfg.llm_base_url, cfg.llm_api_key))
-    missing = sorted({cfg.llm_model, cfg.judge_model} - set(models))
-    if missing:
-        raise ProviderUnavailableError(f"Model(s) {missing} not served. Available: {models}")
+    warnings: list[str] = []
+    served = await _list_models(cfg.llm_provider, cfg.llm_base_url, cfg.llm_api_key)
+    expected = {cfg.llm_model}
+    if (cfg.judge_base_url, cfg.judge_api_key) == (cfg.llm_base_url, cfg.llm_api_key):
+        expected.add(cfg.judge_model)
+    if served is None:
+        models = sorted(expected)
+        warnings.append(f"{cfg.llm_base_url} has no /models list; model names not checked")
+    else:
+        models = sorted(served)
+        missing = sorted(expected - set(models))
+        if missing:
+            raise ProviderUnavailableError(f"Model(s) {missing} not served. Available: {models}")
+    if cfg.llm_provider != "deepseek" and cfg.thinking_mode == "on":
+        warnings.append(f"THINKING_MODE=on has no effect with LLM_PROVIDER={cfg.llm_provider}")
 
     kwargs: dict[str, Any] = {}
     prompt = prepare_request(cfg, "Reply with exactly: OK", kwargs)
@@ -216,6 +268,15 @@ async def check_providers(cfg: Config) -> ProviderCheck:
     except Exception as e:  # noqa: BLE001 - any failure here means JSON mode is unusable
         log.warning("JSON mode check failed: %s", e)
         json_mode_ok = False
+
+    try:
+        reply = await _check_tool_call(cfg)
+    except EnigramError as e:
+        log.warning("Tool call check failed: %s", e)
+        reply = None
+    tool_calls_ok = bool(reply and reply.tool_calls)
+    if reply is not None and not reply.tokens_in:
+        warnings.append("the endpoint reports no token usage; token budgets will not count it")
 
     if cfg.decision_provider == "jev":
         # Not fatal: indexing never decides, and at runtime a Jev failure falls back to the judge.
@@ -241,4 +302,6 @@ async def check_providers(cfg: Config) -> ProviderCheck:
         embed_model=cfg.embed_model,
         embed_dim=embed_dim,
         decision=decision,
+        tool_calls_ok=tool_calls_ok,
+        warnings=warnings,
     )

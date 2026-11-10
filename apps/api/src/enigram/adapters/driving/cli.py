@@ -27,7 +27,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser(
         "check",
-        help="verify the DeepSeek, Voyage and decision endpoints, thinking mode and embedding dim",
+        help="verify the chat, Voyage and decision endpoints, tool calling and embedding dim",
     )
 
     index = sub.add_parser("index", help="parse PDF/Markdown files and build the LightRAG graph")
@@ -271,9 +271,16 @@ async def _check(cfg: Config) -> int:
     print(f"✓ {cfg.llm_provider} models served: {', '.join(result.models)}")
     print(f"✓ completion {result.completion_secs:.1f}s (thinking_mode={cfg.thinking_mode})")
     print("✓ JSON mode works" if result.json_mode_ok else "✗ JSON mode failed (see log)")
+    print(
+        "✓ tool calling works"
+        if result.tool_calls_ok
+        else "✗ tool calling failed (see log): the agent answers through tool calls"
+    )
     print(f"✓ voyage {result.embed_model} dim {result.embed_dim}")
     print(f"{'✗' if 'jev unavailable' in result.decision else '✓'} decision {result.decision}")
-    return 0 if result.json_mode_ok else 1
+    for warning in result.warnings:
+        print(f"! {warning}")
+    return 0 if result.json_mode_ok and result.tool_calls_ok else 1
 
 
 async def _preflight(cfg: Config) -> None:

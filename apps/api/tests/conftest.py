@@ -8,8 +8,12 @@ from enigram.config import Config
 CONFIG_ENV = (
     "LLM_PROVIDER",
     "DEEPSEEK_API_KEY",
+    "LLM_BASE_URL",
+    "LLM_API_KEY",
     "LLM_MODEL",
     "JUDGE_PROVIDER",
+    "JUDGE_BASE_URL",
+    "JUDGE_API_KEY",
     "JUDGE_MODEL",
     "JUDGE_MAX_TOKENS",
     "VOYAGE_API_KEY",
