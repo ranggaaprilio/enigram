@@ -1,7 +1,7 @@
 # Memori chat dengan Pydantic AI
 
-Rencana dibuat 2026-11-09, diubah di hari yang sama: owner memilih memakai Pydantic AI. Belum
-diimplementasikan.
+Rencana dibuat 2026-11-09, diubah di hari yang sama: owner memilih memakai Pydantic AI. PR 1
+(migrasi loop) diimplementasikan 2026-11-11; Bagian A sudah disesuaikan. PR 2 belum.
 
 ## Masalah
 
@@ -58,43 +58,43 @@ Perilaku loop dan adapter yang harus tetap sama:
 
 ### Bagian A: migrasi loop
 
-**Batas arsitektur.** Pydantic AI diletakkan di adapter, bukan di application layer. Port baru
-`ToolLoop` (`application/ports.py`) punya tanda tangan yang sama dengan `run_tool_loop` hari ini:
-masukannya messages, tools, `run_tool`, dan batas; keluarannya `LoopResult`. Adapter
-`adapters/driven/pydantic_agent.py` mengimplementasikan port itu. `answer_with_agent` hanya
-mengganti pemanggilan `run_tool_loop` dengan port ini. `loop_answer`, guard, cache, dan citation
-tidak berubah.
+Diubah 2026-11-11 saat implementasi (owner memilih opsi ini di Gate 1). Rencana awal memakai
+`OpenAIChatModel` milik Pydantic AI di adapter. Itu ditinggalkan karena extra `[openai]` Pydantic
+AI butuh `openai>=3.31`, sedangkan repo memakai 3.3, dan karena metering, `extra_body`,
+`strip_think`, serta pembungkusan error harus disalin ulang.
 
-**Isi adapter:**
-- Model: `OpenAIChatModel` dari Pydantic AI dengan `OpenAIProvider(base_url=cfg.llm_base_url,
-  api_key=cfg.llm_api_key)`. `model_settings` membawa `temperature`, `max_tokens`, dan
-  `extra_body`.
-- `extra_body` diambil dari **satu helper bersama** di `openai_llm.py`, yang juga dipakai
-  `openai_llm.py` dan `ragas_scorer.py`. Helper ini hanya mengisi flag thinking-off bila
-  penyedianya DeepSeek. Untuk penyedia lain hasilnya kosong. Tujuannya supaya adapter baru tidak
-  menyalin flag khusus DeepSeek (`DEEPSEEK_NO_THINKING`) ke tempat baru, karena penyedia lain bisa
-  menolak field itu dengan error 400.
-- Tool: dibuat dari skema JSON yang sudah ada (`Tool.from_schema`). Fungsinya hanya memanggil
-  `run_tool(name, args)`, jadi `on_tool` dan `CodeAgentTools.run` tetap persis seperti sekarang.
-  Bila argumen tidak valid, tool mengembalikan teks error, bukan meminta retry.
-- Budget tool call: dihitung di adapter. Begitu batas tercapai, `prepare_tools` mengembalikan
-  daftar tool kosong dan `BUDGET_MESSAGE` disisipkan. Model lalu menjawab sekali lagi tanpa tool,
-  sama seperti sekarang. `UsageLimits` hanya dipakai sebagai pengaman (`request_limit`), bukan
-  sebagai mekanisme budget, karena kalau batasnya tercapai ia melempar error, bukan memaksa
-  model menjawab.
-- Meter token: loop dijalankan dengan `agent.iter`. Setelah setiap respons model, usage-nya
-  dicatat lewat `record_usage`. Dengan begitu budget harian tetap bisa memotong loop di tengah.
-- Thinking: `ThinkingPart` diabaikan dan `strip_think` tetap diterapkan pada teks akhir.
-- Error provider dari Pydantic AI (`ModelHTTPError` dan sejenisnya) dibungkus menjadi
-  `EnigramError`.
-- Hasil: dari pesan-pesan run, adapter membangun `LoopResult` (jawaban, token, jumlah call, trace,
-  `exhausted`).
+**Desain yang dipakai.** `application/pydantic_loop.py` berisi `run_agent_loop`, dengan tanda
+tangan dan `LoopResult` yang sama dengan `run_tool_loop`. Di dalamnya ada `Model` Pydantic AI
+buatan sendiri yang membungkus port `ChatModel`. Pydantic AI menjalankan loop, tetapi setiap
+panggilan model tetap lewat `OpenAIChatModel.chat`, jadi `record_usage` per respons,
+`provider_extra_body`, `strip_think`, dan `EnigramError` tidak berubah dan tidak disalin. Pydantic
+AI tidak melakukan I/O sendiri di sini, jadi modul ini ada di application layer (seperti
+networkx atau yaml). Port `ToolLoop` dan wiring lewat bootstrap tidak diperlukan.
+`answer_with_agent` cukup memanggil `run_agent_loop`.
+
+**Perilaku Pydantic AI yang dikunci supaya sama dengan loop lama:**
+- Tool dibuat dengan `Tool.from_schema(..., sequential=True)`. Defaultnya, Pydantic AI menjalankan
+  tool secara paralel.
+- Argumen yang bukan JSON object dan nama tool yang tidak dikenal dikirim ke satu tool tersembunyi
+  yang menjawab dengan teks. Defaultnya, Pydantic AI meminta retry dan run gagal setelah
+  `max_retries`.
+- Balasan kosong diganti penanda internal. Defaultnya, Pydantic AI meminta retry.
+- Argumen mentah setiap tool call disimpan sesuai urutan. Pydantic AI menulis ulang JSON-nya,
+  padahal request berikutnya harus mengirim teks yang sama persis.
+- Budget: setelah satu putaran tool, bila batas call atau token input tercapai, `BUDGET_MESSAGE`
+  ditambahkan ke request berikutnya (lewat `agent.iter`) dan capability `PrepareTools`
+  mengosongkan daftar tool. `UsageLimits(request_limit=max_tool_calls + 2)` hanya pengaman.
+- `messages` diisi dengan pesan request terakhir, sama seperti loop lama, karena guard membaca
+  tool output dari situ (`tool_evidence`).
+
+`tests/test_pydantic_loop.py` menjalankan loop lama dan baru pada skrip yang sama, lalu
+membandingkan setiap request, urutan tool, `messages`, dan `LoopResult`.
 
 **Baseline eval `agent+repo` tetap memakai `run_tool_loop` lama.** Baseline adalah pembanding.
 Kalau baseline ikut dimigrasi, kita tidak bisa membedakan apakah perubahan skor datang dari
 Pydantic AI. `run_tool_loop` tetap ada, khusus untuk baseline.
 
-**Version pin.** `pydantic-ai-slim[openai]` di-pin ke versi minor tertentu di `pyproject.toml`.
+**Version pin.** `pydantic-ai-slim==2.67.0` (tanpa extra) di-pin di `apps/api/pyproject.toml`.
 API `capabilities` / `ProcessHistory` / `CompactionPart` masih baru, jadi pin ini mencegah
 perubahan diam-diam.
 
@@ -162,20 +162,13 @@ Dua PR berurutan, **tidak bertumpuk**. PR 2 dibuat dari `main` setelah PR 1 merg
 
 **PR 1: migrasi loop (P1-P2).**
 
-- **P1: adapter.** Port `ToolLoop`, adapter Pydantic AI, dan dependency yang di-pin.
-  → verifikasi: unit test adapter dengan `FunctionModel`/`TestModel` milik Pydantic AI untuk
-  setiap baris tabel "Kondisi sekarang":
-  - urutan tool call,
-  - argumen tidak valid menjadi teks,
-  - budget habis → `BUDGET_MESSAGE` lalu satu jawaban tanpa tool,
-  - `exhausted=True`,
-  - `record_usage` dipanggil per respons,
-  - meter yang melewati batas menghentikan loop,
-  - `strip_think`,
-  - `extra_body` dari helper bersama: flag thinking-off terkirim untuk DeepSeek, tidak terkirim
-    untuk penyedia lain,
-  - error provider menjadi `EnigramError`,
-  - `on_tool` terpanggil.
+- **P1: loop.** `run_agent_loop` di atas `ChatModel` dan dependency yang di-pin.
+  → verifikasi: test paritas dengan `run_tool_loop` (request yang sama, tool yang sama, `messages`
+  dan `LoopResult` yang sama) untuk: jawaban langsung, beberapa putaran, argumen tidak valid,
+  tool tidak dikenal, teks bersama tool call, jawaban kosong, budget call, budget token, tool call
+  setelah budget. Ditambah: tool berjalan berurutan, dan error provider atau meter diteruskan apa
+  adanya. Metering, `extra_body`, `strip_think`, dan `EnigramError` tetap di `OpenAIChatModel`
+  dan test-nya yang sudah ada.
 - **P2: dipakai `answer_with_agent`.** Naikkan `AGENT_VERSION`. `run_tool_loop` tetap untuk
   baseline.
   → verifikasi:
@@ -228,9 +221,8 @@ Dua PR berurutan, **tidak bertumpuk**. PR 2 dibuat dari `main` setelah PR 1 merg
   dibuat dengan rencana tanpa framework (versi sebelumnya ada di git history file ini).
 - **API Pydantic AI masih bergerak.** `capabilities` dan `CompactionPart` masih baru. Versi
   di-pin dan API-nya dicek lagi di dokumentasi saat P1 dimulai.
-- **DeepSeek dan `extra_body`.** Pastikan `model_settings` benar-benar meneruskan `extra_body`
-  di setiap panggilan. Kalau tidak, thinking menyala dan error 400 muncul saat
-  `tool_choice=required`. Ini diuji di P1.
+- **DeepSeek dan `extra_body`.** Tidak lagi menjadi risiko: setiap panggilan tetap lewat
+  `OpenAIChatModel.chat`, yang menambahkan `extra_body` seperti sebelumnya.
 
 ## Keputusan untuk owner
 
