@@ -541,7 +541,7 @@ async def test_a_note_change_misses_the_cache(cfg, graph, tmp_path):
 async def test_agent_guard_abstains_and_is_cached(cfg, graph, tmp_path):
     from code_fakes import FakeDecider, noul
 
-    assert code_agent.AGENT_VERSION == "3.4"
+    assert code_agent.AGENT_VERSION == "3.5"
     cache = tmp_path / "cache"
     decider = FakeDecider({"answerable": noul(0.1)}, name="jev")
     chat = ScriptedChat(
