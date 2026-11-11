@@ -27,7 +27,6 @@ from enigram.application.agent_loop import (
     AGENT_MAX_TOOL_CALLS,
     loop_answer,
     result_from_json,
-    run_tool_loop,
 )
 from enigram.application.annotations import attach_notes
 from enigram.application.code_embeddings import rank_search
@@ -44,6 +43,7 @@ from enigram.application.ports import (
     DecisionProvider,
     KnowledgeEngine,
 )
+from enigram.application.pydantic_loop import run_agent_loop
 from enigram.application.repo_store import GitTools, store_path
 from enigram.application.repo_sync import check_repo_url
 from enigram.config import Config
@@ -64,8 +64,8 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.4"  # bump when tool output, the prompt or the guard changes: busts the cache;
-# 3.3: search_code fuses vector hits
+AGENT_VERSION = "3.5"  # bump when tool output, the prompt or the guard changes: busts the cache;
+# 3.3: search_code fuses vector hits; 3.5: the loop runs on Pydantic AI
 AGENT_MAX_REPOS = 3
 GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
@@ -752,7 +752,7 @@ async def answer_with_agent(
 
     start = time.perf_counter()
     counting = _CountingChat(chat)
-    loop = await run_tool_loop(
+    loop = await run_agent_loop(
         counting,
         messages,
         tool_set,
