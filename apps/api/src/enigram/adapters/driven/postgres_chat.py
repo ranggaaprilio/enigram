@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS chat_sessions_owner ON chat_sessions (workspace, owner, updated_at);
+-- Chat memory: the turns that left the history window, summarized (plans/chat-memory.md).
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary_upto BIGINT;
 CREATE TABLE IF NOT EXISTS chat_messages (
     id BIGSERIAL PRIMARY KEY,
     session_id BIGINT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
@@ -50,7 +53,7 @@ CREATE TABLE IF NOT EXISTS chat_agents (
 );
 """
 
-SESSION_COLUMNS = "id, owner, title, agent, shared, created_at, updated_at"
+SESSION_COLUMNS = "id, owner, title, agent, shared, created_at, updated_at, summary, summary_upto"
 MESSAGE_COLUMNS = "id, session_id, role, agent, text, query_id, tokens, error, created_at"
 AGENT_COLUMNS = (
     "name, label, description, route, focus, note_types, created_by, created_at, updated_at"
@@ -116,16 +119,23 @@ class PostgresChat:
         title: str | None = None,
         shared: bool | None = None,
         agent: str | None = None,
+        summary: str | None = None,
+        summary_upto: int | None = None,
     ) -> ChatSession | None:
         row = await self.pool.fetchrow(
             "UPDATE chat_sessions SET title = coalesce($3, title), shared = coalesce($4, shared), "
-            f"agent = coalesce($5, agent) WHERE workspace = $1 AND id = $2 "
+            "agent = coalesce($5, agent), "
+            # A summary only replaces an older one: two turns' updates may finish out of order.
+            "summary = CASE WHEN summary_upto >= $7 THEN summary ELSE coalesce($6, summary) END, "
+            "summary_upto = greatest(summary_upto, $7) WHERE workspace = $1 AND id = $2 "
             f"RETURNING {SESSION_COLUMNS}",
             self.workspace,
             session_id,
             title,
             shared,
             agent,
+            summary,
+            summary_upto,
         )
         return _session(row) if row else None
 

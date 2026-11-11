@@ -687,6 +687,7 @@ async def answer_with_agent(
     guard_question: str | None = None,
     focus: str | None = None,
     docs: KnowledgeEngine | None = None,
+    summary: str = "",
 ) -> QueryResult:
     """With `decider`, the abstain guard runs on the answer (part of the system: the guarded
     answer is what gets cached); with `embedder`, search_code also ranks by code embeddings.
@@ -695,7 +696,9 @@ async def answer_with_agent(
     `guard_question` is what the abstain guard reads instead of `question` (a follow-up
     rewritten to stand alone); `focus` (a chat agent's) is added to the system prompt. With
     `docs` (the chat's agent route), the documents and team notes are tools too, no repository
-    is needed, and the answer is not cached: no document index version is in the key."""
+    is needed, and the answer is not cached: no document index version is in the key.
+    `summary` (a chat's, of the turns before `history`) comes in front of the history; it is
+    not evidence for the guard, being an unchecked model text (plans/chat-memory.md, D2)."""
     repos = await graph_repo.list_repos()
     if not repos and docs is None:
         raise EnigramError("No repository indexed; run `enigram repo <url>`")
@@ -719,6 +722,8 @@ async def answer_with_agent(
             cache_key += "\n" + json.dumps(history, sort_keys=True)
         if focus:
             cache_key += "\nfocus: " + focus
+        if summary:  # a chat's summary of its earlier turns
+            cache_key += "\nsummary: " + summary
         key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
         if path.exists():
@@ -759,6 +764,7 @@ async def answer_with_agent(
         run_tool,
         max_tool_calls=max_tool_calls,
         max_input_tokens=max_input_tokens,
+        summary=summary,
     )
     result = loop_answer(
         question,

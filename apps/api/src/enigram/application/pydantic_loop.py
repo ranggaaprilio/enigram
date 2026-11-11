@@ -6,6 +6,7 @@ Where Pydantic AI would act differently, this pins the old behaviour: tools run 
 bad call (invalid or non-object JSON arguments, an unknown tool) is answered as text instead of a
 retry, and an empty reply is an empty answer instead of a retry."""
 
+import dataclasses
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -13,8 +14,9 @@ from typing import Any
 import pydantic_ai
 from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.agent import ModelRequestNode
-from pydantic_ai.capabilities import PrepareTools
+from pydantic_ai.capabilities import PrepareTools, ProcessHistory
 from pydantic_ai.messages import (
+    CompactionPart,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -42,6 +44,11 @@ pydantic_ai.BANNER_ENABLED = False  # the CLI owns its output
 
 # The tool a bad call goes to, with its name and raw arguments: answered, not retried.
 _BAD_CALL = "_enigram_bad_call"
+# How the chat's summary of its earlier turns is sent: in the user's voice, like Pydantic AI's own
+# providers send a CompactionPart the application wrote.
+SUMMARY_INTRO = (
+    "A separate model summarized the earlier part of this conversation (it may be incomplete):"
+)
 # Stands for an empty reply, which Pydantic AI would otherwise send back for a retry. It ends the
 # run, so it is never sent to the model again.
 _EMPTY = "\x00empty"
@@ -70,6 +77,9 @@ def _to_openai(
                     out.append({"role": "system", "content": part.content})
                 elif isinstance(part, UserPromptPart):
                     out.append({"role": "user", "content": part.content})
+                elif isinstance(part, CompactionPart):
+                    summary = f"<conversation_summary>\n{part.content}\n</conversation_summary>"
+                    out.append({"role": "user", "content": f"{SUMMARY_INTRO}\n{summary}"})
                 elif isinstance(part, ToolReturnPart):
                     call_id = calls[part.tool_call_id][0]
                     out.append({"role": "tool", "tool_call_id": call_id, "content": part.content})
@@ -109,7 +119,7 @@ def _from_openai(messages: list[dict[str, Any]]) -> list[ModelMessage]:
     return out
 
 
-class _ChatModelAdapter(Model):
+class ChatModelAdapter(Model):
     """A Pydantic AI model over the ChatModel port. Keeps what LoopResult needs: the last reply,
     the token totals and the last request's messages."""
 
@@ -138,7 +148,10 @@ class _ChatModelAdapter(Model):
     ) -> ModelResponse:
         self.sent = _to_openai(messages, self.calls)
         tools = self.tools if model_request_parameters.function_tools else None
-        reply = await self.chat.chat(self.sent, tools=tools, temperature=0.0)
+        kwargs: dict[str, Any] = {}
+        if model_settings and model_settings.get("max_tokens"):
+            kwargs["max_tokens"] = model_settings["max_tokens"]
+        reply = await self.chat.chat(self.sent, tools=tools, temperature=0.0, **kwargs)
         self.reply = reply
         self.tokens_in += reply.tokens_in
         self.tokens_out += reply.tokens_out
@@ -164,10 +177,12 @@ async def run_agent_loop(
     *,
     max_tool_calls: int = AGENT_MAX_TOOL_CALLS,
     max_input_tokens: int = AGENT_MAX_INPUT_TOKENS,
+    summary: str = "",
 ) -> LoopResult:
     """`run_tool_loop` on Pydantic AI. `messages` (system, history, question) ends up as the
-    last request's messages, as there: extended with the assistant and tool turns."""
-    model = _ChatModelAdapter(chat, tools)
+    last request's messages, as there: extended with the assistant and tool turns. A chat's
+    `summary` of the turns before its history comes in front of them (plans/chat-memory.md)."""
+    model = ChatModelAdapter(chat, tools)
     out = LoopResult(reply=model.reply)
 
     async def call(name: str, args: Any) -> str:
@@ -186,6 +201,18 @@ async def run_agent_loop(
     async def bad_call(name: str, raw: str) -> str:
         return await call(name, _decode(raw))  # an unknown tool's still reach run_tool
 
+    def remember(history: list[ModelMessage]) -> list[ModelMessage]:
+        """Before every model call: the summary after the system prompt, once. Deterministic
+        and cheap, and this run's own messages (tool calls and their returns) stay as they are."""
+        if any(isinstance(p, CompactionPart) for m in history for p in m.parts):
+            return history
+        first, *rest = history  # the request with the system prompt
+        n = 0
+        while n < len(first.parts) and isinstance(first.parts[n], SystemPromptPart):
+            n += 1
+        parts = [*first.parts[:n], CompactionPart(summary), *first.parts[n:]]
+        return [dataclasses.replace(first, parts=parts), *rest]
+
     async def budget(ctx: RunContext[None], defs: list[ToolDefinition]) -> list[ToolDefinition]:
         return [] if out.exhausted else defs
 
@@ -203,7 +230,10 @@ async def run_agent_loop(
     agent_tools.append(
         Tool.from_schema(bad_call, _BAD_CALL, None, {"type": "object"}, sequential=True)
     )
-    agent = Agent(model, tools=agent_tools, capabilities=[PrepareTools(budget)])
+    capabilities: list[Any] = [PrepareTools(budget)]
+    if summary:
+        capabilities.append(ProcessHistory(remember))
+    agent = Agent(model, tools=agent_tools, capabilities=capabilities)
     # Every round calls a tool, so the budget answer comes by request max_tool_calls + 1.
     limits = UsageLimits(request_limit=max_tool_calls + 2)
     async with agent.iter(message_history=_from_openai(messages), usage_limits=limits) as run:

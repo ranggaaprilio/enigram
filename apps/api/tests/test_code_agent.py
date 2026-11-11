@@ -918,3 +918,34 @@ async def test_the_agent_route_answers_without_repos_and_is_not_cached(cfg, tmp_
     assert "indexed TypeScript repos" not in chat.calls[0]["messages"][0]["content"]
     assert [(s.ref, s.origin) for s in result.sources] == [(1, "document")]
     assert not cache.exists() or not any(cache.iterdir())
+
+
+async def test_the_summary_reaches_the_agent_and_the_cache_key_but_not_the_guard(
+    cfg, graph, tmp_path
+):
+    from code_fakes import FakeDecider, noul
+
+    history = [
+        {"role": "user", "content": "Who may call /users?"},
+        {"role": "assistant", "content": "Only admins."},
+    ]
+    decider = FakeDecider({"answerable": noul(0.9)}, name="jev")
+    chat = ScriptedChat(
+        [tool_reply(("find_symbol", _args(name="AppController"))), answer_reply(FINAL)]
+    )
+    cache = tmp_path / "cache"
+    summary = "Earlier: the user asked about RefreshTokenService."
+
+    await answer_with_agent(
+        cfg, chat, graph, "q", cache_dir=cache, decider=decider, history=history, summary=summary
+    )
+
+    assert summary in chat.calls[0]["messages"][1]["content"]
+    ((state, _),) = decider.calls
+    assert "RefreshTokenService" not in state["evidence"]  # an unchecked model text (D2)
+    # Another summary is another answer, not the cached one.
+    other = ScriptedChat([answer_reply(FINAL)])
+    await answer_with_agent(
+        cfg, other, graph, "q", cache_dir=cache, history=history, summary="Earlier: nothing."
+    )
+    assert len(other.calls) == 1

@@ -153,3 +153,24 @@ async def test_a_provider_or_meter_error_stops_the_loop_as_is():
 
     with pytest.raises(EnigramError, match="daily token budget"):
         await run_agent_loop(Failing(), [dict(m) for m in START], TOOLS, run_tool)
+
+
+async def test_the_summary_comes_once_before_the_earlier_turns_in_every_request():
+    chat = ScriptedChat([tool_reply(("grep", '{"q": "a"}')), answer_reply("done")])
+    messages = [dict(m) for m in START]
+
+    async def run_tool(name, args):
+        return "out"
+
+    await run_agent_loop(chat, messages, TOOLS, run_tool, summary="Earlier: AuthService.")
+
+    for call in chat.calls:  # the tool round's request too: added once, never again
+        sent = call["messages"]
+        assert [m["role"] for m in sent[:4]] == ["system", "user", "user", "assistant"]
+        assert (
+            "<conversation_summary>\nEarlier: AuthService.\n</conversation_summary>"
+            in (sent[1]["content"])
+        )
+        assert sum("conversation_summary" in str(m["content"]) for m in sent) == 1
+    assert chat.calls[1]["messages"][-1]["role"] == "tool"  # this run's turns untouched
+    assert messages[1] == chat.calls[1]["messages"][1]  # in place, as the requests

@@ -214,7 +214,11 @@ class ChatRepository(Protocol):
         title: str | None = None,
         shared: bool | None = None,
         agent: str | None = None,
-    ) -> "ChatSession | None": ...
+        summary: str | None = None,
+        summary_upto: int | None = None,
+    ) -> "ChatSession | None":
+        """Sets what is not None; a summary only with a summary_upto above the stored one."""
+        ...
 
     async def delete_session(self, session_id: int) -> bool:
         """False when there was none; its messages go with it."""

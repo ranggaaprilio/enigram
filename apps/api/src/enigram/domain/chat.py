@@ -18,6 +18,10 @@ CHAT_TITLE_MAX_CHARS = 120
 # either limit is reached. Resent with every tool call of the answer, so kept small.
 HISTORY_MAX_TURNS = 6  # question + answer pairs
 HISTORY_MAX_TOKENS = 3000
+# Chat memory (plans/chat-memory.md, D1): the turns that leave that window are summarized once
+# this many are waiting, into a summary of at most this many tokens.
+SUMMARY_BATCH_TURNS = 3
+SUMMARY_MAX_TOKENS = 800
 # C3: one question to several agents at once ("@business @qa ..."); each costs a full answer.
 PANEL_MAX_AGENTS = 3
 ROLES = ("user", "agent")
@@ -104,6 +108,10 @@ class ChatSession:
     shared: bool  # readable by every member of the workspace
     created_at: datetime
     updated_at: datetime  # the latest message
+    # The turns that left the history window, summarized for the agent (plans/chat-memory.md);
+    # summary_upto: the id of the last question it covers, None before the first one.
+    summary: str = ""
+    summary_upto: int | None = None
 
 
 @dataclass(frozen=True)
