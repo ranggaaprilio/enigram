@@ -127,7 +127,7 @@ describe('Dashboard', () => {
     const knowledge = panel('Knowledge')
     expect(await within(knowledge).findByRole('link', { name: 'org-white-board' })).toHaveAttribute(
       'href',
-      '/dashboard/repos/4',
+      '/documents/repos/4',
     )
     expect(within(knowledge).getByText('Behind')).toBeInTheDocument()
     expect(within(knowledge).getByText('Polling updates')).toBeInTheDocument()
