@@ -25,6 +25,7 @@ import Empty from '@/components/Empty'
 import Loading from '@/components/Loading'
 import ErrorAlert from '@/components/ErrorAlert'
 import PageHeader from '@/components/PageHeader'
+import RepoTable from '@/components/RepoTable'
 import StatusBadge from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
@@ -387,6 +388,13 @@ export default function Documents() {
         </ul>
       )}
 
+      <section aria-label="Repositories" className="mb-8">
+        <h2 className="mt-0 mb-3">Repositories</h2>
+        {/* Reloaded each time one of this tab's repository jobs finishes. */}
+        <RepoTable refresh={repoJobs.filter((r) => !repoActive(r)).length} />
+      </section>
+
+      <h2 className="mt-0 mb-3">Documents</h2>
       {loadError && <ErrorAlert>{loadError}</ErrorAlert>}
       {deleteError && <ErrorAlert>{deleteError}</ErrorAlert>}
       {docs === null && !loadError && <Loading />}

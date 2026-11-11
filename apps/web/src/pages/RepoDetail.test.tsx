@@ -62,9 +62,9 @@ function renderAs(role: Role, routes: Record<string, Reply> = {}, id = '4') {
   render(
     asRole(
       role,
-      <MemoryRouter initialEntries={[`/dashboard/repos/${id}`]}>
+      <MemoryRouter initialEntries={[`/documents/repos/${id}`]}>
         <Routes>
-          <Route path="/dashboard/repos/:id" element={<RepoDetail />} />
+          <Route path="/documents/repos/:id" element={<RepoDetail />} />
         </Routes>
       </MemoryRouter>,
     ),
@@ -116,5 +116,11 @@ describe('Repository detail', () => {
   it('says when the repository does not exist', async () => {
     renderAs('viewer', {}, '99')
     expect(await screen.findByText('Repository 99 not found.')).toBeInTheDocument()
+  })
+
+  it('links back to Documents', async () => {
+    renderAs('viewer')
+    expect(await screen.findByRole('heading', { name: 'org-white-board' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Documents' })).toHaveAttribute('href', '/documents')
   })
 })

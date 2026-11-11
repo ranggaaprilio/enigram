@@ -1,7 +1,8 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { DocumentRow } from '../api'
+import type { DocumentRow, RepoStat } from '../api'
 import { asRole } from '../test/access'
 import { mockFetch } from '../test/mockFetch'
 import Documents from './Documents'
@@ -20,6 +21,23 @@ function row(book: string, changes: Partial<DocumentRow> = {}): DocumentRow {
     job: null,
     ...changes,
   }
+}
+
+const REPO: RepoStat = {
+  id: 4,
+  name: 'org-handbook',
+  url: 'https://github.com/org/handbook',
+  ref: null,
+  indexed_sha: 'abc1234def',
+  commit_at: '2026-11-01T10:00:00Z',
+  indexed_at: '2026-11-01T10:05:00Z',
+  remote: { status: 'current', sha: null, checked_at: '2026-11-01T11:00:00Z', error: null },
+  updates: 'poll',
+  last_run: null,
+  files: 12,
+  symbols: 0,
+  entrypoints: 0,
+  documents: 12,
 }
 
 const job = (id: number) => ({
@@ -42,10 +60,12 @@ describe('Documents', () => {
   it('keeps polling while the API keeps failing with the same error', async () => {
     vi.useFakeTimers()
     let calls = 0
-    const fetch = vi.fn(async () =>
-      ++calls === 1
-        ? Response.json([row('a', { status: 'queued' })])
-        : Response.json({ detail: 'API restarting' }, { status: 502 }),
+    const fetch = vi.fn(async (url: string) =>
+      url === '/api/stats/repos'
+        ? Response.json([])
+        : ++calls === 1
+          ? Response.json([row('a', { status: 'queued' })])
+          : Response.json({ detail: 'API restarting' }, { status: 502 }),
     )
     vi.stubGlobal('fetch', fetch)
     render(<Documents />)
@@ -53,7 +73,7 @@ describe('Documents', () => {
     await act(() => vi.advanceTimersByTimeAsync(0))
     for (let i = 0; i < 3; i++) await act(() => vi.advanceTimersByTimeAsync(3000))
 
-    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/documents')).toHaveLength(4)
   })
 
   it('lists documents with their status and errors', async () => {
@@ -138,7 +158,7 @@ describe('Documents', () => {
         listed = [row('paper', { status: 'deleting' })]
         return Response.json({ book: 'paper', status: 'deleting', job: null }, { status: 202 })
       }
-      return Response.json(listed)
+      return Response.json(_url === '/api/stats/repos' ? [] : listed)
     })
     vi.stubGlobal('fetch', fetch)
     render(<Documents />)
@@ -293,6 +313,33 @@ describe('Documents', () => {
     render(<Documents />)
 
     expect(await screen.findByText('from github.com/org/handbook')).toBeInTheDocument()
+  })
+
+  it('lists indexed repositories, each opening its detail page under Documents', async () => {
+    mockFetch({
+      'GET /api/documents': { body: [] },
+      'GET /api/stats/repos': { body: [REPO] },
+    })
+    render(
+      <MemoryRouter>
+        <Documents />
+      </MemoryRouter>,
+    )
+
+    const repos = await screen.findByRole('region', { name: 'Repositories' })
+    expect(await within(repos).findByRole('link', { name: 'org-handbook' })).toHaveAttribute(
+      'href',
+      '/documents/repos/4',
+    )
+    expect(within(repos).getByText('Up to date')).toBeInTheDocument()
+  })
+
+  it('says when no repository is indexed', async () => {
+    mockFetch({ 'GET /api/documents': { body: [] }, 'GET /api/stats/repos': { body: [] } })
+    render(<Documents />)
+
+    const repos = screen.getByRole('region', { name: 'Repositories' })
+    expect(await within(repos).findByText('No repository indexed.')).toBeInTheDocument()
   })
 })
 

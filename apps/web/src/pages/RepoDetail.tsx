@@ -78,8 +78,8 @@ export default function RepoDetail() {
   }
 
   const back = (
-    <WsLink to="/dashboard" className="mb-4 inline-flex items-center gap-1 text-sm">
-      <ArrowLeft className="size-4" /> Dashboard
+    <WsLink to="/documents" className="mb-4 inline-flex items-center gap-1 text-sm">
+      <ArrowLeft className="size-4" /> Documents
     </WsLink>
   )
   if (!valid || notFound)

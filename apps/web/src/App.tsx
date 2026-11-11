@@ -41,6 +41,10 @@ function Moved({ to, tab }: { to: string; tab?: string }) {
   return <Navigate replace to={`/w/${workspace}/${to}${query ? `?${query}` : ''}`} />
 }
 
+function RepoMoved() {
+  return <Moved to={`documents/repos/${useParams().id}`} />
+}
+
 // The item a page shows, for the breadcrumb: a query, a symbol, a note.
 function itemOf(segment: string, pathname: string, search: string): string | null {
   const params = new URLSearchParams(search)
@@ -52,8 +56,8 @@ function itemOf(segment: string, pathname: string, search: string): string | nul
     const id = pathname.split('/')[4]
     return id ? `Query ${id}` : null
   }
-  if (segment === 'dashboard') {
-    const [, , , , kind, id] = pathname.split('/') // /w/<ws>/dashboard/repos/<id>
+  if (segment === 'documents') {
+    const [, , , , kind, id] = pathname.split('/') // /w/<ws>/documents/repos/<id>
     return kind === 'repos' && id ? `Repository ${id}` : null
   }
   if (segment === 'knowledge') {
@@ -205,6 +209,7 @@ function WorkspaceShell({ home }: { home: string }) {
               <Routes key={workspace}>
                 <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="documents" element={<Documents />} />
+                <Route path="documents/repos/:id" element={<RepoDetail />} />
                 {/* The Ask page became the Auto agent of Chat (2026-11-08). */}
                 <Route path="ask" element={<Moved to="chat" />} />
                 <Route path="chat/:id?" element={<Chat />} />
@@ -217,7 +222,8 @@ function WorkspaceShell({ home }: { home: string }) {
                 <Route path="trace/:id" element={<TraceDetail />} />
                 <Route path="graph" element={<Graph />} />
                 <Route path="dashboard" element={<Dashboard />} />
-                <Route path="dashboard/repos/:id" element={<RepoDetail />} />
+                {/* Before 2026-11-12 a repository's page was under the Dashboard. */}
+                <Route path="dashboard/repos/:id" element={<RepoMoved />} />
                 <Route path="memory" element={<Memory />} />
                 <Route path="members" element={<Members />} />
                 <Route path="agents" element={<Agents />} />

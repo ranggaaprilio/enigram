@@ -45,8 +45,8 @@ The sidebar (a drawer on a phone) groups the pages:
 5. **Knowledge**: documents per status, each repository's commit, index time and size.
 6. **Token usage** against the daily budget, per key for admins.
 
-Hover or focus a day's bar to read it. A repository's name opens its page
-(`/dashboard/repos/<id>`): the indexed commit and its date, whether the remote has commits not
+Hover or focus a day's bar to read it. A repository's name opens its page under Documents
+(`/documents/repos/<id>`; old `/dashboard/repos/<id>` links land there): the indexed commit and its date, whether the remote has commits not
 indexed yet, the index history, graph quality, summaries, what the last run did to the notes, and
 *Re-index now* for maintainers. An owner also sees *All workspaces* at the foot of the page.
 
@@ -88,7 +88,8 @@ that entity, code sources have an *Annotate* link, note sources open the note.
 ### Documents
 
 Drop PDF or Markdown files to upload them, or add a Git repository (with an access token for a
-private one). The table follows each job until it is indexed or failed. See
+private one). *Repositories* lists every indexed repository, as on the Dashboard; a name opens
+its page. The documents table follows each job until it is indexed or failed. See
 [Index a Git repository](repositories.md).
 
 ### Knowledge → Explore
