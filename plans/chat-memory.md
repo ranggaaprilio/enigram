@@ -1,7 +1,9 @@
 # Memori chat dengan Pydantic AI
 
 Rencana dibuat 2026-11-09, diubah di hari yang sama: owner memilih memakai Pydantic AI. PR 1
-(migrasi loop) diimplementasikan 2026-11-11; Bagian A sudah disesuaikan. PR 2 belum.
+(migrasi loop) merged 2026-11-11 (#75). PR 2 (memori chat) diimplementasikan 2026-11-11; Bagian
+B sudah disesuaikan. Keputusan owner 2026-11-11: D1 sesuai usul (800 token, batch 3, history 6
+pasang / 3000 token), D2 tidak, D3 tidak (untuk sekarang), D4 uji manual saja.
 
 ## Masalah
 
@@ -112,7 +114,8 @@ NOT EXISTS` sesuai pola di `postgres_jobs.py`:
 | `summary_upto` | `BIGINT` | `id` pesan terakhir yang sudah tercakup ringkasan; `NULL` = belum ada |
 
 `ChatSession` dan `ChatRepository.update_session` mendapat field yang sama. Session yang sudah ada
-otomatis berisi ringkasan kosong, jadi perilakunya tetap seperti sekarang.
+otomatis berisi ringkasan kosong, jadi perilakunya tetap seperti sekarang. `session_json` tidak
+mengirim kedua field ini: ringkasan hanya untuk agent, API dan UI tidak berubah.
 
 **History tetap disimpan sebagai teks.** Tool call dan tool output tidak ikut disimpan. History
 teks diubah menjadi `ModelRequest`/`ModelResponse` di adapter. Format seluruh pesan Pydantic AI
@@ -120,8 +123,9 @@ teks diubah menjadi `ModelRequest`/`ModelResponse` di adapter. Format seluruh pe
 dan mengikat skema database ke format internal satu library.
 
 **Membuat ringkasan.** Ringkasan dibuat oleh `Agent` Pydantic AI kecil (`summarize_agent`, model
-yang sama) di `ask`, **setelah** semua jawaban giliran itu tersimpan dan dikirim lewat `emit`.
-Jadi pengguna tidak menunggu proses ringkasan.
+yang sama lewat `ChatModelAdapter`) di `update_summary` (`application/chat_memory.py`). Fungsi ini
+dipanggil oleh giliran chat di `http_api.py` **setelah** stream SSE ditutup, jadi pengguna tidak
+menunggu proses ringkasan. (Rencana awal: di akhir `ask`; dipindah supaya stream tidak tertahan.)
 
 1. Ambil giliran yang keluar dari jendela history dan `id`-nya lebih besar dari `summary_upto`.
 2. Kalau jumlahnya kurang dari `SUMMARY_BATCH_TURNS` (usul: 3), lewati. Batching ini menjaga
@@ -137,11 +141,15 @@ panggilan model**, termasuk setiap putaran tool. Kalau ringkasan dibuat di sana,
 berkali-kali dalam satu jawaban. Contoh di dokumentasi Pydantic AI memang meringkas di processor,
 tetapi itu untuk run pendek tanpa ringkasan yang disimpan.
 
-**Memakai ringkasan: `ProcessHistory`.** Processor-nya deterministik dan murah:
-- bagian history dari giliran sebelumnya diganti dengan `CompactionPart(summary)` + giliran
-  terbaru di dalam jendela (`HISTORY_MAX_TURNS` dan `HISTORY_MAX_TOKENS`, logika `history_of`
-  dipindah ke sini),
-- pesan dari run saat ini (pertanyaan, tool call, tool output) **tidak disentuh**, supaya
+**Memakai ringkasan: `ProcessHistory`.** Processor-nya (`remember` di `run_agent_loop`)
+deterministik dan murah:
+- `CompactionPart(summary)` disisipkan **satu kali**, tepat setelah system prompt dan sebelum
+  giliran history. `_to_openai` mengirimnya sebagai pesan user dalam `<conversation_summary>`,
+  dengan keterangan bahwa model lain yang menulisnya.
+- Jendela history tetap dihitung di `history_of` (dipecah menjadi `_pairs` dan `_window_start`,
+  yang juga dipakai `turns_to_summarize`), karena rewrite standalone dan guard juga memakai
+  jendela yang sama. Rencana awal memindahkan logika ini ke processor.
+- Pesan dari run saat ini (pertanyaan, tool call, tool output) **tidak disentuh**, supaya
   pasangan tool call dan tool return tidak terputus.
 
 Ringkasan juga masuk ke `standalone_question`. Contoh: pertanyaan "service yang tadi itu" bisa
