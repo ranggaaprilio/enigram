@@ -53,8 +53,9 @@ from enigram.domain.chat import (
 from enigram.domain.errors import EnigramError, Forbidden, NotFound
 
 OnTool = Callable[[str, dict[str, Any]], Awaitable[None]]
-# Answers one question of a session: (agent, question, history, on_tool) -> the result.
-Answer = Callable[[ChatAgent, str, list[dict[str, str]], OnTool], Awaitable[QueryResult]]
+# Answers one question of a session: (agent, question, history, on_tool, summary of the turns
+# before the history) -> the result.
+Answer = Callable[[ChatAgent, str, list[dict[str, str]], OnTool, str], Awaitable[QueryResult]]
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 TOKEN_SOURCE = "chat"  # the daily budget's and the Dashboard's source name
 
@@ -72,7 +73,10 @@ TOOL_STEPS = {
 
 
 def session_json(session: ChatSession, owner: str | None) -> dict[str, Any]:
-    return {**asdict(session), "mine": session.owner == owner}
+    """Without the summary: it is for the agent, the conversation itself is on screen."""
+    data = asdict(session)
+    del data["summary"], data["summary_upto"]
+    return {**data, "mine": session.owner == owner}
 
 
 def message_json(message: ChatMessage, result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -259,13 +263,13 @@ STANDALONE_ANSWER_CHARS = 600  # of each earlier answer: enough for what it was 
 
 
 async def standalone_question(
-    model: ChatModel, history: list[dict[str, str]], question: str
+    model: ChatModel, history: list[dict[str, str]], question: str, summary: str = ""
 ) -> str:
-    """`question` rewritten with the conversation's context; itself without a history, or
-    when the rewrite comes back empty."""
-    if not history:
+    """`question` rewritten with the conversation's context, the summary of its earlier turns
+    first; itself without either, or when the rewrite comes back empty."""
+    if not history and not summary:
         return question
-    lines = []
+    lines = [f"(Summary of the earlier turns) {' '.join(summary.split())}"] if summary else []
     for m in history:
         who = "User" if m["role"] == "user" else "Assistant"
         lines.append(f"{who}: {' '.join(m['content'].split())[:STANDALONE_ANSWER_CHARS]}")
@@ -279,36 +283,57 @@ def _label(name: str | None, agents: Agents) -> str:
     return agent.label if agent else (name or "Agent")
 
 
-def history_of(messages: list[ChatMessage], agents: Agents = AGENTS) -> list[dict[str, str]]:
-    """The answered turns before a new question, as chat messages, oldest first: the newest
-    HISTORY_MAX_TURNS pairs that fit in HISTORY_MAX_TOKENS. A question whose answer failed is
-    left out with it. A panel's answers are one answer, each part named by its agent, so a
-    follow-up can say "from the QA answer above"."""
-    turns: list[tuple[str, list[ChatMessage]]] = []
+def _pairs(messages: list[ChatMessage], agents: Agents) -> list[tuple[int, str, str]]:
+    """The answered turns, oldest first, as (question id, question, answer). A question whose
+    answer failed is left out with it. A panel's answers are one answer, each part named by its
+    agent, so a follow-up can say "from the QA answer above"."""
+    turns: list[tuple[ChatMessage, list[ChatMessage]]] = []
     for m in messages:
         if m.role == "user":
-            turns.append((m.text, []))
+            turns.append((m, []))
         elif turns and m.text and not m.error:
             turns[-1][1].append(m)
-    pairs: list[tuple[str, str]] = []
+    pairs: list[tuple[int, str, str]] = []
     for asked, answers in turns:
         if len(answers) == 1:
-            pairs.append((asked, answers[0].text))
+            pairs.append((asked.id, asked.text, answers[0].text))
         elif answers:
             parts = [f"{_label(a.agent, agents)} answer:\n{a.text}" for a in answers]
-            pairs.append((asked, "\n\n".join(parts)))
-    kept: list[tuple[str, str]] = []
-    used = 0
-    for q, a in reversed(pairs[-HISTORY_MAX_TURNS:]):
+            pairs.append((asked.id, asked.text, "\n\n".join(parts)))
+    return pairs
+
+
+def _window_start(pairs: list[tuple[int, str, str]]) -> int:
+    """Where the history window starts: the newest HISTORY_MAX_TURNS pairs that fit in
+    HISTORY_MAX_TOKENS."""
+    start, used = len(pairs), 0
+    while start > max(0, len(pairs) - HISTORY_MAX_TURNS):
+        _, q, a = pairs[start - 1]
         cost = count_tokens(q) + count_tokens(a)
         if used + cost > HISTORY_MAX_TOKENS:
             break
-        kept.insert(0, (q, a))
-        used += cost
+        start, used = start - 1, used + cost
+    return start
+
+
+def history_of(messages: list[ChatMessage], agents: Agents = AGENTS) -> list[dict[str, str]]:
+    """The answered turns before a new question in the history window, as chat messages,
+    oldest first."""
+    pairs = _pairs(messages, agents)
     out: list[dict[str, str]] = []
-    for q, a in kept:
+    for _, q, a in pairs[_window_start(pairs) :]:
         out += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
     return out
+
+
+def turns_to_summarize(
+    messages: list[ChatMessage], summary_upto: int | None, agents: Agents = AGENTS
+) -> list[tuple[int, str, str]]:
+    """The answered turns that left the history window and the summary does not cover yet,
+    as (question id, question, answer), oldest first."""
+    pairs = _pairs(messages, agents)
+    old = pairs[: _window_start(pairs)]
+    return [p for p in old if summary_upto is None or p[0] > summary_upto]
 
 
 async def ask(
@@ -357,7 +382,7 @@ async def ask(
         # Inside the task, so each agent's provider calls count on its own meter.
         with metered(cap, "this answer") as meter:
             try:
-                result = await answer(agent, asked_text, history, on_tool)
+                result = await answer(agent, asked_text, history, on_tool, session.summary)
             except EnigramError as e:
                 query_id = await store.log_query(
                     TOKEN_SOURCE, question, agent.name, error=str(e), api_key=api_key
@@ -405,6 +430,7 @@ async def answer_as(
     question: str,
     history: list[dict[str, str]],
     on_tool: OnTool,
+    summary: str = "",
     *,
     cfg: Config,
     model: ChatModel,
@@ -418,8 +444,9 @@ async def answer_as(
     """One agent's answer. The follow-up rewritten to stand alone picks the route, asks the
     documents (LightRAG gets no history) and is what the abstain guard judges; the code agent
     gets the question itself with the history. The agent route skips the router: the code
-    agent's loop gets the documents and team notes as tools too."""
-    standalone = await standalone_question(model, history, question)
+    agent's loop gets the documents and team notes as tools too. The session's summary of the
+    turns before the history goes into the rewrite and to the code agent."""
+    standalone = await standalone_question(model, history, question, summary)
 
     async def ask_code(docs: KnowledgeEngine | None = None) -> QueryResult:
         return await answer_with_agent(
@@ -436,6 +463,7 @@ async def answer_as(
             guard_question=standalone,
             focus=agent.focus,
             docs=docs,
+            summary=summary,
         )
 
     async def ask_docs() -> QueryResult:

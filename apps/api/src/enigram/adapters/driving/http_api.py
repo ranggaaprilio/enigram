@@ -54,6 +54,7 @@ from enigram.application.chat import (
     session_detail,
     session_json,
 )
+from enigram.application.chat_memory import update_summary
 from enigram.application.code_agent import answer_with_agent, repo_name
 from enigram.application.code_browse import (
     features_view,
@@ -1495,10 +1496,11 @@ def create_app(
         async def engine() -> KnowledgeEngine:  # a workspace's engine opens on first use
             return await request.app.state.workspaces.engine(ws)
 
+        model = ws.deps.generator()
         answer = partial(
             answer_as,
             cfg=ws.cfg,
-            model=ws.deps.generator(),
+            model=model,
             graph=ws.code_graph,
             notes=ws.notes,
             decider=ws.decider,
@@ -1521,6 +1523,11 @@ def create_app(
                 await events.put(("error", {"detail": detail}))
             finally:
                 await events.put(None)
+            # After the stream ends, so nobody waits for it (plans/chat-memory.md).
+            try:
+                await update_summary(ws.cfg, ws.chat, ws.store, model, session.id, owner)
+            except Exception:
+                log.exception("[chat] session %d: the summary failed", session_id)
 
         # Kept referenced until done, so a closed connection does not lose the answer.
         task = asyncio.create_task(turn())

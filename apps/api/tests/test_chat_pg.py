@@ -94,3 +94,30 @@ async def test_custom_agents_per_workspace_and_their_sessions_move_on_delete(cha
     assert await chat.custom_agents() == [] and not await chat.delete_custom_agent(
         "security", "auto"
     )
+
+
+async def test_a_session_keeps_its_summary(chat):
+    s = await chat.create_session("alice@example.com", "New chat", "technical")
+    assert (s.summary, s.summary_upto) == ("", None)  # sessions from before start empty
+
+    summed = await chat.update_session(s.id, summary="Earlier: the refresh flow.", summary_upto=7)
+    assert summed is not None and (summed.summary, summed.summary_upto) == (
+        "Earlier: the refresh flow.",
+        7,
+    )
+    renamed = await chat.update_session(s.id, title="Refresh")
+    assert renamed is not None and renamed.summary_upto == 7  # other updates keep it
+    assert (await chat.session(s.id)).summary == "Earlier: the refresh flow."
+
+
+async def test_an_older_summary_never_replaces_a_newer_one(chat):
+    s = await chat.create_session("alice@example.com", "New chat", "technical")
+    await chat.update_session(s.id, summary="Up to 13.", summary_upto=13)
+
+    stale = await chat.update_session(s.id, summary="Up to 10.", summary_upto=10, title="T")
+
+    assert stale is not None and (stale.summary, stale.summary_upto, stale.title) == (
+        "Up to 13.",
+        13,
+        "T",  # the rest of the update still applies
+    )

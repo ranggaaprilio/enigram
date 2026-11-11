@@ -2,12 +2,18 @@
 
 from datetime import UTC, datetime
 
-from enigram.application.chat import history_of, standalone_question
+from enigram.application.chat import (
+    history_of,
+    session_json,
+    standalone_question,
+    turns_to_summarize,
+)
 from enigram.domain.chat import (
     CHAT_TITLE_MAX_CHARS,
     HISTORY_MAX_TOKENS,
     HISTORY_MAX_TURNS,
     ChatMessage,
+    ChatSession,
     title_of,
 )
 
@@ -55,6 +61,28 @@ def test_history_keeps_the_newest_turns_within_both_limits():
     long = "word " * (HISTORY_MAX_TOKENS // 2)  # two of these overflow the budget
     kept = history_of(_turns(("old", long, None), ("new", long, None)))
     assert [m["content"] for m in kept] == ["new", long]
+
+
+def test_turns_to_summarize_left_the_window_after_the_last_summary():
+    # Answered: q0 and q2..q(N+2), N + 2 pairs, so q0 and q2 are older than the window.
+    messages = _turns(
+        ("q0", "a0", None),
+        ("q1", "", "provider down"),
+        *[(f"q{i}", f"a{i}", None) for i in range(2, HISTORY_MAX_TURNS + 3)],
+    )
+
+    assert turns_to_summarize(messages, None) == [(1, "q0", "a0"), (5, "q2", "a2")]
+    assert turns_to_summarize(messages, 1) == [(5, "q2", "a2")]  # after the summary's last
+    assert turns_to_summarize(messages, 5) == []
+    assert turns_to_summarize(messages[-4:], None) == []  # all in the window
+    window = [m["content"] for m in history_of(messages)]
+    assert "q2" not in window and "q3" in window  # the same window as the history
+
+
+def test_session_json_leaves_the_summary_out():
+    session = ChatSession(1, "alice", "Chat", "technical", False, NOW, NOW, "Earlier: X.", 7)
+    data = session_json(session, "alice")
+    assert "summary" not in data and "summary_upto" not in data and data["mine"]
 
 
 def test_title_is_the_first_question_on_one_line():
@@ -182,3 +210,14 @@ def test_a_custom_agent_is_checked_and_its_note_types_join_the_focus():
     ]:
         with pytest.raises(EnigramError, match=says):
             check_custom_agent(**(base | wrong))
+
+
+async def test_the_rewrite_reads_the_summary_too_even_without_a_history():
+    model = _Rewriter("Which endpoints does RefreshTokenService expose?")
+
+    rewritten = await standalone_question(
+        model, [], "Which endpoints does that service expose?", "Earlier: RefreshTokenService."
+    )
+
+    assert rewritten == "Which endpoints does RefreshTokenService expose?"
+    assert "Earlier: RefreshTokenService." in model.prompts[0]

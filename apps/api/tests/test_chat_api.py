@@ -45,7 +45,7 @@ def chat_env(notes_env, monkeypatch):
     _grant(store, "web", "admin")
     asked = []
 
-    async def standalone(model, history, question):
+    async def standalone(model, history, question, summary=""):
         return f"{question} (about /users)" if history else question
 
     async def fake_agent(
@@ -58,6 +58,7 @@ def chat_env(notes_env, monkeypatch):
                 "guard": guard_question,
                 "focus": focus,
                 "with_docs": kw.get("docs") is not None,
+                "summary": kw.get("summary"),
             }
         )
         if kw.get("docs") is not None:  # the agent route: here, a cheaper document answer
@@ -154,6 +155,28 @@ def test_a_follow_up_sees_the_answered_turns_before_it(chat_env):
         ("user", None),
         ("agent", "The model provider is down"),
     ]
+
+
+def test_after_each_turn_the_summary_is_updated_and_the_next_turn_uses_it(chat_env, monkeypatch):
+    from enigram.adapters.driving import http_api
+
+    client, _, asked = chat_env
+    updated = []
+
+    async def fake_update(cfg, chat, store, model, session_id, api_key):
+        updated.append((session_id, api_key))
+        summary = "Earlier: /users is admin only."
+        await chat.update_session(session_id, summary=summary, summary_upto=1)
+
+    monkeypatch.setattr(http_api, "update_summary", fake_update)
+    sid = _start(client, agent="technical")["id"]
+    for text in ("Who may call /users?", "And a normal user?"):
+        client.post(f"/chat/sessions/{sid}/messages", json={"text": text}, headers=LAPTOP)
+
+    assert updated == [(sid, "laptop-a")] * 2  # after every turn, for the asking key's budget
+    assert [a["summary"] for a in asked] == ["", "Earlier: /users is admin only."]
+    session = client.get(f"/chat/sessions/{sid}", headers=LAPTOP).json()
+    assert "summary" not in str(session)  # for the agent only
 
 
 def test_a_private_session_looks_missing_and_a_shared_one_is_read_only(chat_env):
