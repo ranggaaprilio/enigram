@@ -57,6 +57,7 @@ from enigram.domain.annotation import (
 )
 from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult, Source
 from enigram.domain.budget import BudgetExceeded
+from enigram.domain.citations import check_citations
 from enigram.domain.code import CodeCitation, CodeSymbol
 from enigram.domain.errors import EnigramError
 from enigram.domain.secrets import redact
@@ -64,9 +65,11 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.5"  # bump when tool output, the prompt or the guard changes: busts the cache;
-# 3.3: search_code fuses vector hits; 3.5: the loop runs on Pydantic AI
+AGENT_VERSION = "3.6"  # bump when tool output, the prompt or the guard changes: busts the cache;
+# 3.3: search_code fuses vector hits; 3.5: the loop runs on Pydantic AI; 3.6: citations that
+# point at nothing are removed, tags are never the model's, short sentences are tagged
 AGENT_MAX_REPOS = 3
+CITATION_MAX_FILES = 30  # files whose citations one answer gets checked: each is a git read
 GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
 SNIPPET_CHARS = 100
@@ -290,6 +293,9 @@ class CodeAgentTools:
         self.scope: set[int] = {selected["id"]} if selected else set()
         self.touched: set[int] = set()
         self.gits: dict[int, Any] = {}
+        # (repo id, file) -> its line count at the indexed commit (None: no such file), for
+        # checking the answer's code citations.
+        self.line_counts: dict[tuple[int, str], int | None] = {}
         self.graph_lines: set[tuple[int, str]] = set()
         self.graph_calls = self.graph_hits = self.read_calls = self.reads_on_graph = 0
         self.first_tool: str | None = None
@@ -359,6 +365,45 @@ class CodeAgentTools:
         for notes in found.values():
             self.notes_seen.update((n.id, n) for n in notes)
         return found
+
+    def _git(self, repo: dict[str, Any]) -> Any | None:
+        """The repository's store at its indexed commit, None when the store is missing."""
+        git = self.gits.get(repo["id"])
+        if git is None:
+            root = store_path(self.cfg, repo["url"], repo["ref"])
+            if not (root / "HEAD").exists():
+                return None
+            git = self.gits[repo["id"]] = self.open_git(root, repo["indexed_sha"])
+        return git
+
+    def citation_problem(self, c: CodeCitation) -> str | None:
+        """Why a code citation points at nothing: a commit that is not an indexed one, a file
+        that is not there, lines past its end. None when it is fine, and when it cannot be
+        checked (no store, git failed, a file over the read limit, more than CITATION_MAX_FILES
+        files): a citation is only removed on evidence."""
+        repos = [r for r in self.repos if r["indexed_sha"].startswith(c.sha)]
+        problem = "wrong sha"
+        for r in repos:
+            key = (r["id"], _norm_path(c.file))
+            if key not in self.line_counts:
+                if len(self.line_counts) >= CITATION_MAX_FILES:
+                    return None
+                try:
+                    git = self._git(r)
+                    if git is None:
+                        return None
+                    self.line_counts[key] = git.line_count(c.file)
+                except EnigramError as e:
+                    log.warning("[agent] citation %s not checked: %s", c.file, e)
+                    return None
+            count = self.line_counts[key]
+            if count is None:
+                problem = "missing file"
+            elif not 1 <= c.start <= c.end <= count:
+                problem = "line beyond file"
+            else:
+                return None
+        return problem
 
     def target_of(self, c: CodeCitation) -> str:
         """ "<repo id>:<symbol id>" of the innermost graph hit in the cited file that covers the
@@ -540,12 +585,9 @@ class CodeAgentTools:
             return repo
         if refused := self._allow(repo):
             return refused
-        git = self.gits.get(repo["id"])
+        git = self._git(repo)
         if git is None:
-            root = store_path(self.cfg, repo["url"], repo["ref"])
-            if not (root / "HEAD").exists():
-                return f"repository store missing; re-run enigram repo {repo['url']}"
-            git = self.gits[repo["id"]] = self.open_git(root, repo["indexed_sha"])
+            return f"repository store missing; re-run enigram repo {repo['url']}"
         self.touched.add(repo["id"])
         self.read_calls += 1
         path = args.get("path")
@@ -766,6 +808,15 @@ async def answer_with_agent(
         max_input_tokens=max_input_tokens,
         summary=summary,
     )
+    # Before the sources are made: a citation that points at nothing must not become one.
+    text, invalid = await asyncio.to_thread(
+        check_citations,
+        loop.reply.text,
+        refs=set(tools.doc_citations),
+        notes=set(tools.notes_seen),
+        code_check=tools.citation_problem,
+    )
+    loop = dataclasses.replace(loop, reply=dataclasses.replace(loop.reply, text=text))
     result = loop_answer(
         question,
         loop,
@@ -774,6 +825,7 @@ async def answer_with_agent(
         extra={
             "diagnostics": tools.diagnostics() | {"turns": counting.turns},
             "repos": {r["indexed_sha"][:12]: tools.names[r["id"]] for r in repos},
+            "citations": {"invalid": invalid},
         },
         notes=tools.notes_seen,
         resolve_target=tools.target_of,

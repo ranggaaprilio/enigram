@@ -77,3 +77,49 @@ def test_tags_change_neither_claims_nor_blind_text():
 
     assert normalize_answer(tagged) == normalize_answer(raw)
     assert len(split_claims(tagged)) == len(split_claims(raw)) == 3
+
+
+def test_tags_written_by_the_model_are_replaced():
+    assert tag_origins("X happens here for sure [code].", []) == (
+        "X happens here for sure [unsupported].",
+        {"unsupported": 1},
+    )
+    assert tag_origins(f"X calls the helper {CODE} [document][human].", [])[0] == (
+        f"X calls the helper {CODE} [code]."
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "tagged"),
+    [
+        ("Tokens never expire.", "Tokens never expire [unsupported]."),
+        ("Yes. Tokens never expire.", "Yes [unsupported]. Tokens never expire [unsupported]."),
+        ("Checked here [1].", "Checked here [1] [document]."),  # cited: as before
+        ("- Reads: none.", "- Reads: none."),  # a list item is a label
+        ("1. Reads none.", "1. Reads none."),
+        ("**Summary**", "**Summary**"),  # no sentence end: a label
+        ("In short:", "In short:"),
+        ("**In short:**", "**In short:**"),
+        (  # the number of a bold step is not a sentence
+            "**1. Guard** — the route is protected [1].",
+            "**1. Guard** — the route is protected [1] [document].",
+        ),
+    ],
+)
+def test_short_sentences(text, tagged):
+    assert tag_origins(text, [DOC])[0] == tagged
+
+
+def test_only_tags_in_a_tag_position_are_replaced():
+    assert tag_origins("Pass the [document] flag to the CLI [1].", [DOC])[0] == (
+        "Pass the [document] flag to the CLI [1] [document]."
+    )
+    assert tag_origins("X happens here for sure. [code] Then it really stops.", [])[0] == (
+        "X happens here for sure [unsupported]. Then it really stops [unsupported]."
+    )
+
+
+def test_code_fences_are_not_tagged():
+    answer = "It logs the result [1].\n\n```js\nconsole.log('done.')\nreturn x.\n```\n"
+
+    assert tag_origins(answer, [DOC])[0] == answer.replace("[1].", "[1] [document].")

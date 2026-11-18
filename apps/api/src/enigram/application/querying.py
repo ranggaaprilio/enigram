@@ -8,6 +8,8 @@ from enigram.application.annotations import attach_notes, notes_prompt
 from enigram.application.ports import AnnotationRepository, DecisionProvider, KnowledgeEngine
 from enigram.domain.annotation import Annotation, note_source, parse_note_citations
 from enigram.domain.answer import NO_ANSWER_MARKER, QUERY_MODE, QUERY_MODES, QueryResult
+from enigram.domain.citations import check_citations
+from enigram.domain.code import CITATION
 from enigram.domain.errors import EnigramError
 
 log = logging.getLogger(__name__)
@@ -68,6 +70,15 @@ async def answer_question(
         instructions += "\n" + notes_prompt(found)
     result = await engine.query(question, mode, instructions)
     shown = {n.id: n for n in found}
+    # No repository on this path: an inline code citation cannot be checked, only recorded.
+    answer, invalid = check_citations(
+        result.answer, refs={s.ref for s in result.sources}, notes=set(shown)
+    )
+    unchecked = [m[0] for m in CITATION.finditer(answer)]
+    citations = {"invalid": invalid, "unchecked": unchecked}
+    result = dataclasses.replace(
+        result, answer=answer, extra={**result.extra, "citations": citations}
+    )
     cited = {i: shown[i] for i in dict.fromkeys(parse_note_citations(result.answer)) if i in shown}
     if cited:
         start = max((s.ref for s in result.sources), default=0) + 1

@@ -176,6 +176,20 @@ class GitTools:
         tail = f"\n… lines {last + 1}-{len(lines)} not shown" if last < len(lines) else ""
         return redact(body)[0] + tail
 
+    def line_count(self, path: str) -> int | None:
+        """How many lines the file has at the commit; None when it is not a file read_file
+        reads (missing, a directory, a symbolic link, a secret or skipped path). A file larger
+        than read_file's limit is not counted: EnigramError."""
+        rel = self._clean(path)
+        entry = self._entry(rel) if isinstance(rel, str) and rel else None
+        if entry is None or entry[1] != "blob" or entry[0] == SYMLINK_MODE:
+            return None
+        size = int(self._git("cat-file", "-s", entry[2]).stdout.decode().strip())
+        if size > FILE_MAX_BYTES:
+            raise EnigramError(f"{path}: larger than {FILE_MAX_BYTES} bytes")
+        text = self._git("cat-file", "blob", entry[2]).stdout.decode("utf-8", errors="replace")
+        return len(text.splitlines())
+
     def grep(self, pattern: str, glob: str | None = None) -> str:
         """`git grep -P` at the commit (Perl regex, the syntax Python's `re` accepts); `glob` is
         matched with fnmatch on the repository path, as agent+repo does (`*.ts` matches files in

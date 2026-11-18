@@ -8,7 +8,14 @@ from collections import Counter
 
 from enigram.domain.annotation import NOTE_CITATION
 from enigram.domain.answer import Source
-from enigram.domain.claims import _ABBREVIATIONS, _DOT, _REFERENCES, _SENTENCE_END, MIN_CLAIM_WORDS
+from enigram.domain.claims import (
+    _ABBREVIATIONS,
+    _DOT,
+    _EMPHASIS,
+    _REFERENCES,
+    _SENTENCE_END,
+    MIN_CLAIM_WORDS,
+)
 from enigram.domain.code import CITATION
 from enigram.domain.normalize import _ORIGIN_TAG
 
@@ -16,8 +23,21 @@ ORIGINS = ("code", "summary", "human", "document", "unsupported")
 REFS = re.compile(r"(?<![\w\])])\[(\d+(?:\s*,\s*\d+)*)\]")  # as golden_run._REFS
 _HEADING = re.compile(r"^\s*#{1,6}\s")
 _LIST_MARKER = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
+_STEP_NUMBER = re.compile(r"\d+[.)]")
+_FENCE = re.compile(r"^\s*(```|~~~)")
+# A tag where this module puts one (before the sentence's final punctuation), or opening the
+# sentence (a model writes it after the full stop, which the sentence split leaves there).
+_TAGS = rf"(?:{_ORIGIN_TAG.pattern})+"
+_END_TAGS = re.compile(rf"{_TAGS}(?=[.!?]*[)*\"'”’]*$)", re.IGNORECASE)
+_START_TAGS = re.compile(rf"^(\s*){_TAGS}\s*", re.IGNORECASE)
 _TRAILING_PUNCT = re.compile(r"[.!?]+[)*\"'”’]*$")
 _SECTION_ORIGIN = {"flow": "summary", "code": "code"}
+
+
+def fence_of(line: str) -> str:
+    """The marker of a code fence line (``` or ~~~), "" for any other line."""
+    m = _FENCE.match(line)
+    return m[1] if m else ""
 
 
 def _source_origin(source: Source) -> str:
@@ -37,16 +57,28 @@ def _origins(sentence: str, by_ref: dict[int, Source], notes: set[int]) -> set[s
     return found
 
 
-def _tag(sentence: str, by_ref: dict[int, Source], notes: set[int], counts: Counter) -> str:
+def _is_label(body: str, listed: bool) -> bool:
+    """A short uncited piece that is not a claim: in a list item ("Reads: none"), without a
+    sentence end ("**Summary**", "In short:"), or the number of a step ("**1." of
+    "**1. Guard** — …", which the sentence split cuts off)."""
+    plain = _EMPHASIS.sub("", body).strip()
+    return listed or not _TRAILING_PUNCT.search(plain) or bool(_STEP_NUMBER.fullmatch(plain))
+
+
+def _tag(
+    sentence: str, by_ref: dict[int, Source], notes: set[int], counts: Counter, listed: bool
+) -> str:
     body = sentence.rstrip()
     trailing = sentence[len(body) :]
-    if not body or _ORIGIN_TAG.search(body):  # already tagged: idempotent
-        return sentence
+    # A tag already there was written by the model (or by an earlier pass): tags are made here.
+    body = _START_TAGS.sub(r"\1", _END_TAGS.sub("", body))
+    if not body.strip():
+        return body + trailing
     origins = _origins(body, by_ref, notes)
     if not origins:
         words = _LIST_MARKER.sub("", body).split()
-        if len(words) < MIN_CLAIM_WORDS:
-            return sentence  # a list label like "Reads: none", not a claim
+        if len(words) < MIN_CLAIM_WORDS and _is_label(body, listed):
+            return body + trailing
         origins = {"unsupported"}
     counts.update(origins)
     tag = " " + "".join(f"[{o}]" for o in sorted(origins))
@@ -58,13 +90,14 @@ def _tag(sentence: str, by_ref: dict[int, Source], notes: set[int], counts: Coun
 
 def _tag_line(line: str, by_ref: dict[int, Source], notes: set[int], counts: Counter) -> str:
     protected = line
+    listed = bool(_LIST_MARKER.match(line))
     for abbr in _ABBREVIATIONS:
         protected = protected.replace(abbr, abbr.replace(".", _DOT))
     out, last = [], 0
     for m in _SENTENCE_END.finditer(protected):
-        out.append(_tag(protected[last : m.start()], by_ref, notes, counts) + m.group())
+        out.append(_tag(protected[last : m.start()], by_ref, notes, counts, listed) + m.group())
         last = m.end()
-    out.append(_tag(protected[last:], by_ref, notes, counts))
+    out.append(_tag(protected[last:], by_ref, notes, counts, listed))
     return "".join(out).replace(_DOT, ".")
 
 
@@ -79,10 +112,15 @@ def tag_origins(answer: str, sources: list[Source]) -> tuple[str, dict[str, int]
     }
     counts: Counter = Counter()
     lines = answer.split("\n")
+    fence = ""
     for i, line in enumerate(lines):
-        if _REFERENCES.match(line):
+        if not fence and _REFERENCES.match(line):
             break
-        if not line.strip() or _HEADING.match(line):
+        marker = fence_of(line)
+        if marker and (not fence or marker == fence):
+            fence = "" if fence else marker
+            continue
+        if fence or not line.strip() or _HEADING.match(line):
             continue
         lines[i] = _tag_line(line, by_ref, notes, counts)
     return "\n".join(lines), {o: counts[o] for o in ORIGINS if counts[o]}
