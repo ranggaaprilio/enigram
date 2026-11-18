@@ -3,7 +3,7 @@ which system wrote it: citations, origin tags, headings, the References section,
 
 import re
 
-_REFERENCES = re.compile(r"^\s*(#{1,6}\s*|\*\*)?references\b", re.IGNORECASE)  # as claims.py
+_REFERENCES = re.compile(r"^\s*(#{1,6}\s*|\*\*)?references\b[\W_]*$", re.IGNORECASE)  # as claims.py
 _HEADING = re.compile(r"^\s*#{1,6}\s")
 _LIST_MARKER = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
 _CITATION = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")  # [1], [1, 2]

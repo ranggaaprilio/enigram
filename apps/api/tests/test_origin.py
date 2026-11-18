@@ -154,3 +154,14 @@ def test_a_bracketed_path_segment_is_not_a_document():
         "It renders the page src/[1]/page.tsx:3-4@abc1234567 [code].",
         {"code": 1},
     )
+
+
+@pytest.mark.parametrize(
+    "heading", ["### References", "**References**", "References:", "references"]
+)
+def test_only_a_references_heading_ends_the_body(heading):
+    answer = f"References are checked here [1].\n\n{heading}\n\n- [1] Handbook\n"
+
+    assert tag_origins(answer, [DOC])[0] == (
+        f"References are checked here [1] [document].\n\n{heading}\n\n- [1] Handbook\n"
+    )

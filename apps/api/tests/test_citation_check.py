@@ -74,3 +74,7 @@ def test_a_bracketed_path_segment_is_not_a_reference():
     answer = f"It is the page src/[1]/page.tsx:1-2@{SHA}."
 
     assert check(answer, refs=(), code=lambda c: None) == (answer, [])
+
+
+def test_a_sentence_starting_with_references_is_checked():
+    assert check("References are handled here [9].")[0] == "References are handled here."
