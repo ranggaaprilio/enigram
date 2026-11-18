@@ -26,7 +26,7 @@ async def test_each_claim_sentence_gets_a_verdict():
     decider = _decider(
         choice("supports", supports=0.9),
         choice("contradicts", contradicts=0.85, supports=0.1),
-        choice("supports", supports=0.6),
+        choice("supports", supports=0.4),
     )
 
     result = await verify_answer(decider, _result(answer), TEXTS.get)
@@ -35,7 +35,7 @@ async def test_each_claim_sentence_gets_a_verdict():
     assert [(s["verdict"], s.get("p_supports")) for s in v["sentences"]] == [
         ("verified", 0.9),
         ("contradicted", 0.1),
-        ("unverified", 0.6),  # supports, under the threshold
+        ("unverified", 0.4),  # supports, under the threshold
         ("unsupported", None),
         ("unchecked", None),  # its citation has no text
     ]
@@ -108,3 +108,13 @@ async def test_long_texts_are_clipped_and_split_over_requests(monkeypatch):
     assert [ids for _, ids in decider.calls] == [["0"], ["1"], ["2"]]
     assert all(s["truncated"] for s in result.extra["verification"]["sentences"])
     assert len(decider.calls[0][0]["contexts"]["0"]) == verification.SENTENCE_MAX_CHARS
+
+
+async def test_a_partly_shown_sentence_is_unverified():
+    answer = f"Only this guard checks logins {CODE} [code]."
+    decider = _decider(choice("partly", partly=0.7, supports=0.3))
+
+    result = await verify_answer(decider, _result(answer), TEXTS.get)
+
+    [s] = result.extra["verification"]["sentences"]
+    assert (s["verdict"], s["relation"], s["p_supports"]) == ("unverified", "partly", 0.3)

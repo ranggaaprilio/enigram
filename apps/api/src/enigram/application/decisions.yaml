@@ -14,12 +14,21 @@ sentence_relation:
   # Answer verification (application/verification.py): one sentence of an answer against the
   # text of the sources it cites, not the shared context of claim_relation (the eval uses that
   # one unchanged). {claim} and {context} are filled with the state keys of one sentence.
+  # `partly` (2026-11-18): with three answers a sentence whose citation showed only some of it
+  # was verified (6 of 7 such code sentences on the dev split); it counts as unverified.
   instructions: "How does `{context}` relate to `{claim}`?"
   criteria:
-    supports: the context states the claim or directly implies it is true
+    supports: >-
+      the context shows what the claim mainly asserts; a minor detail beyond it does not matter
+    partly: >-
+      a main assertion of the claim is not shown by the context: an "only", "never" or
+      "no other" it cannot rule out, or a statement about something the context does not cover
     contradicts: the context states the opposite of the claim or implies it is false
     says_nothing: the context does not address the claim either way
-  threshold: 0.8   # P(supports) at or above = verified; from the eval recipe, not yet measured on live answers
+  # P(supports) at or above = verified. 0.5, not the 0.8 of the three-answer questions: on 235
+  # labelled dev sentences (2026-11-18, jev-1.14.0) it left 11-12% of grounded code sentences and
+  # 17% of document ones unverified and caught 12-13 of the 14 not-grounded ones; 0.8 left 44-48%.
+  threshold: 0.5
 answerable:
   type: noul
   # Worded so that a "no, there is none" answer counts when the evidence shows where the thing

@@ -108,5 +108,6 @@ Answers made with `VERIFY_ANSWERS=on` carry per-sentence verdicts (see
 "Answer verification" section counts them per origin and, with `--labels` (no `--judge` needed,
 no model call), compares the judged sentences with the human labels per origin: precision of
 `contradicted`, the share of grounded sentences not marked verified, and the share of
-not-grounded ones not marked verified. An origin with fewer than 30 labelled sentences is marked
+not-grounded ones not marked verified. A judged sentence that holds several claims of the sheet
+is grounded when every labelled one is. An origin with fewer than 30 labelled sentences is marked
 "too few".

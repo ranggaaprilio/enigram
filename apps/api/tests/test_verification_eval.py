@@ -90,3 +90,33 @@ def test_render_marks_too_few_labels(monkeypatch):
 
     assert "| document | 1 | 0 | 0 | 0 | 0 | 0 |" in text
     assert "| document | 1 | — of 0 | 0.000 | — |" in text
+
+
+def test_a_sentence_holding_several_sheet_claims_takes_their_labels():
+    # The tags keep "… [1]. `Foo` only delegates [2]." as one sentence; the sheet has two claims.
+    both = "It makes a new hash [1]. `Foo.update` only delegates here [2]."
+    lead = "**The two configs.** The options take the uri from the config [3]."
+    runs = {
+        "enigram-agent": _run(
+            _item(
+                "b01",
+                _s(both, "verified", "document"),
+                _s(lead, "verified", "document"),
+                _s("Nobody labelled this one [4].", "verified", "document"),
+            ),
+            _item("b02", _s(both, "verified", "document")),
+        )
+    }
+    labels = {
+        ("b01", "It makes a new hash [1]."): True,
+        ("b01", "Foo.update only delegates here [2]."): True,
+        ("b01", "The options take the uri from the config [3]."): True,
+        ("b02", "It makes a new hash [1]."): True,
+        ("b02", "Foo.update only delegates here [2]."): False,
+    }
+
+    data = verification_agreement(runs, labels)["enigram-agent"]
+
+    assert data["judged_without_label"] == 1
+    assert data["agreement"]["document"]["labelled"] == 3
+    assert data["agreement"]["document"]["recall"] == 0.0  # b02: one part is not grounded

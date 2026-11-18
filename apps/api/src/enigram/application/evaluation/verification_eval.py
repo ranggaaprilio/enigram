@@ -6,6 +6,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from enigram.domain.claims import split_claims
 from enigram.domain.normalize import _ORIGIN_TAG
 
 JUDGED = ("verified", "unverified", "contradicted")  # verdicts that came from a decision
@@ -16,6 +17,18 @@ _EMPHASIS = re.compile(r"\*\*|__|`")
 def claim_key(text: str) -> str:
     """A sentence as both the label sheet (split_claims) and the verifier write it."""
     return " ".join(_EMPHASIS.sub("", _ORIGIN_TAG.sub("", text)).split())
+
+
+def _label(labels: dict[tuple[str, str], bool], qid: str, text: str) -> bool | None:
+    """The human label of a verifier sentence. The tags split text that still has its emphasis,
+    so one sentence can hold several sheet claims ("… [1]. `Foo` delegates [2]."): it is
+    grounded when every labelled one is."""
+    exact = labels.get((qid, claim_key(text)))
+    if exact is not None:
+        return exact
+    parts = [labels.get((qid, claim_key(c))) for c in split_claims(text)]
+    found = [p for p in parts if p is not None]
+    return all(found) if found else None
 
 
 def _rate(hits: int, n: int) -> float | None:
@@ -63,7 +76,7 @@ def verification_agreement(
                 providers[f"{v['provider']} {v.get('model', '')}".strip()] += 1
             for s in v.get("sentences", []):
                 verdict = s.get("verdict") or "failed"
-                label = labels.get((item["id"], claim_key(s["text"])))
+                label = _label(labels, item["id"], s["text"])
                 if label is None and verdict in JUDGED:
                     unmatched += 1
                 for origin in s.get("origins") or ["unknown"]:
