@@ -2,11 +2,18 @@
 
 import dataclasses
 import logging
+import re
 
 from enigram.application.abstain import guard_abstain
 from enigram.application.annotations import attach_notes, notes_prompt
 from enigram.application.ports import AnnotationRepository, DecisionProvider, KnowledgeEngine
-from enigram.domain.annotation import Annotation, note_source, parse_note_citations
+from enigram.application.verification import SourceText, verify_answer
+from enigram.domain.annotation import (
+    NOTE_CITATION,
+    Annotation,
+    note_source,
+    parse_note_citations,
+)
 from enigram.domain.answer import NO_ANSWER_MARKER, QUERY_MODE, QUERY_MODES, QueryResult
 from enigram.domain.citations import check_citations
 from enigram.domain.code import CITATION
@@ -48,6 +55,22 @@ def _evidence(result: QueryResult, notes: list[Annotation]) -> str:
     return "\n\n".join(p for p in parts if p.strip())
 
 
+def _source_text(result: QueryResult, notes: dict[int, Annotation]) -> SourceText:
+    """The text of a citation on this path: the chunks of a `[n]`, the text of a `note#N`;
+    an inline code citation has none here (no repository)."""
+
+    def text(citation: str) -> str | None:
+        if m := re.fullmatch(r"\[(\d+)\]", citation):
+            chunks = [c.text for c in result.chunks if c.ref == int(m[1])]
+            return "\n\n".join(chunks) or None
+        if m := NOTE_CITATION.fullmatch(citation):
+            note = notes.get(int(m[1]))
+            return note.text if note else None
+        return None
+
+    return text
+
+
 async def answer_question(
     engine: "KnowledgeEngine",
     question: str,
@@ -56,11 +79,14 @@ async def answer_question(
     *,
     notes: AnnotationRepository | None = None,
     decider: DecisionProvider | None = None,
+    verify: bool = False,
 ) -> QueryResult:
     """The engine's answer with origin tags; with `notes`, the entity and document notes the
     question names or shares words with go into the instructions, and a cited one becomes a
     human source (with a warning line when it is not plainly verified); with `decider`, the
-    abstain guard judges the answer against the notes, entities, relations and chunks it had."""
+    abstain guard judges the answer against the notes, entities, relations and chunks it had;
+    with `verify` too, each claim sentence is judged against the chunks and notes it cites
+    (recorded in extra["verification"] only)."""
     if mode not in QUERY_MODES:
         raise EnigramError(f"mode must be one of {QUERY_MODES}, got {mode!r}")
     # The inline-citation and no-answer rules are always on.
@@ -86,6 +112,8 @@ async def answer_question(
         result = dataclasses.replace(result, sources=[*result.sources, *extra])
     result = attach_notes(result, cited)
     result = await guard_abstain(decider, result, _evidence(result, found))
+    if verify:
+        result = await verify_answer(decider, result, _source_text(result, shown))
     log.info(
         "[query] %s: %d sources, %d chunks (%.1fs)",
         mode,

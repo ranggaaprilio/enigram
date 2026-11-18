@@ -88,17 +88,71 @@ def _tag(
     return body + tag + trailing
 
 
-def _tag_line(line: str, by_ref: dict[int, Source], notes: set[int], counts: Counter) -> str:
+def _pieces(line: str) -> list[tuple[str, str]]:
+    """The sentences of a line, each with the whitespace that follows it; abbreviations' dots
+    are protected (as _DOT) and must be restored by the caller."""
     protected = line
-    listed = bool(_LIST_MARKER.match(line))
     for abbr in _ABBREVIATIONS:
         protected = protected.replace(abbr, abbr.replace(".", _DOT))
     out, last = [], 0
     for m in _SENTENCE_END.finditer(protected):
-        out.append(_tag(protected[last : m.start()], by_ref, notes, counts, listed) + m.group())
+        out.append((protected[last : m.start()], m.group()))
         last = m.end()
-    out.append(_tag(protected[last:], by_ref, notes, counts, listed))
+    out.append((protected[last:], ""))
+    return out
+
+
+def _tag_line(line: str, by_ref: dict[int, Source], notes: set[int], counts: Counter) -> str:
+    listed = bool(_LIST_MARKER.match(line))
+    out = [_tag(piece, by_ref, notes, counts, listed) + gap for piece, gap in _pieces(line)]
     return "".join(out).replace(_DOT, ".")
+
+
+def _body_lines(lines: list[str]) -> list[int]:
+    """The indexes of the lines that hold sentences: not in a code fence, not a heading, before
+    the References section."""
+    out: list[int] = []
+    fence = ""
+    for i, line in enumerate(lines):
+        if not fence and _REFERENCES.match(line):
+            break
+        marker = fence_of(line)
+        if marker and (not fence or marker == fence):
+            fence = "" if fence else marker
+            continue
+        if fence or not line.strip() or _HEADING.match(line):
+            continue
+        out.append(i)
+    return out
+
+
+def citations_of(sentence: str) -> list[str]:
+    """Every citation of a sentence, in order and once: `[n]`, `path:start-end@sha`, `note#N`."""
+    code = [(m.start(), m.end(), m[0]) for m in CITATION.finditer(sentence)]
+    found = [
+        (m.start(), f"[{n}]")
+        for m in REFS.finditer(sentence)
+        if not any(a <= m.start() < b for a, b, _ in code)  # a `[1]` path segment
+        for n in re.split(r"\s*,\s*", m[1])
+    ]
+    found += [(a, c) for a, _, c in code]
+    found += [(m.start(), f"note#{m[1]}") for m in NOTE_CITATION.finditer(sentence)]
+    return list(dict.fromkeys(c for _, c in sorted(found)))
+
+
+def tagged_sentences(answer: str) -> list[tuple[str, list[str]]]:
+    """Every sentence of a tagged answer that carries an origin tag (the claims), without its
+    tags, with its citations; an `[unsupported]` one has none."""
+    out = []
+    lines = answer.split("\n")
+    for i in _body_lines(lines):
+        for piece, _ in _pieces(lines[i]):
+            body = piece.replace(_DOT, ".").strip()
+            if not _END_TAGS.search(body):
+                continue
+            text = _LIST_MARKER.sub("", _END_TAGS.sub("", body))
+            out.append((text, [] if "[unsupported]" in body else citations_of(text)))
+    return out
 
 
 def tag_origins(answer: str, sources: list[Source]) -> tuple[str, dict[str, int]]:
@@ -112,15 +166,6 @@ def tag_origins(answer: str, sources: list[Source]) -> tuple[str, dict[str, int]
     }
     counts: Counter = Counter()
     lines = answer.split("\n")
-    fence = ""
-    for i, line in enumerate(lines):
-        if not fence and _REFERENCES.match(line):
-            break
-        marker = fence_of(line)
-        if marker and (not fence or marker == fence):
-            fence = "" if fence else marker
-            continue
-        if fence or not line.strip() or _HEADING.match(line):
-            continue
-        lines[i] = _tag_line(line, by_ref, notes, counts)
+    for i in _body_lines(lines):
+        lines[i] = _tag_line(lines[i], by_ref, notes, counts)
     return "\n".join(lines), {o: counts[o] for o in ORIGINS if counts[o]}

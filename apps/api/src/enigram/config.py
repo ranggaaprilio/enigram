@@ -72,6 +72,13 @@ def _int(name: str, default: int) -> int:
         raise EnigramError(f"{name} must be an integer, got {raw!r}") from e
 
 
+def _verify_answers() -> bool:
+    value = os.environ.get("VERIFY_ANSWERS", "").strip().lower() or "off"
+    if value not in ("on", "off"):
+        raise EnigramError(f"VERIFY_ANSWERS must be on or off, got {value!r}")
+    return value == "on"
+
+
 @dataclass(frozen=True)
 class OidcConfig:
     issuer: str  # https://accounts.google.com, https://login.microsoftonline.com/<tenant>/v2.0
@@ -196,6 +203,10 @@ class Config:
     log_level: str
     # The ts-morph sidecar (tools/ts-graph) that parses TypeScript repositories.
     ts_graph_dir: Path
+    # VERIFY_ANSWERS=on: every answer's claim sentences are judged against the text of their
+    # citations by the decision layer, recorded in extra["verification"] only (off by default:
+    # it sends that text to the decision provider and costs a call per answer).
+    verify_answers: bool = False
 
     @classmethod
     def from_env(cls, dotenv_path: Path | None = None) -> "Config":
@@ -363,6 +374,7 @@ class Config:
                 os.environ.get("TS_GRAPH_DIR", "").strip()
                 or Path(__file__).resolve().parents[4] / "tools" / "ts-graph"
             ).expanduser(),
+            verify_answers=_verify_answers(),
         )
 
     @property

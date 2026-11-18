@@ -452,7 +452,9 @@ async def run_golden(
         async with deps.open_engine() as engine:
 
             async def answer(q: GoldenQuestion) -> QueryResult:
-                return await answer_question(engine, q.question, system, decider=decider)
+                return await answer_question(
+                    engine, q.question, system, decider=decider, verify=cfg.verify_answers
+                )
 
             items, failed = await answer_golden(answer, questions, system)
     answers_path, labels_path = write_golden_run(cfg, golden_path, system, items, repo=golden.repo)

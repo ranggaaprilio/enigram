@@ -470,7 +470,12 @@ async def answer_as(
         await on_tool("documents", {})
         prompt = f"{PRECEDENCE} {agent.focus}" if agent.focus else PRECEDENCE
         return await answer_question(
-            await engine(), standalone, user_prompt=prompt, notes=notes, decider=decider
+            await engine(),
+            standalone,
+            user_prompt=prompt,
+            notes=notes,
+            decider=decider,
+            verify=cfg.verify_answers,
         )
 
     if agent.route == "code":

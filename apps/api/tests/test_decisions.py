@@ -23,7 +23,11 @@ def test_questions_load_and_validate():
         "route",
         "entity_symbol_same",
         "doc_code_conflict",
+        "sentence_relation",
     }
+    sentence = question("sentence_relation", claim="claims.2", context="contexts.2")
+    assert sentence.instructions == "How does `contexts.2` relate to `claims.2`?"
+    assert sentence.criteria == QUESTIONS["claim_relation"].criteria
     relation = QUESTIONS["claim_relation"]
     assert relation.kind == "choice"
     assert list(relation.criteria) == ["supports", "contradicts", "says_nothing"]

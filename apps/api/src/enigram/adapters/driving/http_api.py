@@ -1334,7 +1334,12 @@ def create_app(
                     # A workspace's engine opens on its first docs question.
                     engine = await request.app.state.workspaces.engine(ws)
                     return await answer_question(
-                        engine, body.question, body.mode, notes=ws.notes, decider=ws.decider
+                        engine,
+                        body.question,
+                        body.mode,
+                        notes=ws.notes,
+                        decider=ws.decider,
+                        verify=ws.cfg.verify_answers,
                     )
 
                 result = await answer_routed(

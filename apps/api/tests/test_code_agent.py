@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import shutil
 
@@ -1012,3 +1013,62 @@ def test_citation_check_stops_after_the_file_limit(cfg, graph, monkeypatch):
     assert tools.citation_problem(CodeCitation("src/gone.ts", 1, 2, SHA[:12])) == "missing file"
     assert tools.citation_problem(CodeCitation("src/gone.ts", 1, 2, SHA[:12])) == "missing file"
     assert tools.citation_problem(CodeCitation("src/other.ts", 1, 2, SHA[:12])) is None
+
+
+async def test_verification_reads_the_cited_code_with_its_surroundings(cfg, graph, tmp_path):
+    from code_fakes import FakeAnnotations, FakeDecider, choice, noul
+
+    notes = FakeAnnotations()
+    await _note(cfg, graph, notes)
+    verifying = dataclasses.replace(cfg, verify_answers=True)
+    answer = FINAL + " The team says only admins may load users note#1."
+    git = FakeGit()
+    reads = []
+    run = git.run
+    git.run = lambda name, args: reads.append(args) or run(name, args)
+    guard = {"answerable": noul(0.9)}
+    decider = FakeDecider(guard, default=choice("supports", supports=0.9), name="jev")
+    cache = tmp_path / "cache"
+
+    def ask(c):
+        chat = ScriptedChat(
+            [tool_reply(("find_symbol", _args(name="AppController"))), answer_reply(answer)]
+        )
+        return answer_with_agent(
+            c, chat, graph, "q", notes=notes, decider=decider, open_git=git, cache_dir=cache
+        )
+
+    result = await ask(verifying)
+
+    v = result.extra["verification"]
+    assert [(s["citations"], s["verdict"]) for s in v["sentences"]] == [
+        ([f"src/app.controller.ts:7-17@{SHA[:12]}"], "verified"),
+        (["note#1"], "verified"),
+    ]
+    assert reads[-1] == {"path": "src/app.controller.ts", "start": 1, "end": 37}  # 7-20, 17+20
+    state, _ = decider.calls[-1]
+    assert state["contexts"]["0"].startswith("src/app.controller.ts\n1: @Roles('admin')")
+    assert state["contexts"]["1"] == "Only the admin team may load users."
+    assert "verification" not in (await ask(cfg)).extra  # off: another cache entry
+    assert len(list(cache.iterdir())) == 2
+
+
+def test_source_text_is_none_when_the_file_cannot_be_read(cfg, graph):
+    git = FakeGit()
+    git.run = lambda name, args: "src/app.controller.ts: larger than 1000000 bytes"
+    tools = _tools(cfg, graph, open_git=git)
+
+    assert tools.source_text(f"src/app.controller.ts:7-17@{SHA[:12]}") is None
+    assert tools.source_text("[3]") is None and tools.source_text("note#1") is None
+
+
+def test_a_long_cited_range_is_read_without_surroundings(cfg, graph):
+    git = FakeGit()
+    reads = []
+    git.run = lambda name, args: reads.append(args) or "10: x"
+    tools = _tools(cfg, graph, open_git=git)
+
+    assert tools.source_text(f"src/app.controller.ts:30-200@{SHA[:12]}") == (
+        "src/app.controller.ts\n10: x"
+    )
+    assert reads == [{"path": "src/app.controller.ts", "start": 30, "end": 200}]

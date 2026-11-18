@@ -1,7 +1,8 @@
 # Verifikasi jawaban per kalimat
 
 Rencana dibuat 2026-11-09, direvisi 2026-11-18 (konteks kode diperbarui, celah desain ditutup).
-V1 sudah dibangun (2026-11-18). V2 sampai V4 belum.
+V1, V2 dan V3 sudah dibangun (2026-11-18); V2+V3 mati secara default (`VERIFY_ANSWERS`). V4
+belum, menunggu pengukuran.
 
 ## Masalah
 
@@ -137,17 +138,23 @@ Hasil pengecekan:
 - **Belum dijalankan: golden eval `dev`** dengan V1 menyala. Tag dibuang oleh normalisasi blind,
   jadi skor seharusnya tidak berubah, tapi kutipan yang dibuang mengubah teks jawaban.
 
-### V2: teks sumber per kalimat
+### V2: teks sumber per kalimat (dibangun 2026-11-18)
+
+Yang dibangun: `application/verification.py` (`verify_answer`), `CodeAgentTools.source_text`
+dan `doc_texts` di jalur agent, `_source_text` di `querying.py`. Kalimat dan kutipannya diambil
+dari jawaban yang sudah bertag (`tagged_sentences` di `domain/origin.py`). Hanya jalan kalau
+`VERIFY_ANSWERS=on`; default mati karena mengirim teks sumber ke decision provider (keputusan
+pemilik nomor 4 masih terbuka).
 
 Untuk setiap kalimat yang punya kutipan valid, kumpulkan teks dari kutipannya saja, tidak dari
 seluruh evidence. Kalimat dengan beberapa kutipan mendapat gabungan teks semua kutipannya.
 
 | Kutipan | Teks |
 |---|---|
-| `[n]` dokumen, jalur dokumen | teks `ContextChunk` dengan `ref == n` |
-| `[n]` dokumen, jalur agent | teks chunk yang dilihat model. Perlu field baru (misalnya `doc_texts[n]`) di samping `doc_citations`, diisi di tempat yang sama (`code_agent.py:581`), dengan teks yang sudah dipotong `DOC_CHUNK_CHARS` |
-| `[n]` flow summary | teks ringkasan flow pada source itu |
-| `path:a-b@sha` | `read_file` pada sha itu, dengan rentang dilebarkan (lihat di bawah) |
+| `[n]` dokumen, jalur dokumen | gabungan teks semua `ContextChunk` dengan `ref == n` |
+| `[n]` dokumen, jalur agent | `doc_texts[n]`: teks chunk yang dilihat model, sudah dipotong `DOC_CHUNK_CHARS` |
+| `path:a-b@sha`, jalur agent | `read_file` pada sha itu, dengan rentang dilebarkan (lihat di bawah) |
+| `path:a-b@sha`, jalur dokumen | tidak ada; kalimat yang hanya punya kutipan ini mendapat verdict `unchecked` |
 | `note#N` | teks note |
 
 **Rentang kode dilebarkan.** Klaim tentang perilaku ("fungsi X memvalidasi token lalu memanggil
@@ -155,30 +162,43 @@ Y") sering butuh konteks di luar baris yang dikutip. Kalau hanya baris yang diku
 dikirim, Jev akan sering menjawab `says_nothing` untuk kalimat yang benar. Jadi teks yang
 dikirim adalah `a-20` sampai `b+20`, dibatasi awal dan akhir file. Angka 20 adalah titik awal
 dan disetel dari pengukuran (bandingkan 0, 20 dan 50 pada laju `unverified` palsu untuk
-`[code]`).
+`[code]`). Konstanta: `CODE_CONTEXT_LINES` di `code_agent.py`. Rentang yang dengan tambahan
+konteks melebihi 200 baris (`READ_MAX_LINES`) dibaca tanpa konteks, dan tetap terpotong di 200
+baris. File yang tidak bisa dibaca (terlalu besar, rahasia, symlink) tidak memberi teks.
 
 Teks dipotong per kalimat (misalnya 4.000 karakter) dengan `clip()`, dan total per request
 dibatasi `STATE_MAX_CHARS`. Kalau terpotong, dicatat `truncated: true`. Kalau total melebihi
 batas, kalimat dibagi ke beberapa request. Tidak ada kalimat yang dilewati diam-diam.
 
-### V3: verdict per kalimat
+### V3: verdict per kalimat (dibangun 2026-11-18, hanya dicatat)
 
-- Key baru di `decisions.yaml`, misalnya `sentence_relation`, dengan instruksi
+- Key baru di `decisions.yaml`, `sentence_relation`, dengan instruksi
   ``"How does `{context}` relate to `{claim}`?"`` dan criteria yang sama dengan
   `claim_relation`. `claim_relation` tidak diubah karena instruksinya menunjuk key `context`
   bersama dan eval memakainya.
-- Satu panggilan `decide()` dengan purpose `answer_verification`. State-nya
+- Satu panggilan `decide()` per batch dengan purpose `answer_verification`; batch dijalankan
+  paralel. State-nya
   `{"claims": {i: kalimat}, "contexts": {i: teks}}`, dan pertanyaan per kalimat dibuat dengan
   `question("sentence_relation", claim=f"claims.{i}", context=f"contexts.{i}")`.
-- Kalimat tanpa kutipan valid tidak dikirim. Verdict-nya langsung `unsupported`.
+- Kalimat tanpa kutipan valid tidak dikirim. Verdict-nya langsung `unsupported`. Kalimat yang
+  kutipannya tidak punya teks (misalnya kutipan kode di jalur dokumen) mendapat `unchecked`.
 - Verdict hanya dipakai kalau provider-nya Jev, sama seperti abstain guard. Kalau yang menjawab
   judge fallback (yang hanya memberi 0 atau 1), verdict tetap dicatat dengan
   `reason: uncalibrated provider` tapi tidak dipakai untuk badge maupun confidence.
 - Jawaban yang sudah abstain (`found: false`) tidak diverifikasi.
-- Kalau panggilan Jev gagal atau timeout, jawaban tetap dikirim tanpa verdict dan trace
-  mencatat `verification: {"error": ...}`. Verifikasi tidak boleh menggagalkan jawaban.
-- Trace: `extra.verification = {"provider", "model", "sentences": [{"i", "text", "origins",
-  "citations", "verdict", "p_supports", "truncated"}], "confidence", "coverage", "level"}`.
+- Kalau panggilan decision gagal, jawaban tetap dikirim, kalimat di batch itu tanpa verdict
+  (`null`), dan trace mencatat `verification.error`. Jawaban seperti itu tidak disimpan di cache
+  agent.
+- Verdict sudah dihitung dengan tabel di V4 dan threshold 0,8, karena itulah yang diukur.
+  `contradicted` belum memakai threshold: pilihan `contradicts` dengan keyakinan rendah tetap
+  dihitung `contradicted`. Pengukuran presisi `contradicted` harus memisahkan menurut
+  `p_supports` / keyakinan, sebelum gate strict diputuskan.
+  `confidence`, `coverage` dan `level` belum dihitung: rumusnya menunggu keputusan pemilik
+  nomor 3.
+- Trace: `extra.verification = {"provider", "model", "reason"?, "error"?, "sentences": [{"text",
+  "citations", "verdict", "relation", "p_supports", "truncated"}], "counts"}`.
+- Cache agent: kunci cache mendapat akhiran saat verifikasi menyala, jadi jawaban tanpa
+  verifikasi tidak dipakai ulang (dan kunci lama tetap sah).
 
 ### V4: badge, mode strict, confidence
 
@@ -276,12 +296,12 @@ sekarang `3.6` sejak V1). Kalau tidak, cache eval akan menyembunyikan perubahann
 | PR | Isi | Model | Bisa di-merge sendiri |
 |---|---|---|---|
 | V1 (dibangun) | Cek kutipan, hapus tag tulisan LLM, aturan kalimat pendek, `extra.citations` | tidak | ya |
-| V2+V3 | Teks sumber dan verdict per kalimat, hanya dicatat di trace, bisa dimatikan lewat config | Jev | ya (tidak mengubah jawaban) |
+| V2+V3 (dibangun) | Teks sumber dan verdict per kalimat, hanya dicatat di trace, `VERIFY_ANSWERS` (default off) | Jev | ya (tidak mengubah jawaban) |
 | V4a | Badge verdict di web, `confidence`/`coverage`/`level` di API, Chat dan MCP | — | setelah gate lolos |
 | V4b | Mode strict | — | setelah gate strict lolos |
 
-Tidak ada dependensi terbuka. PR #64 dan #75 sudah merged, jadi V2+V3 bisa dikerjakan setelah
-V1 merged.
+Langkah berikutnya bukan kode: jalankan pengukuran di atas dengan `VERIFY_ANSWERS=on` dan
+`DECISION_PROVIDER=jev`, lalu putuskan gate. V4 baru dikerjakan setelah itu.
 
 ## Keputusan untuk pemilik
 

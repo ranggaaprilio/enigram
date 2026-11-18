@@ -440,6 +440,15 @@ def test_config_decision_provider_defaults_and_requires_key(cfg, clean_env, monk
         Config.from_env(clean_env)
 
 
+def test_verify_answers_is_off_unless_on(cfg, clean_env, monkeypatch):
+    assert cfg.verify_answers is False
+    monkeypatch.setenv("VERIFY_ANSWERS", "ON")
+    assert Config.from_env(clean_env).verify_answers is True
+    monkeypatch.setenv("VERIFY_ANSWERS", "yes")
+    with pytest.raises(EnigramError, match="VERIFY_ANSWERS must be on or off"):
+        Config.from_env(clean_env)
+
+
 def test_config_rejects_unknown_storage_backend(cfg, clean_env, monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "sqlite")
     with pytest.raises(EnigramError, match="STORAGE_BACKEND"):

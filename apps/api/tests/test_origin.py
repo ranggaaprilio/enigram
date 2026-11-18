@@ -3,7 +3,7 @@ import pytest
 from enigram.domain.answer import Source
 from enigram.domain.claims import split_claims
 from enigram.domain.normalize import normalize_answer
-from enigram.domain.origin import tag_origins
+from enigram.domain.origin import tag_origins, tagged_sentences
 
 CODE = "src/a.ts:1-2@abc1234567"
 DOC = Source(1, "Handbook", "Intro", "3", "Handbook | Intro | p.3 | #1", origin="document")
@@ -123,3 +123,24 @@ def test_code_fences_are_not_tagged():
     answer = "It logs the result [1].\n\n```js\nconsole.log('done.')\nreturn x.\n```\n"
 
     assert tag_origins(answer, [DOC])[0] == answer.replace("[1].", "[1] [document].")
+
+
+def test_tagged_sentences_are_the_claims_with_their_citations():
+    answer = (
+        "## Answer\n\n"
+        f"It checks the hash {CODE} [1]. Then it returns [1, 2]. Tokens never expire.\n"
+        "- Reads: none\n"
+        "- It is in the page src/[1]/page.tsx:3-4@abc1234567 note#7.\n\n"
+        "```\nnot this one [1].\n```\n\n### References\n\n- [1] Handbook\n"
+    )
+    tagged, _ = tag_origins(answer, [DOC, FLOW, NOTE])
+
+    assert tagged_sentences(tagged) == [
+        (f"It checks the hash {CODE} [1].", [CODE, "[1]"]),
+        ("Then it returns [1, 2].", ["[1]", "[2]"]),
+        ("Tokens never expire.", []),
+        (
+            "It is in the page src/[1]/page.tsx:3-4@abc1234567 note#7.",
+            ["src/[1]/page.tsx:3-4@abc1234567", "note#7"],
+        ),
+    ]

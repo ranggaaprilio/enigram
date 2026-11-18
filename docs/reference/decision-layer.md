@@ -77,6 +77,33 @@ When no rule decides where a question goes, the router asks the `route` choice (
 `enigram eval --judge` grades every claim with `claim_relation` (`supports`, `contradicts`,
 `says_nothing`) next to the LLM claim judge (see [Golden set](../evaluation/golden-set.md#evaluate)).
 
+### Answer verification
+
+Off by default; `VERIFY_ANSWERS=on` turns it on. After the abstain guard, every claim sentence of
+an answer is judged with `sentence_relation` against the text of the sources it cites, and only
+those:
+
+| Citation | Text sent |
+|---|---|
+| `[n]` | the document chunk shown to the model (documents path: every chunk with that reference) |
+| `path:start-end@sha` (agent) | the cited lines with 20 lines around them |
+| `note#N` | the note text |
+
+| Verdict | When |
+|---|---|
+| `verified` | `supports` with P(supports) ≥ 0.8 |
+| `contradicted` | `contradicts` |
+| `unverified` | `says_nothing`, or `supports` below 0.8 |
+| `unsupported` | the sentence has no citation (not sent) |
+| `unchecked` | no cited text could be had, such as an inline code citation on the documents path (not sent) |
+
+The verdicts are recorded only: the answer does not change, and nothing is shown in the UI. A
+verdict from the judge model is marked `reason: uncalibrated provider`. The 0.8 threshold comes
+from the eval recipe and has not been measured on live answers.
+
+Cost: one decision request per answer (more when the cited text exceeds 40,000 characters), and,
+on the agent path, one git read per cited file.
+
 ### Origin badges
 
 The web UI shows the per-sentence origin tags as badges.
@@ -84,7 +111,8 @@ The web UI shows the per-sentence origin tags as badges.
 ## What is sent to Jev
 
 The question, code bodies and the files the agent read, retrieved document chunks, claims and
-note texts. With `DECISION_PROVIDER=jev`, this data leaves for TypeSafe's API as well as the chat
+note texts; with `VERIFY_ANSWERS=on`, also every claim sentence of an answer with the text it
+cites. With `DECISION_PROVIDER=jev`, this data leaves for TypeSafe's API as well as the chat
 model's.
 
 ## In the trace
@@ -96,3 +124,9 @@ Every decision is in the answer's trace:
 - `extra.abstain_guard` holds `answerable`, the `action` (`none`, `abstained` or `skipped`) and
   the original answer when it was replaced. An answer merged from code and documents has one per
   part in `extra.guards`.
+- `extra.verification` (with `VERIFY_ANSWERS=on`) lists every claim sentence with its
+  `citations`, `verdict`, `relation` and `p_supports`, the verdict `counts`, the provider, and
+  `error` when a decision failed.
+- `extra.citations` lists the citations removed before the answer was tagged (a `[n]` of no
+  source, a note the model was not shown, a code citation whose commit, file or lines do not
+  exist), and on the documents path the inline code citations it could not check.
