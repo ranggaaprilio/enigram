@@ -27,7 +27,10 @@ only, not commit SHAs), then indexes two things:
   bitbucket.org, codeberg.org`). A private repository needs an [access token](#private-repositories).
 - Symlinks, files over 1 MB and anything in `.git` are skipped; a repository with more than 500
   Markdown files is refused.
-- Code: at most 2,000 TypeScript files and 50,000 lines.
+- Code: at most 2,000 TypeScript files and 50,000 lines by default (`CODE_MAX_FILES`,
+  `CODE_MAX_LOC`; `0` = no limit). A larger repository fails before parsing. Raising them raises
+  indexing time, memory and token cost (one summary per entry point), so check
+  `MAX_TOKENS_PER_JOB` too.
 - Secret-named files are skipped and secret-looking values redacted.
 - The Docker image installs `git`; without Docker, `git` must be on the `PATH`.
 

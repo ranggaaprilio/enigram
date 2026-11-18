@@ -53,6 +53,8 @@ MIN_API_KEY_LENGTH = 16
 # Hosts `index_repo` may clone from (https only), so a key holder cannot make the worker fetch
 # from the private network.
 DEFAULT_REPO_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org")
+DEFAULT_CODE_MAX_FILES = 2000  # the v1 repository size of the code graph PRD
+DEFAULT_CODE_MAX_LOC = 50_000
 
 
 def _required(name: str) -> str:
@@ -172,6 +174,10 @@ class Config:
     annotation_verifiers: tuple[str, ...]
     # Seconds between `git ls-remote` checks of indexed repositories by the worker; 0 = off.
     repo_poll_secs: int
+    # Largest TypeScript repository the code graph indexes (CODE_MAX_FILES, CODE_MAX_LOC; 0 =
+    # off); a larger one fails before the sidecar runs. Cost and memory grow with the repository.
+    code_max_files: int
+    code_max_loc: int
     # Fernet key that encrypts the access tokens of private repositories (REPO_CREDENTIALS_KEY);
     # empty: only public repositories can be indexed.
     repo_credentials_key: str = field(repr=False)
@@ -277,6 +283,13 @@ class Config:
         repo_poll_secs = _int("REPO_POLL_SECS", 120)
         if repo_poll_secs < 0:
             raise EnigramError(f"REPO_POLL_SECS must be 0 (off) or more, got {repo_poll_secs}")
+        code_limits = {
+            "CODE_MAX_FILES": _int("CODE_MAX_FILES", DEFAULT_CODE_MAX_FILES),
+            "CODE_MAX_LOC": _int("CODE_MAX_LOC", DEFAULT_CODE_MAX_LOC),
+        }
+        for name, value in code_limits.items():
+            if value < 0:
+                raise EnigramError(f"{name} must be 0 (off) or more, got {value}")
         caps = {
             "MAX_TOKENS_PER_JOB": _int("MAX_TOKENS_PER_JOB", DEFAULT_MAX_TOKENS_PER_JOB),
             "DAILY_TOKEN_BUDGET": _int("DAILY_TOKEN_BUDGET", DEFAULT_DAILY_TOKEN_BUDGET),
@@ -344,6 +357,8 @@ class Config:
                 if n.strip()
             ),
             repo_poll_secs=repo_poll_secs,
+            code_max_files=code_limits["CODE_MAX_FILES"],
+            code_max_loc=code_limits["CODE_MAX_LOC"],
             repo_credentials_key=os.environ.get("REPO_CREDENTIALS_KEY", "").strip(),
             oidc=_oidc(),
             max_tokens_per_job=caps["MAX_TOKENS_PER_JOB"],
