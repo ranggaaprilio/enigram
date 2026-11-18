@@ -91,6 +91,22 @@ def test_config_rejects_bad_poll_interval(cfg, clean_env, monkeypatch, value, ma
         Config.from_env(clean_env)
 
 
+def test_config_code_limits_default_and_override(cfg, clean_env, monkeypatch):
+    assert (cfg.code_max_files, cfg.code_max_loc) == (2000, 50_000)
+
+    monkeypatch.setenv("CODE_MAX_FILES", "5000")
+    monkeypatch.setenv("CODE_MAX_LOC", "200000")
+    loaded = Config.from_env(clean_env)
+    assert (loaded.code_max_files, loaded.code_max_loc) == (5000, 200_000)
+
+
+@pytest.mark.parametrize("name", ["CODE_MAX_FILES", "CODE_MAX_LOC"])
+def test_config_rejects_negative_code_limits(cfg, clean_env, monkeypatch, name):
+    monkeypatch.setenv(name, "-1")
+    with pytest.raises(EnigramError, match=f"{name} must be 0 \\(off\\) or more"):
+        Config.from_env(clean_env)
+
+
 def test_config_rejects_unknown_thinking_mode(cfg, clean_env, monkeypatch):
     monkeypatch.setenv("THINKING_MODE", "maybe")
     with pytest.raises(EnigramError, match="THINKING_MODE"):

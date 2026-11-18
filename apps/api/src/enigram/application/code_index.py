@@ -28,8 +28,6 @@ from enigram.domain.secrets import is_secret_path, redact
 
 log = logging.getLogger(__name__)
 
-CODE_MAX_FILES = 2000  # PRD NFR: v1 repository size
-CODE_MAX_LOC = 50_000
 TS_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
 SKIP_DIRS = {"node_modules", "dist", "build", ".git", "coverage"}
 GIT_TIMEOUT_SECS = 60
@@ -53,9 +51,10 @@ def _is_ts(name: str) -> bool:
     return name.endswith(TS_SUFFIXES) and not name.endswith((".d.ts", ".d.mts", ".d.cts"))
 
 
-def repo_limits(root: Path) -> tuple[int, int]:
+def repo_limits(root: Path, max_files: int, max_loc: int) -> tuple[int, int]:
     """(TypeScript files, lines) outside node_modules/dist/build/.git and declaration files;
-    raises over the v1 limits. Symbolic links are not followed or counted."""
+    raises over `max_files` / `max_loc` (CODE_MAX_FILES / CODE_MAX_LOC; 0 = no limit). Symbolic
+    links are not followed or counted."""
     files = lines = 0
     for folder, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -64,12 +63,12 @@ def repo_limits(root: Path) -> tuple[int, int]:
             if not _is_ts(name) or path.is_symlink():
                 continue
             files += 1
-            if files > CODE_MAX_FILES:
-                raise EnigramError(f"More than {CODE_MAX_FILES} TypeScript files (v1 limit)")
+            if max_files and files > max_files:
+                raise EnigramError(f"More than {max_files} TypeScript files (CODE_MAX_FILES)")
             with path.open("rb") as f:
                 lines += sum(1 for _ in f)
-            if lines > CODE_MAX_LOC:
-                raise EnigramError(f"More than {CODE_MAX_LOC} lines of TypeScript (v1 limit)")
+            if max_loc and lines > max_loc:
+                raise EnigramError(f"More than {max_loc} lines of TypeScript (CODE_MAX_LOC)")
     return files, lines
 
 
@@ -152,7 +151,8 @@ async def index_code(
     `decider`, also the conflict check of the flagged notes), which runs before the summaries
     because those spend tokens and may fail."""
     start = time.perf_counter()
-    files, loc = repo_limits(root)  # before the sidecar: a huge repository fails fast
+    # Before the sidecar: a huge repository fails fast.
+    files, loc = repo_limits(root, cfg.code_max_files, cfg.code_max_loc)
     log.info("[code] %s: %d TypeScript files, %d lines", url, files, loc)
     parsed = await asyncio.to_thread(deps.code_parser().parse, root)
     parsed, redacted = redact_graph(parsed)

@@ -37,23 +37,29 @@ def test_repo_limits_counts_ts_files_and_lines(tmp_path):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(text)
     # app.service.ts (1 line) + app.controller.ts (2 lines); no .d.ts, no node_modules
-    assert repo_limits(tmp_path) == (2, 3)
+    assert repo_limits(tmp_path, 2000, 50_000) == (2, 3)
 
 
 @pytest.mark.parametrize(
-    ("name", "value", "match"),
+    ("max_files", "max_loc", "match"),
     [
-        ("CODE_MAX_FILES", 1, "More than 1 TypeScript files"),
-        ("CODE_MAX_LOC", 2, "More than 2 lines"),
+        (1, 50_000, "More than 1 TypeScript files"),
+        (2000, 2, "More than 2 lines"),
     ],
 )
-def test_repo_limits_reject_large_repositories(tmp_path, monkeypatch, name, value, match):
+def test_repo_limits_reject_large_repositories(tmp_path, max_files, max_loc, match):
     for rel, text in TREE.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(text)
-    monkeypatch.setattr(code_index, name, value)
     with pytest.raises(EnigramError, match=match):
-        repo_limits(tmp_path)
+        repo_limits(tmp_path, max_files, max_loc)
+
+
+def test_repo_limits_zero_means_no_limit(tmp_path):
+    for rel, text in TREE.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    assert repo_limits(tmp_path, 0, 0) == (2, 3)
 
 
 def test_redact_graph_drops_secret_files_and_redacts_bodies():
@@ -114,11 +120,11 @@ async def test_index_code_stores_graph_blobs_and_summaries(cfg, deps, tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
-async def test_index_code_checks_limits_before_the_sidecar(cfg, deps, tmp_path, monkeypatch):
+async def test_index_code_checks_limits_before_the_sidecar(cfg, deps, tmp_path):
     root = _git_repo(tmp_path / "repo", TREE)
     parser = FakeParser(fixture_graph())
     deps.code_parser = lambda: parser
-    monkeypatch.setattr(code_index, "CODE_MAX_FILES", 1)
+    cfg = dataclasses.replace(cfg, code_max_files=1)
 
     with pytest.raises(EnigramError, match="More than 1 TypeScript files"):
         await index_code(cfg, deps, FakeCodeGraph(), root, URL, None)
