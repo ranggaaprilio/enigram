@@ -42,6 +42,11 @@ from enigram.application.evaluation.judges import (
     judge_claims_decision,
     judge_claims_llm,
 )
+from enigram.application.evaluation.verification_eval import (
+    claim_key,
+    render_verification,
+    verification_agreement,
+)
 from enigram.application.files import atomic_write_text
 from enigram.application.ports import AnswerScorer, ChatModel, DecisionProvider, Deps
 from enigram.config import Config
@@ -828,6 +833,10 @@ async def run_eval(
             item.setdefault("score_errors", {})
 
     agreement = await _judge(cfg, deps, runs, label_files) if judge else None
+    human = read_labelled_claims(*label_files) if label_files else {}
+    verification = verification_agreement(
+        runs, {(qid, claim_key(claim)): g for (qid, claim), g in human.items()}
+    )
     symbols_cache: dict = {}
     systems = {}
     for system, run in runs.items():
@@ -842,6 +851,7 @@ async def run_eval(
         "hypothesis": _hypothesis(runs, systems, unresolved),
         "systems": systems,
         "agreement": agreement,
+        "verification": verification,
         "failures": _failures(runs),
         "missing": _missing(runs),
         "items": {system: run["items"] for system, run in runs.items()},
@@ -1019,6 +1029,7 @@ def render_markdown(data: dict[str, Any]) -> str:
             f"{', ' + decision['cv']['reason'] if decision['cv'].get('reason') else ''}); "
             f"{decision['low_confidence']} verdicts below confidence {AUTO_ACCEPT}.",
         ]
+    lines += render_verification(data.get("verification"))
     lines += ["", "## Failures", ""]
     if data["failures"]:
         lines += ["| System | Question | Answer (normalized) |", "|---|---|---|"]

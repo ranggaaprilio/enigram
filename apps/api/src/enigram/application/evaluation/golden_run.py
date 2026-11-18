@@ -192,6 +192,8 @@ async def answer_golden(
                 # Phase 2: the cited notes ({id, status, reason, conflict}) and origin counts.
                 notes=result.extra.get("notes"),
                 origins=result.extra.get("origins"),
+                # Per-sentence verdicts with VERIFY_ANSWERS=on (application/verification.py).
+                verification=result.extra.get("verification"),
                 citations=answer_citations(
                     result.answer, result.sources, refs=system not in AGENT_SYSTEMS
                 ),
@@ -452,7 +454,9 @@ async def run_golden(
         async with deps.open_engine() as engine:
 
             async def answer(q: GoldenQuestion) -> QueryResult:
-                return await answer_question(engine, q.question, system, decider=decider)
+                return await answer_question(
+                    engine, q.question, system, decider=decider, verify=cfg.verify_answers
+                )
 
             items, failed = await answer_golden(answer, questions, system)
     answers_path, labels_path = write_golden_run(cfg, golden_path, system, items, repo=golden.repo)

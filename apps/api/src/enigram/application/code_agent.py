@@ -25,6 +25,7 @@ from enigram.application.abstain import guard_abstain, tool_evidence
 from enigram.application.agent_loop import (
     AGENT_MAX_INPUT_TOKENS,
     AGENT_MAX_TOOL_CALLS,
+    READ_MAX_LINES,
     loop_answer,
     result_from_json,
 )
@@ -46,8 +47,11 @@ from enigram.application.ports import (
 from enigram.application.pydantic_loop import run_agent_loop
 from enigram.application.repo_store import GitTools, store_path
 from enigram.application.repo_sync import check_repo_url
+from enigram.application.verification import PURPOSE as VERIFY_PURPOSE
+from enigram.application.verification import verify_answer
 from enigram.config import Config
 from enigram.domain.annotation import (
+    NOTE_CITATION,
     NOTE_TYPES,
     NOTE_WEIGHT_RULE,
     TARGET_KINDS,
@@ -57,16 +61,23 @@ from enigram.domain.annotation import (
 )
 from enigram.domain.answer import NO_ANSWER_MARKER, QueryResult, Source
 from enigram.domain.budget import BudgetExceeded
-from enigram.domain.code import CodeCitation, CodeSymbol
+from enigram.domain.citations import check_citations
+from enigram.domain.code import CodeCitation, CodeSymbol, parse_code_citations
 from enigram.domain.errors import EnigramError
 from enigram.domain.secrets import redact
 
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.5"  # bump when tool output, the prompt or the guard changes: busts the cache;
-# 3.3: search_code fuses vector hits; 3.5: the loop runs on Pydantic AI
+AGENT_VERSION = "3.6"  # bump when tool output, the prompt or the guard changes: busts the cache;
+# 3.3: search_code fuses vector hits; 3.5: the loop runs on Pydantic AI; 3.6: citations that
+# point at nothing are removed, tags are never the model's, short sentences are tagged
 AGENT_MAX_REPOS = 3
+# Lines read around a cited range when verifying its sentence: a claim about behaviour often
+# needs the code around the cited lines (plans/answer-verification.md, V2; tune on the dev split).
+CODE_CONTEXT_LINES = 20
+_NUMBERED_LINE = re.compile(r"\d+: ")
+CITATION_MAX_FILES = 30  # files whose citations one answer gets checked: each is a git read
 GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
 SNIPPET_CHARS = 100
@@ -271,6 +282,7 @@ class CodeAgentTools:
         # A document chunk's [n], fixed for the question: chunk id -> n, and n -> its citation.
         self.doc_refs: dict[str, int] = {}
         self.doc_citations: dict[int, str] = {}
+        self.doc_texts: dict[int, str] = {}  # n -> the chunk text the model was shown
         self.doc_searches = 0
         # The semantic channel of search_code; None = full text only.
         self.embedder = embedder
@@ -290,6 +302,9 @@ class CodeAgentTools:
         self.scope: set[int] = {selected["id"]} if selected else set()
         self.touched: set[int] = set()
         self.gits: dict[int, Any] = {}
+        # (repo id, file) -> its line count at the indexed commit (None: no such file), for
+        # checking the answer's code citations.
+        self.line_counts: dict[tuple[int, str], int | None] = {}
         self.graph_lines: set[tuple[int, str]] = set()
         self.graph_calls = self.graph_hits = self.read_calls = self.reads_on_graph = 0
         self.first_tool: str | None = None
@@ -359,6 +374,78 @@ class CodeAgentTools:
         for notes in found.values():
             self.notes_seen.update((n.id, n) for n in notes)
         return found
+
+    def _git(self, repo: dict[str, Any]) -> Any | None:
+        """The repository's store at its indexed commit, None when the store is missing."""
+        git = self.gits.get(repo["id"])
+        if git is None:
+            root = store_path(self.cfg, repo["url"], repo["ref"])
+            if not (root / "HEAD").exists():
+                return None
+            git = self.gits[repo["id"]] = self.open_git(root, repo["indexed_sha"])
+        return git
+
+    def citation_problem(self, c: CodeCitation) -> str | None:
+        """Why a code citation points at nothing: a commit that is not an indexed one, a file
+        that is not there, lines past its end. None when it is fine, and when it cannot be
+        checked (no store, git failed, a file over the read limit, more than CITATION_MAX_FILES
+        files): a citation is only removed on evidence."""
+        repos = [r for r in self.repos if r["indexed_sha"].startswith(c.sha)]
+        problem = "wrong sha"
+        for r in repos:
+            key = (r["id"], _norm_path(c.file))
+            if key not in self.line_counts:
+                if len(self.line_counts) >= CITATION_MAX_FILES:
+                    return None
+                try:
+                    git = self._git(r)
+                    if git is None:
+                        return None
+                    self.line_counts[key] = git.line_count(c.file)
+                except EnigramError as e:
+                    log.warning("[agent] citation %s not checked: %s", c.file, e)
+                    return None
+            count = self.line_counts[key]
+            if count is None:
+                problem = "missing file"
+            elif not 1 <= c.start <= c.end <= count:
+                problem = "line beyond file"
+            else:
+                return None
+        return problem
+
+    def source_text(self, citation: str) -> str | None:
+        """The text an answer's citation points at, for verifying the sentence: the chunk of a
+        `[n]`, the note of a `note#N`, the cited lines of code with CODE_CONTEXT_LINES around
+        them. None when there is none or it cannot be read."""
+        if m := re.fullmatch(r"\[(\d+)\]", citation):
+            return self.doc_texts.get(int(m[1]))
+        if m := NOTE_CITATION.fullmatch(citation):
+            note = self.notes_seen.get(int(m[1]))
+            return note.text if note else None
+        cited = parse_code_citations(citation)
+        if not cited:
+            return None
+        c = cited[0]
+        for r in self.repos:
+            if not r["indexed_sha"].startswith(c.sha):
+                continue
+            try:
+                git = self._git(r)
+                if git is None:
+                    return None
+                around = CODE_CONTEXT_LINES
+                if c.end - c.start + 1 + 2 * around > READ_MAX_LINES:
+                    around = 0  # a long range: the cited lines first
+                start = max(1, c.start - around)
+                args = {"path": c.file, "start": start, "end": c.end + around}
+                text = git.run("read_file", args)
+                # read_file answers a problem (too large, a secret, a symbolic link) as text.
+                return f"{c.file}\n{text}" if _NUMBERED_LINE.match(text) else None
+            except EnigramError as e:
+                log.warning("[agent] %s not read for verification: %s", c.file, e)
+                return None
+        return None
 
     def target_of(self, c: CodeCitation) -> str:
         """ "<repo id>:<symbol id>" of the innermost graph hit in the cited file that covers the
@@ -540,12 +627,9 @@ class CodeAgentTools:
             return repo
         if refused := self._allow(repo):
             return refused
-        git = self.gits.get(repo["id"])
+        git = self._git(repo)
         if git is None:
-            root = store_path(self.cfg, repo["url"], repo["ref"])
-            if not (root / "HEAD").exists():
-                return f"repository store missing; re-run enigram repo {repo['url']}"
-            git = self.gits[repo["id"]] = self.open_git(root, repo["indexed_sha"])
+            return f"repository store missing; re-run enigram repo {repo['url']}"
         self.touched.add(repo["id"])
         self.read_calls += 1
         path = args.get("path")
@@ -580,7 +664,8 @@ class CodeAgentTools:
             source = by_ref.get(c.ref)
             n = self.doc_refs.setdefault(c.chunk_id, len(self.doc_refs) + 1)
             self.doc_citations[n] = source.citation if source else c.chunk_id
-            lines.append(f"[{n}] {_doc_label(source, c.chunk_id)}\n{clip(c.text, DOC_CHUNK_CHARS)}")
+            self.doc_texts[n] = clip(c.text, DOC_CHUNK_CHARS)
+            lines.append(f"[{n}] {_doc_label(source, c.chunk_id)}\n{self.doc_texts[n]}")
         for r in result.relations[:DOC_MAX_RELATIONS]:
             fact = clip(_one_line(r.description), DOC_RELATION_CHARS)
             lines.append(f"graph: {r.source} -> {r.target}: {fact}")
@@ -724,6 +809,8 @@ async def answer_with_agent(
             cache_key += "\nfocus: " + focus
         if summary:  # a chat's summary of its earlier turns
             cache_key += "\nsummary: " + summary
+        if cfg.verify_answers:  # appended only then, as history: unverified keys stay valid
+            cache_key += "\nverified"
         key = sha256(cache_key.encode()).hexdigest()
         path = cache_dir / f"{key}.json"
         if path.exists():
@@ -766,6 +853,15 @@ async def answer_with_agent(
         max_input_tokens=max_input_tokens,
         summary=summary,
     )
+    # Before the sources are made: a citation that points at nothing must not become one.
+    text, invalid = await asyncio.to_thread(
+        check_citations,
+        loop.reply.text,
+        refs=set(tools.doc_citations),
+        notes=set(tools.notes_seen),
+        code_check=tools.citation_problem,
+    )
+    loop = dataclasses.replace(loop, reply=dataclasses.replace(loop.reply, text=text))
     result = loop_answer(
         question,
         loop,
@@ -774,6 +870,7 @@ async def answer_with_agent(
         extra={
             "diagnostics": tools.diagnostics() | {"turns": counting.turns},
             "repos": {r["indexed_sha"][:12]: tools.names[r["id"]] for r in repos},
+            "citations": {"invalid": invalid},
         },
         notes=tools.notes_seen,
         resolve_target=tools.target_of,
@@ -797,6 +894,8 @@ async def answer_with_agent(
         result = dataclasses.replace(guarded, question=question, extra=extra)
     else:
         result = await guard_abstain(decider, result, evidence)
+    if cfg.verify_answers:
+        result = await verify_answer(decider, result, tools.source_text)
     log.info(
         "[agent] enigram: %d tool calls, %d in / %d out tokens%s",
         loop.calls,
@@ -806,7 +905,8 @@ async def answer_with_agent(
     )
     # A guard decision or a query embedding that failed is transient: do not cache the answer.
     failed = tools.semantic_error is not None or any(
-        t.get("purpose") == GUARD_PURPOSE and "error" in t for t in result.extra["decisions"]
+        t.get("purpose") in (GUARD_PURPOSE, VERIFY_PURPOSE) and "error" in t
+        for t in result.extra["decisions"]
     )
     if path and not failed:
         atomic_write_text(path, json.dumps(asdict(result), ensure_ascii=False))

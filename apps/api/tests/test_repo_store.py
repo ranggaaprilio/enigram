@@ -154,3 +154,24 @@ def test_store_paths_keep_host_and_full_repository_name(cfg):
     assert store_path(cfg, "https://github.com/org/socket.io.git", "v1") == (
         cfg.repo_store / "github.com" / "org--socket.io@v1.git"
     )
+
+
+def test_line_count(store):
+    tools, *_ = store
+
+    assert tools.line_count("src/auth/auth.service.ts") == 5
+    assert tools.line_count("/src/big.ts") == 10
+    assert tools.line_count("src/missing.ts") is None
+    assert tools.line_count("src") is None  # a directory
+    assert tools.line_count("link.ts") is None  # symbolic link
+    assert tools.line_count(".env") is None  # secret file
+    assert tools.line_count("../outside.ts") is None
+    assert tools.line_count("node_modules/x/index.ts") is None  # skipped directory
+
+
+def test_line_count_does_not_read_a_file_over_the_limit(store, monkeypatch):
+    tools, *_ = store
+    monkeypatch.setattr(repo_store, "FILE_MAX_BYTES", 10)
+
+    with pytest.raises(EnigramError, match="larger than 10 bytes"):
+        tools.line_count("src/big.ts")

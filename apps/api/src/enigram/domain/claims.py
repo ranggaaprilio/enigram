@@ -6,7 +6,9 @@ MIN_CLAIM_WORDS = 4
 # Judges score claims at temperature 0 so a label sheet can be reproduced.
 JUDGE_TEMPERATURE = 0.0
 
-_REFERENCES = re.compile(r"^\s*(#{1,6}\s*|\*\*)?references\b", re.IGNORECASE)
+# The References heading alone on its line ("### References", "**References:**"); a sentence
+# that starts with the word is a claim.
+_REFERENCES = re.compile(r"^\s*(#{1,6}\s*|\*\*)?references\b[\W_]*$", re.IGNORECASE)
 _LIST_MARKER = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
 _EMPHASIS = re.compile(r"\*\*|__|`")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])")

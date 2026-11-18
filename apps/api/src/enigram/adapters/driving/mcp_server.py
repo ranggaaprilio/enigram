@@ -388,7 +388,11 @@ def create_server(
                         embedder=app.code_embedder,
                     ),
                     ask_docs=lambda: answer_question(
-                        app.engine, question, notes=app.notes, decider=app.decider
+                        app.engine,
+                        question,
+                        notes=app.notes,
+                        decider=app.decider,
+                        verify=app.cfg.verify_answers,
                     ),
                 )
             except EnigramError as e:

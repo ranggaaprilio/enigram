@@ -438,6 +438,52 @@ async def test_docs_path_without_matching_notes_only_tags():
     assert result.answer == "Mira Okafor [1] [document]." and result.extra["notes"] == []
 
 
+async def test_docs_path_removes_citations_of_no_source():
+    response = success_response()
+    code = "src/a.ts:1-2@abc1234567"
+    response["llm_response"]["content"] = (
+        f"Mira Okafor designed it [1, 7]. The archive is older [9]. It is in the code {code}. "
+        "The team agrees note#4."
+    )
+
+    result = await querying.answer_question(
+        lightrag_engine.LightRagEngine(FakeRag(response)), "Who is Mira Okafor?"
+    )
+
+    assert result.answer == (
+        "Mira Okafor designed it [1] [document]. The archive is older [unsupported]. "
+        f"It is in the code {code} [code]. The team agrees [unsupported]."  # code: not checked
+    )
+    assert result.extra["citations"] == {
+        "invalid": [
+            {"citation": "[7]", "reason": "no such source"},
+            {"citation": "[9]", "reason": "no such source"},
+            {"citation": "note#4", "reason": "note not shown"},
+        ],
+        "unchecked": [code],
+    }
+
+
+async def test_docs_path_verifies_against_the_cited_chunks():
+    from code_fakes import FakeDecider, choice, noul
+
+    decider = FakeDecider(
+        {"answerable": noul(0.9)}, default=choice("says_nothing", says_nothing=0.9), name="jev"
+    )
+    engine = lightrag_engine.LightRagEngine(FakeRag())
+
+    result = await querying.answer_question(engine, "Who?", decider=decider, verify=True)
+
+    v = result.extra["verification"]
+    assert [(s["text"], s["verdict"]) for s in v["sentences"]] == [
+        ("Mira Okafor [1].", "unverified")
+    ]
+    state, _ = decider.calls[-1]
+    assert state["contexts"] == {"0": "Captain Mira Okafor designed it."}
+    plain = await querying.answer_question(engine, "Who?", decider=decider)
+    assert "verification" not in plain.extra
+
+
 async def test_cli_annotations_seed(cfg, deps, monkeypatch, tmp_path, capsys):
     from code_fakes import FakeAnnotations, FakeCodeGraph, fixture_graph
 

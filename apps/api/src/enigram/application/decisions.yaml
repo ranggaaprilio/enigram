@@ -9,6 +9,17 @@ claim_relation:
     contradicts: the context states the opposite of the claim or implies it is false
     says_nothing: the context does not address the claim either way
   threshold: 0.8   # confidence at or above = auto-accepted verdict (citation-check recipe)
+sentence_relation:
+  type: choice
+  # Answer verification (application/verification.py): one sentence of an answer against the
+  # text of the sources it cites, not the shared context of claim_relation (the eval uses that
+  # one unchanged). {claim} and {context} are filled with the state keys of one sentence.
+  instructions: "How does `{context}` relate to `{claim}`?"
+  criteria:
+    supports: the context states the claim or directly implies it is true
+    contradicts: the context states the opposite of the claim or implies it is false
+    says_nothing: the context does not address the claim either way
+  threshold: 0.8   # P(supports) at or above = verified; from the eval recipe, not yet measured on live answers
 answerable:
   type: noul
   # Worded so that a "no, there is none" answer counts when the evidence shows where the thing

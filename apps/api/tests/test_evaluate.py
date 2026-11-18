@@ -288,6 +288,14 @@ async def test_eval_with_judge_scores_and_measures_agreement(cfg, deps, two_syst
         path.write_text(json.dumps(run))
     labels = cfg.eval_dir / "claims.md"
     labels.write_text("- [-] b01-c01 Answer to b01 with enough words [1].\n")
+    run = json.loads(agent.read_text())
+    sentence = {"text": "Answer to b01 with enough words [1].", "origins": ["document"]}
+    run["items"][0]["verification"] = {
+        "provider": "jev",
+        "model": "jev-1",
+        "sentences": [{**sentence, "citations": ["[1]"], "verdict": "contradicted"}],
+    }
+    agent.write_text(json.dumps(run))
 
     run = await evaluate.run_eval(cfg, deps, [code, agent], [sheet], [labels], judge=True)
 
@@ -320,6 +328,10 @@ async def test_eval_with_judge_scores_and_measures_agreement(cfg, deps, two_syst
     assert decision["providers"] == {"jev jev-latest": len(decided)}
     assert f"| Decision claim judge (`jev jev-latest` ×{len(decided)}) | 2 | 1.000" in report
     assert f"decision provider `llm_judge` (`{cfg.judge_model}`)" in report
+    verification = data["verification"]["agent+repo"]["agreement"]["document"]
+    assert (verification["labelled"], verification["contradicted_precision"]) == (1, 1.0)
+    assert "code" not in data["verification"]  # no verdicts in that run
+    assert "## Answer verification" in report and "| document | 1 (too few) |" in report
 
 
 def tmp_root(cfg):

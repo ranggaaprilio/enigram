@@ -349,7 +349,12 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
         async def ask_docs():
             async with deps.open_engine() as engine:  # only when the documents answer
                 return await answer_question(
-                    engine, args.question, args.mode, notes=notes, decider=decider
+                    engine,
+                    args.question,
+                    args.mode,
+                    notes=notes,
+                    decider=decider,
+                    verify=cfg.verify_answers,
                 )
 
         result = await answer_routed(
