@@ -198,4 +198,14 @@
   .badge-unsupported {
     @apply bg-danger-bg text-destructive;
   }
+  /* The verdict of a sentence's verification, after its origin badges */
+  .verdict {
+    @apply ml-0.5 inline-flex align-[-0.15em] text-muted-foreground;
+  }
+  .verdict svg {
+    @apply size-[0.95em];
+  }
+  .verdict-verified {
+    @apply text-success;
+  }
 }

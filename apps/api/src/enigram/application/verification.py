@@ -7,7 +7,7 @@ import asyncio
 import dataclasses
 import logging
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from typing import Any
 
 from enigram.application.abstain import REPLACING_PROVIDERS, UNCALIBRATED
@@ -112,3 +112,50 @@ async def verify_answer(
     log.info("[verify] %s", out["counts"])
     extra = {**result.extra, "verification": out, "decisions": trace}
     return dataclasses.replace(result, extra=extra)
+
+
+def verification_view(
+    answer: str, extra: Mapping[str, Any], shown: Collection[str]
+) -> dict[str, Any] | None:
+    """What a client may show of an answer's verification: one mark per tagged sentence, in
+    the answer's order ("verified", "unverified", or None for no mark), and the counts. A
+    sentence is marked when every origin of it is in `shown` (VERIFY_BADGES) and a decision
+    judged it; `contradicted` shows as "unverified" (its precision is not measured). None when
+    nothing may show: no origin named, a provider outside REPLACING_PROVIDERS, a verification
+    that is not of this answer's sentences (a merged answer), or no mark at all."""
+    v = extra.get("verification")
+    # "reason": some batch fell back to the judge model, whose verdicts are not calibrated.
+    if not shown or not v or v.get("provider") not in REPLACING_PROVIDERS or v.get("reason"):
+        return None
+    entries = v.get("sentences") or []
+    if [e["text"] for e in entries] != [text for text, _, _ in tagged_sentences(answer)]:
+        return None
+    marks: list[str | None] = []
+    for e in entries:
+        judged = e.get("verdict") in ("verified", "unverified", "contradicted")
+        if judged and set(e["origins"]) <= set(shown):
+            marks.append("verified" if e["verdict"] == "verified" else "unverified")
+        else:
+            marks.append(None)
+    checked = len(marks) - marks.count(None)
+    if not checked:
+        return None
+    return {
+        "marks": marks,
+        "verified": marks.count("verified"),
+        "checked": checked,
+        "unsupported": sum(e.get("verdict") == "unsupported" for e in entries),
+    }
+
+
+def verification_counts(view: Mapping[str, Any] | None) -> dict[str, int] | None:
+    """The counts of a view without its per-sentence marks."""
+    return {k: view[k] for k in ("verified", "checked", "unsupported")} if view else None
+
+
+def verification_line(view: Mapping[str, Any] | None) -> str:
+    """The counts of a view as one line, "" without a view."""
+    if not view:
+        return ""
+    line = f"Verified: {view['verified']} of {view['checked']} cited sentences"
+    return line + (f"; {view['unsupported']} without a source" if view["unsupported"] else "")

@@ -28,6 +28,7 @@ from enigram.application.ports import (
 )
 from enigram.application.querying import PRECEDENCE, answer_question
 from enigram.application.routing import answer_routed
+from enigram.application.verification import verification_view
 from enigram.config import Config
 from enigram.domain.access import at_least
 from enigram.domain.answer import QueryResult
@@ -79,13 +80,18 @@ def session_json(session: ChatSession, owner: str | None) -> dict[str, Any]:
     return {**data, "mine": session.owner == owner}
 
 
-def message_json(message: ChatMessage, result: dict[str, Any] | None = None) -> dict[str, Any]:
-    """An answer with its sources and origins (from the trace) when `result` is given."""
+def message_json(
+    message: ChatMessage, result: dict[str, Any] | None = None, badges: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    """An answer with its sources and origins (from the trace) when `result` is given, and what
+    of its verification may show for the origins in `badges` (VERIFY_BADGES)."""
     data = asdict(message)
     if result is not None:
+        extra = result.get("extra") or {}
         data["sources"] = result.get("sources", [])
         data["found"] = result.get("found")
-        data["origins"] = (result.get("extra") or {}).get("origins", {})
+        data["origins"] = extra.get("origins", {})
+        data["verification"] = verification_view(message.text, extra, badges)
     return data
 
 
@@ -240,14 +246,18 @@ async def delete_session(
 
 
 async def session_detail(
-    chat: ChatRepository, store: JobRepository, session_id: int, owner: str | None
+    chat: ChatRepository,
+    store: JobRepository,
+    session_id: int,
+    owner: str | None,
+    badges: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """The session and its messages; each answer with the sources of its trace."""
     session = await readable(chat, session_id, owner)
     messages = []
     for m in await chat.messages(session_id):
         trace = await store.get_query(m.query_id) if m.query_id else None
-        messages.append(message_json(m, (trace or {}).get("result") or None))
+        messages.append(message_json(m, (trace or {}).get("result") or None, badges))
     return {**session_json(session, owner), "messages": messages}
 
 
@@ -402,7 +412,7 @@ async def ask(
             query_id=query_id,
             tokens=meter.total,
         )
-        await emit("answer", message_json(message, asdict(result)))
+        await emit("answer", message_json(message, asdict(result), cfg.verify_badges))
         return message
 
     return list(await asyncio.gather(*(one(a) for a in agents)))

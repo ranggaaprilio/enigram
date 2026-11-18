@@ -35,6 +35,7 @@ from enigram.application.ports import (
 )
 from enigram.application.querying import answer_question
 from enigram.application.routing import answer_routed, resolve_scope, scope_mode
+from enigram.application.verification import verification_counts, verification_view
 from enigram.bootstrap import build_deps
 from enigram.config import Config
 from enigram.domain.access import OPEN, Caller, at_least
@@ -75,6 +76,9 @@ class AgentAnswer:
     found: bool  # false: the indexed documents do not answer the question
     # Retrieved chunks, only with include_context: the full graph context is ~20k tokens.
     context: list[ContextChunk] = field(default_factory=list)
+    # With VERIFY_BADGES: how many cited sentences the cited text supports ("verified" of
+    # "checked") and how many sentences cite nothing ("unsupported"). None: not verified.
+    verification: dict[str, int] | None = None
 
 
 @dataclass
@@ -411,6 +415,9 @@ def create_server(
             sources=result.sources,
             found=result.found,
             context=result.chunks if include_context else [],
+            verification=verification_counts(
+                verification_view(result.answer, result.extra, app.cfg.verify_badges)
+            ),
         )
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))

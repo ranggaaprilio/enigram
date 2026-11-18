@@ -1,8 +1,10 @@
 # Verifikasi jawaban per kalimat
 
 Rencana dibuat 2026-11-09, direvisi 2026-11-18 (konteks kode diperbarui, celah desain ditutup).
-V1, V2 dan V3 sudah dibangun (2026-11-18); V2+V3 mati secara default (`VERIFY_ANSWERS`). V4
-belum, menunggu pengukuran.
+V1, V2 dan V3 sudah dibangun (2026-11-18); V2+V3 mati secara default (`VERIFY_ANSWERS`). Dari
+V4 baru sebagian yang dibangun (2026-11-18): tanda `verified`/`unverified` dan hitungan per
+jawaban, mati secara default (`VERIFY_BADGES`). Mode strict, badge `contradicted` dan
+`confidence`/`level` belum, menunggu pengukuran.
 
 ## Masalah
 
@@ -271,6 +273,14 @@ langkah 2 di bawah butuh orang yang melabel dulu, minimal 30 kalimat per asal.
   dan label yang diperiksa manusia sebelum gate dianggap lolos.
 
 V2+V3 di-merge dalam mode hanya mencatat. V4 baru dikerjakan kalau gate di bawah lolos.
+
+**V4 sebagian (keputusan pemilik 2026-11-18, sebelum gate lolos).** Yang dibangun hanya yang
+tidak mengubah jawaban: tanda `verified`/`unverified` di sebelah badge asal dan hitungan
+"terverifikasi X dari Y kalimat berkutipan" di web, `POST /query`, Chat, `enigram query` dan
+MCP. `VERIFY_BADGES` menyebut asal yang boleh menampilkan tanda; kosong (default) berarti tidak
+ada. `contradicted` ditampilkan sebagai `unverified`, verdict dari judge model tidak
+ditampilkan, dan jawaban gabungan kode+dokumen tidak diberi tanda. Human jangan dinyalakan
+sebelum datanya cukup.
 
 1. Jalankan `enigram golden answer --system <x> --split dev` dengan verifikasi menyala (hanya
    dicatat, jawaban tidak diubah).

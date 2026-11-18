@@ -97,8 +97,19 @@ those:
 | `unsupported` | the sentence has no citation (not sent) |
 | `unchecked` | no cited text could be had, such as an inline code citation on the documents path (not sent) |
 
-The verdicts are recorded only: the answer does not change, and nothing is shown in the UI. A
-verdict from the judge model is marked `reason: uncalibrated provider`.
+The answer never changes. By default the verdicts are recorded only; `VERIFY_BADGES` names the
+origins whose sentences may show theirs, for example `VERIFY_BADGES=code,document`:
+
+- the web UI puts a mark after the origin badges of a sentence (a check for `verified`, a dashed
+  circle for `unverified`) and a count under the answer;
+- `POST /query`, `GET /queries/{id}` and chat messages carry `verification`: `marks` (one per
+  tagged sentence, in order; `null` for no mark) and the counts `verified`, `checked` and
+  `unsupported`;
+- `enigram query` prints the counts, and the MCP `query` tool returns them.
+
+A sentence is marked when every origin of it is named. `contradicted` shows as `unverified`,
+because its precision is not measured. Nothing shows for a verdict from the judge model (marked
+`reason: uncalibrated provider`) or for an answer merged from code and documents.
 
 The wording and the 0.5 threshold were set on 235 labelled sentences of the `dev` split
 (jev-1.14.0): 11-12% of the grounded code sentences and 17% of the document ones were left

@@ -85,6 +85,16 @@ export interface QueryResult {
   // 'auto': the router merged a code answer and a documents answer.
   mode: Mode | 'enigram-agent' | 'auto'
   extra?: { route?: RouteDecision }
+  verification?: VerificationView | null
+}
+
+// What of an answer's per-sentence verification may show (VERIFY_BADGES): one mark per tagged
+// sentence in the answer's order (null: no mark), and the counts.
+export interface VerificationView {
+  marks: ('verified' | 'unverified' | null)[]
+  verified: number
+  checked: number
+  unsupported: number
 }
 
 // The router's decision (application/routing.py), on answers from scope 'auto' or forced.
@@ -302,6 +312,7 @@ export interface QuerySummary {
 
 export interface QueryRecord extends QuerySummary {
   result: QueryResult | null
+  verification?: VerificationView | null
 }
 
 export interface GraphEntity {
@@ -819,6 +830,7 @@ export interface ChatMessage {
   // An answer's, from its trace:
   sources?: Source[]
   found?: boolean | null
+  verification?: VerificationView | null
 }
 
 export interface ChatSessionDetail extends ChatSession {
