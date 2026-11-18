@@ -27,7 +27,7 @@ def test_questions_load_and_validate():
     }
     sentence = question("sentence_relation", claim="claims.2", context="contexts.2")
     assert sentence.instructions == "How does `contexts.2` relate to `claims.2`?"
-    assert sentence.criteria == QUESTIONS["claim_relation"].criteria
+    assert list(sentence.criteria) == ["supports", "partly", "contradicts", "says_nothing"]
     relation = QUESTIONS["claim_relation"]
     assert relation.kind == "choice"
     assert list(relation.criteria) == ["supports", "contradicts", "says_nothing"]

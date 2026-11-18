@@ -258,6 +258,18 @@ dan terhadap label manusia per asal presisi `contradicted`, laju `unverified` pa
 yang diisi (0 klaim bertanda). Label blind yang ada menilai jawaban utuh, bukan kalimat. Jadi
 langkah 2 di bawah butuh orang yang melabel dulu, minimal 30 kalimat per asal.
 
+**Pengukuran pertama (2026-11-18, label draf dari model, belum diperiksa pemilik).** Split
+`dev`, sistem `agent-auto` dan `agent-business`, Jev `jev-1.14.0`; 235 kalimat berlabel
+(code 163, document 72, human 12).
+
+- Kata-kata awal (tiga jawaban, threshold 0,8): `unverified` palsu code 4-7%, document
+  11-14%; tapi dari 7 kalimat code yang kutipannya tidak cukup hanya 1-2 yang tertangkap.
+- `sentence_relation` diberi jawaban `partly` dan threshold 0,5: `unverified` palsu code
+  11-12%, document 17%; 12-13 dari 14 kalimat tak didukung tertangkap.
+- `contradicted` tidak pernah muncul, jadi presisinya belum terukur. Human baru 12 kalimat.
+- Threshold dipilih dari kalimat yang sama dengan yang dipakai mengukur; perlu run baru
+  dan label yang diperiksa manusia sebelum gate dianggap lolos.
+
 V2+V3 di-merge dalam mode hanya mencatat. V4 baru dikerjakan kalau gate di bawah lolos.
 
 1. Jalankan `enigram golden answer --system <x> --split dev` dengan verifikasi menyala (hanya

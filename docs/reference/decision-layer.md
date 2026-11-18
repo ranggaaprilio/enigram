@@ -91,15 +91,20 @@ those:
 
 | Verdict | When |
 |---|---|
-| `verified` | `supports` with P(supports) ≥ 0.8 |
+| `verified` | `supports` with P(supports) ≥ 0.5 |
 | `contradicted` | `contradicts` |
-| `unverified` | `says_nothing`, or `supports` below 0.8 |
+| `unverified` | `partly` (a main assertion of the sentence is not in the cited text), `says_nothing`, or `supports` below 0.5 |
 | `unsupported` | the sentence has no citation (not sent) |
 | `unchecked` | no cited text could be had, such as an inline code citation on the documents path (not sent) |
 
 The verdicts are recorded only: the answer does not change, and nothing is shown in the UI. A
-verdict from the judge model is marked `reason: uncalibrated provider`. The 0.8 threshold comes
-from the eval recipe and has not been measured on live answers.
+verdict from the judge model is marked `reason: uncalibrated provider`.
+
+The wording and the 0.5 threshold were set on 235 labelled sentences of the `dev` split
+(jev-1.14.0): 11-12% of the grounded code sentences and 17% of the document ones were left
+unverified, and 12-13 of the 14 not-grounded ones were caught. The labels were drafted by a
+model and the threshold was picked on the same sentences, so treat the numbers as a first
+estimate. `contradicted` did not occur, and sentences citing notes were too few (12) to measure.
 
 Cost: one decision request per answer (more when the cited text exceeds 40,000 characters), and,
 on the agent path, one git read per cited file.
