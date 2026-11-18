@@ -64,8 +64,8 @@ async def verify_answer(
     sentences = tagged_sentences(result.answer)
     entries: list[dict[str, Any]] = []
     sent: list[tuple[int, str, str]] = []
-    for i, (text, citations) in enumerate(sentences):
-        entry: dict[str, Any] = {"text": text, "citations": citations}
+    for i, (text, citations, origins) in enumerate(sentences):
+        entry: dict[str, Any] = {"text": text, "citations": citations, "origins": origins}
         if not citations:
             entry["verdict"] = "unsupported"
         else:

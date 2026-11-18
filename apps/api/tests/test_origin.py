@@ -136,11 +136,21 @@ def test_tagged_sentences_are_the_claims_with_their_citations():
     tagged, _ = tag_origins(answer, [DOC, FLOW, NOTE])
 
     assert tagged_sentences(tagged) == [
-        (f"It checks the hash {CODE} [1].", [CODE, "[1]"]),
-        ("Then it returns [1, 2].", ["[1]", "[2]"]),
-        ("Tokens never expire.", []),
+        (f"It checks the hash {CODE} [1].", [CODE, "[1]"], ["code", "document"]),
+        ("Then it returns [1, 2].", ["[1]", "[2]"], ["document", "summary"]),
+        ("Tokens never expire.", [], ["unsupported"]),
         (
             "It is in the page src/[1]/page.tsx:3-4@abc1234567 note#7.",
             ["src/[1]/page.tsx:3-4@abc1234567", "note#7"],
+            ["code", "human"],
         ),
     ]
+
+
+def test_a_bracketed_path_segment_is_not_a_document():
+    text = "It renders the page src/[1]/page.tsx:3-4@abc1234567."
+
+    assert tag_origins(text, [DOC]) == (
+        "It renders the page src/[1]/page.tsx:3-4@abc1234567 [code].",
+        {"code": 1},
+    )

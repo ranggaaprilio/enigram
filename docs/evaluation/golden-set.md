@@ -102,3 +102,11 @@ decision judge also AUROC of P(supports), a cross-validated threshold and how ma
 below confidence 0.8. Claims are matched by question and sentence text. Without `--judge`, abstention
 is rule-based (the system said it has no answer). Every report lists missing scores with their
 reason and compares the headline numbers with the previous run.
+
+Answers made with `VERIFY_ANSWERS=on` carry per-sentence verdicts (see
+[answer verification](../reference/decision-layer.md#answer-verification)). The report's
+"Answer verification" section counts them per origin and, with `--labels` (no `--judge` needed,
+no model call), compares the judged sentences with the human labels per origin: precision of
+`contradicted`, the share of grounded sentences not marked verified, and the share of
+not-grounded ones not marked verified. An origin with fewer than 30 labelled sentences is marked
+"too few".

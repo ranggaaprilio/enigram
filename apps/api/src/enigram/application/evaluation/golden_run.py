@@ -192,6 +192,8 @@ async def answer_golden(
                 # Phase 2: the cited notes ({id, status, reason, conflict}) and origin counts.
                 notes=result.extra.get("notes"),
                 origins=result.extra.get("origins"),
+                # Per-sentence verdicts with VERIFY_ANSWERS=on (application/verification.py).
+                verification=result.extra.get("verification"),
                 citations=answer_citations(
                     result.answer, result.sources, refs=system not in AGENT_SYSTEMS
                 ),

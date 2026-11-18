@@ -46,14 +46,15 @@ def _source_origin(source: Source) -> str:
 
 def _origins(sentence: str, by_ref: dict[int, Source], notes: set[int]) -> set[str]:
     found: set[str] = set()
-    for group in REFS.findall(sentence):
-        for n in re.split(r"\s*,\s*", group):
-            if source := by_ref.get(int(n)):
+    for c in citations_of(sentence):
+        if c.startswith("["):
+            if source := by_ref.get(int(c[1:-1])):
                 found.add(_source_origin(source))
-    if CITATION.search(sentence):
-        found.add("code")
-    if any(int(m[1]) in notes for m in NOTE_CITATION.finditer(sentence)):
-        found.add("human")
+        elif c.startswith("note#"):
+            if int(c[5:]) in notes:
+                found.add("human")
+        else:
+            found.add("code")
     return found
 
 
@@ -140,18 +141,20 @@ def citations_of(sentence: str) -> list[str]:
     return list(dict.fromkeys(c for _, c in sorted(found)))
 
 
-def tagged_sentences(answer: str) -> list[tuple[str, list[str]]]:
-    """Every sentence of a tagged answer that carries an origin tag (the claims), without its
-    tags, with its citations; an `[unsupported]` one has none."""
+def tagged_sentences(answer: str) -> list[tuple[str, list[str], list[str]]]:
+    """Every sentence of a tagged answer that carries an origin tag (the claims): its text
+    without the tags, its citations (none for an `[unsupported]` one), and its origins."""
     out = []
     lines = answer.split("\n")
     for i in _body_lines(lines):
         for piece, _ in _pieces(lines[i]):
             body = piece.replace(_DOT, ".").strip()
-            if not _END_TAGS.search(body):
+            tags = _END_TAGS.search(body)
+            if not tags:
                 continue
+            origins = sorted(o for o in ORIGINS if f"[{o}]" in tags[0])
             text = _LIST_MARKER.sub("", _END_TAGS.sub("", body))
-            out.append((text, [] if "[unsupported]" in body else citations_of(text)))
+            out.append((text, [] if "unsupported" in origins else citations_of(text), origins))
     return out
 
 

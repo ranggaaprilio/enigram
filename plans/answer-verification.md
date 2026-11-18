@@ -249,6 +249,15 @@ dan `enigram query`.
 
 ## Pengukuran (gate sebelum V4)
 
+**Alat ukur (dibangun 2026-11-18).** Golden run menyimpan `verification` per jawaban, dan
+`enigram eval --labels <sheet>` menulis bagian "Answer verification": sebaran verdict per asal,
+dan terhadap label manusia per asal presisi `contradicted`, laju `unverified` palsu dan recall
+(`application/evaluation/verification_eval.py`). Tidak memanggil model.
+
+**Belum ada label klaim manusia.** Per 2026-11-18, ke-32 label sheet di `data/eval/` belum ada
+yang diisi (0 klaim bertanda). Label blind yang ada menilai jawaban utuh, bukan kalimat. Jadi
+langkah 2 di bawah butuh orang yang melabel dulu, minimal 30 kalimat per asal.
+
 V2+V3 di-merge dalam mode hanya mencatat. V4 baru dikerjakan kalau gate di bawah lolos.
 
 1. Jalankan `enigram golden answer --system <x> --split dev` dengan verifikasi menyala (hanya

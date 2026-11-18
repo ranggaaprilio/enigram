@@ -42,6 +42,7 @@ async def test_each_claim_sentence_gets_a_verdict():
     assert v["sentences"][0] == {
         "text": "Logins are checked here [1].",
         "citations": ["[1]"],
+        "origins": ["document"],
         "truncated": False,
         "verdict": "verified",
         "relation": "supports",
