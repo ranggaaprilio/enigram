@@ -1468,3 +1468,22 @@ def test_conflicts_routes(notes_env):
         (["E"], [f"src/app.service.ts:10-15@{sha[:12]}"])
     ]
     assert [(r["sha"], r["report"]) for r in view["runs"]] == [(sha, {"conflicts": 1})]
+
+
+def test_query_carries_what_of_the_verification_may_show(env, monkeypatch):
+    client, *_ = env
+    question = {"question": "Who designed the protocol?"}
+    assert client.post("/query", json=question).json()["verification"] is None  # no badges
+    seen = []
+
+    def view(answer, extra, shown):
+        seen.append((answer, shown))
+        return {"marks": ["verified"], "verified": 1, "checked": 1, "unsupported": 0}
+
+    monkeypatch.setattr(api, "verification_view", view)
+
+    body = client.post("/query", json=question).json()
+
+    assert body["verification"]["marks"] == ["verified"]
+    assert client.get(f"/queries/{body['id']}").json()["verification"]["checked"] == 1
+    assert seen[0] == ("Mira Okafor [1] [document].", ())

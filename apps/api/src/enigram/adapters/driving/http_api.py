@@ -95,6 +95,7 @@ from enigram.application.review import review_queue
 from enigram.application.routing import answer_routed, scope_mode
 from enigram.application.setup import setup_status
 from enigram.application.targets import find_targets
+from enigram.application.verification import verification_view
 from enigram.application.webhooks import parse_push, verify_webhook
 from enigram.bootstrap import build_deps
 from enigram.config import Config
@@ -1373,7 +1374,8 @@ def create_app(
         query_id = await store.log_query(
             "api", body.question, result.mode, result=result, api_key=key
         )
-        return {"id": query_id, **asdict(result)}
+        view = verification_view(result.answer, result.extra, ws.cfg.verify_badges)
+        return {"id": query_id, **asdict(result), "verification": view}
 
     @app.get("/queries")
     async def list_queries(
@@ -1386,7 +1388,11 @@ def create_app(
         row = await ws.store.get_query(query_id)
         if row is None:
             raise HTTPException(404, f"No query {query_id}")
-        return row
+        result = row.get("result") or {}
+        view = verification_view(
+            result.get("answer") or "", result.get("extra") or {}, ws.cfg.verify_badges
+        )
+        return {**row, "verification": view}
 
     # Chat (plan item 8, C1; plans/rbac.md): any member chats in their own sessions; a shared
     # one is read-only for the others; another person's private session looks missing.
@@ -1447,7 +1453,9 @@ def create_app(
     async def chat_session(ws: Viewer, request: Request, session_id: int) -> dict[str, Any]:
         """The session and its messages; each answer with its sources and its trace id."""
         try:
-            found = await session_detail(ws.chat, ws.store, session_id, _key_name(request))
+            found = await session_detail(
+                ws.chat, ws.store, session_id, _key_name(request), ws.cfg.verify_badges
+            )
         except EnigramError as e:
             raise _raise_http(e) from e
         return jsonable_encoder(found)

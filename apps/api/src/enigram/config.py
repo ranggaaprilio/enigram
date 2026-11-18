@@ -81,6 +81,21 @@ def _verify_answers() -> bool:
     return value == "on"
 
 
+BADGE_ORIGINS = ("code", "summary", "human", "document")
+
+
+def _verify_badges() -> tuple[str, ...]:
+    names = tuple(
+        n.strip().lower() for n in os.environ.get("VERIFY_BADGES", "").split(",") if n.strip()
+    )
+    unknown = [n for n in names if n not in BADGE_ORIGINS]
+    if unknown:
+        raise EnigramError(
+            f"VERIFY_BADGES takes {', '.join(BADGE_ORIGINS)}, got {', '.join(unknown)}"
+        )
+    return names
+
+
 @dataclass(frozen=True)
 class OidcConfig:
     issuer: str  # https://accounts.google.com, https://login.microsoftonline.com/<tenant>/v2.0
@@ -213,6 +228,10 @@ class Config:
     # citations by the decision layer, recorded in extra["verification"] only (off by default:
     # it sends that text to the decision provider and costs a call per answer).
     verify_answers: bool = False
+    # VERIFY_BADGES=code,document: the origins whose sentences may show their verdict (web, API,
+    # CLI, MCP). Empty (default): verdicts stay in the trace. Name an origin only after its
+    # measurement passed (plans/answer-verification.md).
+    verify_badges: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls, dotenv_path: Path | None = None) -> "Config":
@@ -390,6 +409,7 @@ class Config:
                 or Path(__file__).resolve().parents[4] / "tools" / "ts-graph"
             ).expanduser(),
             verify_answers=_verify_answers(),
+            verify_badges=_verify_badges(),
         )
 
     @property

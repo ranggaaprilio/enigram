@@ -610,6 +610,7 @@ function asResult(m: ChatMessage): QueryResult {
     found: m.found ?? true,
     query_secs: 0,
     mode: 'enigram-agent',
+    verification: m.verification,
   }
 }
 

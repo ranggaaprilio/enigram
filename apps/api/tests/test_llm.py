@@ -465,6 +465,15 @@ def test_verify_answers_is_off_unless_on(cfg, clean_env, monkeypatch):
         Config.from_env(clean_env)
 
 
+def test_verify_badges_lists_the_origins_that_may_show_a_verdict(cfg, clean_env, monkeypatch):
+    assert cfg.verify_badges == ()
+    monkeypatch.setenv("VERIFY_BADGES", "Code, document")
+    assert Config.from_env(clean_env).verify_badges == ("code", "document")
+    monkeypatch.setenv("VERIFY_BADGES", "code,unsupported")
+    with pytest.raises(EnigramError, match="VERIFY_BADGES takes .* got unsupported"):
+        Config.from_env(clean_env)
+
+
 def test_config_rejects_unknown_storage_backend(cfg, clean_env, monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "sqlite")
     with pytest.raises(EnigramError, match="STORAGE_BACKEND"):

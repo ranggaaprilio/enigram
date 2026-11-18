@@ -1,9 +1,18 @@
+from datetime import datetime
+
 import pytest
 from code_fakes import FakeDecider, choice
 
 from enigram.application import verification
-from enigram.application.verification import verify_answer
+from enigram.application.chat import message_json
+from enigram.application.verification import (
+    verification_counts,
+    verification_line,
+    verification_view,
+    verify_answer,
+)
 from enigram.domain.answer import QueryResult
+from enigram.domain.chat import ChatMessage
 
 CODE = "src/a.ts:1-2@abc1234567"
 TEXTS = {"[1]": "Logins are checked by the guard.", CODE: "1: guard()", "note#7": "Admins only."}
@@ -118,3 +127,72 @@ async def test_a_partly_shown_sentence_is_unverified():
 
     [s] = result.extra["verification"]["sentences"]
     assert (s["verdict"], s["relation"], s["p_supports"]) == ("unverified", "partly", 0.3)
+
+
+VIEWED = (
+    "Logins are checked here [1] [document]. The guard runs first "
+    f"{CODE} [code]. Only admins pass note#7 [human]. "
+    "Tokens never expire [unsupported]. Both say so [1] "
+    f"{CODE} [code][document]."
+)
+
+
+async def _verified(answer=VIEWED, name="jev"):
+    decider = _decider(
+        choice("supports", supports=0.9),
+        choice("contradicts", contradicts=0.85, supports=0.1),
+        choice("supports", supports=0.9),
+        choice("partly", partly=0.7, supports=0.3),
+        name=name,
+    )
+    return await verify_answer(decider, _result(answer), TEXTS.get)
+
+
+async def test_view_marks_only_the_origins_that_may_show():
+    result = await _verified()
+
+    assert verification_view(result.answer, result.extra, ("code", "document")) == {
+        # contradicted shows as unverified; human is not shown; both origins must be shown
+        "marks": ["verified", "unverified", None, None, "unverified"],
+        "verified": 1,
+        "checked": 3,
+        "unsupported": 1,
+    }
+    assert verification_view(result.answer, result.extra, ("document",))["marks"] == [
+        "verified",
+        None,
+        None,
+        None,
+        None,
+    ]
+
+
+async def test_no_view_when_nothing_may_show_or_it_does_not_fit_the_answer():
+    result = await _verified()
+
+    assert verification_view(result.answer, result.extra, ()) is None
+    assert verification_view(result.answer, result.extra, ("human",)) is not None
+    assert verification_view(result.answer, result.extra, ("summary",)) is None  # no mark at all
+    assert verification_view(result.answer, {}, ("code",)) is None
+    # A merged answer carries the verification of one part: its sentences are not the answer's.
+    merged = f"**From the code**\n\n{result.answer}\n\nMore here [1] [document]."
+    assert verification_view(merged, result.extra, ("code", "document")) is None
+    judge = await _verified(name="llm_judge")
+    assert verification_view(judge.answer, judge.extra, ("code", "document")) is None
+    mixed = {"verification": {**result.extra["verification"], "reason": "uncalibrated provider"}}
+    assert verification_view(result.answer, mixed, ("code", "document")) is None
+
+
+async def test_chat_message_and_counts_carry_the_view():
+    result = await _verified()
+    message = ChatMessage(1, 1, "agent", "auto", result.answer, 7, 0, None, datetime(2026, 11, 18))
+
+    data = message_json(message, {"extra": result.extra}, ("code", "document"))
+
+    assert data["verification"]["marks"][0] == "verified"
+    assert message_json(message, {"extra": result.extra})["verification"] is None
+    assert "verification" not in message_json(message)
+    view = data["verification"]
+    assert verification_counts(view) == {"verified": 1, "checked": 3, "unsupported": 1}
+    assert verification_line(view) == "Verified: 1 of 3 cited sentences; 1 without a source"
+    assert verification_line(None) == "" and verification_counts(None) is None

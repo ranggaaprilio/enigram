@@ -316,6 +316,7 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
     from enigram.application.code_agent import AGENT_MODE, answer_with_agent, repo_name
     from enigram.application.querying import answer_question
     from enigram.application.routing import answer_routed, resolve_scope
+    from enigram.application.verification import verification_line, verification_view
     from enigram.bootstrap import build_deps
 
     deps = build_deps(cfg)
@@ -370,6 +371,8 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
         if store:
             await store.close()
     print(result.answer)
+    if line := verification_line(verification_view(result.answer, result.extra, cfg.verify_badges)):
+        print(f"\n{line}")
     if result.sources:
         print("\nSources:")
         for s in result.sources:

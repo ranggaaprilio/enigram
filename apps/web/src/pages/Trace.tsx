@@ -229,7 +229,7 @@ export function TraceDetail() {
       {record.error && <ErrorAlert>{record.error}</ErrorAlert>}
       {result && (
         <>
-          <Answer result={result} />
+          <Answer result={{ ...result, verification: record.verification }} />
           <div className="mt-8">
             <Section title="Chunks" count={result.chunks.length}>
               {result.chunks.map((c) => (
