@@ -6,7 +6,8 @@ import * as express from "./entrypoints/express.mjs";
 import * as generic from "./entrypoints/generic.mjs";
 import * as nest from "./entrypoints/nest.mjs";
 import * as next from "./entrypoints/next.mjs";
-import { findProjects, openProject, relPath } from "./project.mjs";
+import { emptyJsSkips, findJsProjects, openJsProject } from "./javascript.mjs";
+import { findProjects, MAX_PROJECTS, openProject, relPath } from "./project.mjs";
 import { fileSymbols } from "./symbols.mjs";
 
 const ADAPTERS = { nest, next, express };
@@ -42,13 +43,17 @@ function diagnosticsSample(root, project, files) {
  * Without `tsconfig`, every TypeScript project in it (findProjects) is analysed and the results
  * are merged: a monorepo's `apps/web/tsconfig.json` counts as much as a root one. Paths stay
  * relative to the repository root.
+ * With `javascript` (and no `tsconfig`), JavaScript files no TypeScript project includes are
+ * analysed too, one project per nearest `package.json` / `jsconfig.json` (findJsProjects); a
+ * repository with no project at all is then an empty graph instead of an error.
  * @param {string} root absolute repository path
- * @param {{tsconfig?: string, diagnostics?: boolean}} options
+ * @param {{tsconfig?: string, diagnostics?: boolean, javascript?: boolean}} options
  */
-export function buildGraph(root, { tsconfig, diagnostics = true } = {}) {
+export function buildGraph(root, { tsconfig, diagnostics = true, javascript = false } = {}) {
   const start = performance.now();
+  const withJs = javascript && !tsconfig;
   const configs = tsconfig ? [tsconfig] : findProjects(root);
-  if (!configs.length) throw new Error(`no tsconfig.json in ${root}`);
+  if (!configs.length && !withJs) throw new Error(`no tsconfig.json in ${root}`);
   const taken = new Set(); // files a shallower project analyses already
   const parts = [];
   for (const config of configs) {
@@ -59,8 +64,26 @@ export function buildGraph(root, { tsconfig, diagnostics = true } = {}) {
       parts.push({ config, error: e.message });
     }
   }
+  const jsSkipped = withJs ? { test: 0, ...emptyJsSkips() } : null;
+  let truncated = 0;
+  if (withJs) {
+    // Every file a TypeScript project includes stays its own, skipped ones (tests, .d.ts) too.
+    const tsFiles = new Set(
+      parts.filter((p) => !p.error).flatMap((p) => p.project.getSourceFiles().map((sf) => sf.getFilePath())),
+    );
+    const found = findJsProjects(root, tsFiles, MAX_PROJECTS - configs.length);
+    Object.assign(jsSkipped, found.skipped);
+    truncated = found.truncated;
+    for (const project of found.projects) {
+      try {
+        parts.push(openJsPart(root, project, jsSkipped));
+      } catch (e) {
+        parts.push({ config: project.config, language: "js", error: e.message });
+      }
+    }
+  }
   const done = parts.filter((p) => !p.error);
-  if (!done.length) throw new Error(parts.map((p) => `${p.config}: ${p.error}`).join("; "));
+  if (!done.length && parts.length) throw new Error(parts.map((p) => `${p.config}: ${p.error}`).join("; "));
   // One context over every project's symbols: a call into a file another project analyses
   // (a relative import, a `paths` alias) still lands on its symbol. declKey is a path and an
   // offset, the same in every project that includes the file.
@@ -76,6 +99,12 @@ export function buildGraph(root, { tsconfig, diagnostics = true } = {}) {
   }
   const skipped = { test: 0, dts: 0, generated: 0, outside: 0, other_project: 0 };
   for (const p of done) for (const [k, n] of Object.entries(p.skipped)) skipped[k] += n;
+  if (jsSkipped) {
+    // JavaScript skip reasons appear only with --javascript, so the report without it is unchanged.
+    const { test: jsTests, ...jsOther } = jsSkipped;
+    skipped.test += jsTests;
+    Object.assign(skipped, jsOther);
+  }
 
   const count = (kind) => edges.filter((e) => e.kind === kind).length;
   const calls = edges.filter((e) => e.kind === "calls" || e.kind === "calls_external");
@@ -98,12 +127,18 @@ export function buildGraph(root, { tsconfig, diagnostics = true } = {}) {
     adapters,
     fallback: done.some((p) => p.fallback) ? "generic" : null,
     unmatched_frameworks: [...new Set(done.flatMap((p) => p.unmatched))],
-    // Each project analysed: its tsconfig, and what it gave (or why it could not be read).
-    projects: parts.map((p) =>
-      p.error
-        ? { tsconfig: p.config, error: p.error }
-        : { tsconfig: p.config, files: p.files, symbols: p.symbols.length, entrypoints: p.entrypoints.length, adapters: p.adapters },
-    ),
+    // Each project analysed: its config, and what it gave (or why it could not be read). A
+    // TypeScript project keeps its `tsconfig` key; a JavaScript one has none. `config` and
+    // `language` only with --javascript, so the report without it keeps its old shape.
+    projects: parts.map((p) => {
+      let head = { tsconfig: p.config };
+      if (p.language === "js") head = { config: p.config, language: "js" };
+      else if (withJs) head = { tsconfig: p.config, config: p.config, language: "ts" };
+      return p.error
+        ? { ...head, error: p.error }
+        : { ...head, files: p.files, symbols: p.symbols.length, entrypoints: p.entrypoints.length, adapters: p.adapters };
+    }),
+    ...(withJs ? { projects_truncated: truncated } : {}),
     diagnostics_sample: done.flatMap((p) => p.diagnostics).slice(0, MAX_DIAGNOSTICS),
     secs: Number(((performance.now() - start) / 1000).toFixed(1)),
   };
@@ -127,6 +162,29 @@ function openPart(root, config, taken) {
   const options = { express: deps.has("express") }; // inline route handlers become symbols
   const symbols = files.flatMap((sf) => fileSymbols(root, sf, options));
   return { config, project, dir, deps, files: files.length, sourceFiles: files, skipped, symbols };
+}
+
+/**
+ * One JavaScript project (findJsProjects): its files, minus those with a syntax error (counted
+ * in `jsSkipped.syntax`), and their symbols.
+ */
+function openJsPart(root, found, jsSkipped) {
+  const { project, files, syntax, unreadable } = openJsProject(root, found);
+  jsSkipped.syntax += syntax;
+  jsSkipped.unreadable += unreadable;
+  const deps = new Set([...dependencyNames(root), ...dependencyNames(found.dir)]);
+  const symbols = files.flatMap((sf) => fileSymbols(root, sf, { express: deps.has("express") }));
+  return {
+    config: found.config,
+    language: "js",
+    project,
+    dir: found.dir,
+    deps,
+    files: files.length,
+    sourceFiles: files,
+    skipped: {},
+    symbols,
+  };
 }
 
 /**

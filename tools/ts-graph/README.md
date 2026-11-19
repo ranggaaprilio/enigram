@@ -11,13 +11,14 @@ replace it by writing the same files.
 
 ```bash
 npm ci
-node index.mjs --repo <dir> --out <dir> [--tsconfig <path>]
+node index.mjs --repo <dir> --out <dir> [--tsconfig <path>] [--javascript]
 npm test          # node --test on test/fixture, a small Nest-like project
 ```
 
-Exit code 2 when the arguments are wrong, the repository has no `tsconfig.json`, or none of its
-projects can be read; the
+Exit code 2 when the arguments are wrong, the repository has no `tsconfig.json` (without
+`--javascript`), or none of its projects can be read; the
 message is on stderr. On success stdout is one JSON line: the report without `diagnostics_sample`.
+With `--javascript`, a repository without any project is an empty graph and exit code 0.
 
 ## Projects
 
@@ -30,12 +31,46 @@ the repository root. Framework adapters look at each project's own folder: Next'
 adapter matches gets the generic `root` entry points. Calls between projects through a package
 name (`@acme/ui`) stay unresolved: there is no `node_modules`.
 
+### JavaScript projects (`--javascript`)
+
+Off by default; without it the output is exactly what it was before. With it (and without
+`--tsconfig`), the JavaScript files (`.js`, `.jsx`, `.mjs`, `.cjs`) that no TypeScript project
+includes are parsed too, after the TypeScript projects:
+
+- A file belongs to the nearest folder above it with a `jsconfig.json` or a `package.json`; each
+  such folder that owns a file is one project (`config` = that file, `language` = `"js"`). A
+  backend and a frontend with a `package.json` each are two projects. A folder under `test/`,
+  `tests/` or `__tests__/` is never a project.
+- A file a tsconfig includes stays with that TypeScript project (a tsconfig with `allowJs` keeps
+  its `.js` files); a tsconfig without `allowJs` leaves its repository's `.js` files to the
+  nearest `package.json`.
+- Compiler options: `allowJs`, no type checking (`checkJs: false`, so `diagnostics_sample` stays
+  empty for these files), JSX in `.js` files, `bundler` module resolution, and only `baseUrl` and
+  `paths` from a `jsconfig.json`, and only when they stay inside the repository (a `baseUrl`
+  outside it, or a `paths` value that is not a list of relative strings inside it, drops them).
+  `extends` is not followed.
+- All projects, TypeScript and JavaScript, count against the same limit of 50
+  (`report.projects_truncated` counts the JavaScript projects left out).
+- TypeScript rows stay the same, except that a call from a TypeScript project into a JavaScript
+  file that is now parsed becomes a `calls` edge to its symbol instead of `calls_external`.
+- Symbolic links are not followed.
+
 ## Files analysed
 
 Every file the tsconfig includes, except `node_modules/`, `dist/`, `build/`, `.git/`, `coverage/`,
 files outside the repository, `*.d.ts`, tests (`*.spec.ts`, `*.e2e-spec.ts`, `*.test.ts`, `test/`,
 `__tests__/`) and `*.generated.*`. Skipped files stay in the program so their types still help
 the checker; they are counted in `report.files_skipped`.
+
+Every JavaScript file of a JavaScript project, except (counted in `report.files_skipped` under
+the reason in brackets): tests (`*.spec.js`, `*.test.js`, `*.e2e-spec.js` and any file under
+`test/`, `tests/`, `__tests__/`, `fixtures/`, `__fixtures__/` or `__mocks__/`) [`test`]; tooling
+configs (`*.config.js/.cjs/.mjs`, `.eslintrc.js/.cjs`) [`config`]; `*.min.js`, `*.bundle.js` and
+files whose average line is over 500 characters [`minified`]; files over 10,000 lines [`large`];
+files with a syntax error, such as Flow type annotations [`syntax`]; files that cannot be read
+[`unreadable`]; files with no `package.json` or `jsconfig.json` above them [`no_project`]; files
+of the projects left out by the limit of 50 [`project_limit`]. `.vue` and `.svelte` files are
+counted as [`unsupported`] and not parsed.
 
 ## Output
 
@@ -121,3 +156,14 @@ TypeScript lib); `calls_in_repo_share` the share that lands on a repository symb
 never run) that have no adapter yet. `fallback` is `"generic"` when a project used the `root` rows, else `null`.
 `projects` lists each project parsed (or `{tsconfig, error}` for one that could not be read);
 `files_skipped.other_project` counts files an earlier project already took.
+
+With `--javascript` the report has a few more keys; without it, it is unchanged:
+
+- each `projects` entry has `config` (its `tsconfig.json`, `jsconfig.json` or `package.json`) and
+  `language` (`"ts"` or `"js"`); only a TypeScript project keeps the `tsconfig` key, and a
+  JavaScript project that could not be opened is `{config, language, error}`;
+- `projects_truncated` counts the JavaScript projects left out by the limit of 50;
+- `files_skipped` also has `config`, `minified`, `large`, `syntax`, `unreadable`, `no_project`,
+  `project_limit` and `unsupported` (see Files analysed), and JavaScript tests are added to
+  `test`. Every `.js`/`.jsx`/`.mjs`/`.cjs` file outside the skipped folders that no tsconfig
+  includes is either analysed or counted under exactly one reason.

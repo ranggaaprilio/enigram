@@ -333,3 +333,210 @@ test("Express: the adapter stays off, and inline handlers are no symbols, withou
   assert.ok(!graph.entrypoints.some((e) => e.framework === "express"));
   assert.ok(!nextGraph.symbols.some((s) => /^[A-Z]+ \//.test(s.qualified_name)));
 });
+
+// ---- JavaScript projects (--javascript) ----
+
+const JS_FIXTURE = path.join(HERE, "fixture-js");
+const TSJS = path.join(HERE, "fixture-tsjs");
+const MIXED = path.join(HERE, "fixture-mixed");
+const OLD_FIXTURES = ["fixture", "fixture-plain", "fixture-mono", "fixture-express", "fixture-next"];
+const rowsOf = (g) => ({ symbols: g.symbols, edges: g.edges, entrypoints: g.entrypoints });
+
+function tmpRepo(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ts-graph-js-"));
+  for (const [rel, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+  }
+  return dir;
+}
+
+test("javascript: off by default, and on it changes nothing for repositories without JavaScript", () => {
+  for (const name of OLD_FIXTURES) {
+    const dir = path.join(HERE, name);
+    const off = buildGraph(dir, { diagnostics: false });
+    const on = buildGraph(dir, { diagnostics: false, javascript: true });
+    assert.deepEqual(rowsOf(on), rowsOf(off), name);
+    assert.deepEqual(on.report.projects.map((p) => p.language), off.report.projects.map(() => "ts"), name);
+    // Without the flag the report keeps its old shape exactly.
+    assert.ok(!("projects_truncated" in off.report), name);
+    assert.deepEqual(Object.keys(off.report.files_skipped), ["test", "dts", "generated", "outside", "other_project"], name);
+    for (const p of off.report.projects) {
+      assert.deepEqual(Object.keys(p), p.error ? ["tsconfig", "error"] : ["tsconfig", "files", "symbols", "entrypoints", "adapters"], name);
+    }
+  }
+  assert.throws(() => buildGraph(JS_FIXTURE), /no tsconfig\.json/);
+});
+
+test("javascript: an unreadable file is counted, not fatal", { skip: process.getuid?.() === 0 }, () => {
+  const dir = tmpRepo({ "package.json": "{}", "a.js": "export function a() {}\n", "b.js": "export function b() {}\n" });
+  fs.chmodSync(path.join(dir, "b.js"), 0o000);
+  try {
+    const g = buildGraph(dir, { diagnostics: false, javascript: true });
+    assert.deepEqual(g.symbols.map((s) => s.id), ["a.js#a"]);
+    assert.equal(g.report.files_skipped.unreadable, 1);
+  } finally {
+    fs.chmodSync(path.join(dir, "b.js"), 0o644);
+  }
+});
+
+test("javascript: a jsconfig baseUrl outside the repository or malformed paths are ignored", () => {
+  const outside = tmpRepo({ "lib/leak.js": "export function leak() {}\n" });
+  const dir = tmpRepo({
+    "package.json": "{}",
+    "jsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: outside, paths: { "@o/*": ["lib/*"] } } }),
+    "a.js": 'import { leak } from "@o/leak";\nexport function a() { return leak(); }\n',
+    "web/jsconfig.json": JSON.stringify({ compilerOptions: { paths: { x: [1] } } }),
+    "web/b.js": 'import y from "x";\nexport function b() { return y(); }\n',
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  const call = g.edges.find((e) => e.src === "a.js#a" && e.kind.startsWith("calls"));
+  assert.deepEqual([call.kind, call.dst, call.resolved], ["calls_external", "leak", false]);
+  assert.ok(g.symbols.some((s) => s.id === "web/b.js#b"));
+});
+
+test("javascript: projects over the limit are counted, and so are their files", () => {
+  const files = { "package.json": "{}" };
+  for (let i = 0; i < 52; i += 1) {
+    files[`pkgs/p${String(i).padStart(2, "0")}/package.json`] = "{}";
+    files[`pkgs/p${String(i).padStart(2, "0")}/index.js`] = `export function f${i}() {}\n`;
+  }
+  const g = buildGraph(tmpRepo(files), { diagnostics: false, javascript: true });
+  assert.equal(g.report.projects.length, 50);
+  assert.equal(g.report.projects_truncated, 2);
+  assert.equal(g.report.files_skipped.project_limit, 2);
+  assert.equal(g.report.files, 50);
+});
+
+const jsGraph = buildGraph(JS_FIXTURE, { diagnostics: false, javascript: true });
+
+test("javascript: the nearest package.json or jsconfig.json owns a file", () => {
+  assert.deepEqual(
+    jsGraph.report.projects.map((p) => [p.config, p.language, p.files]),
+    [
+      ["package.json", "js", 2],
+      ["frontend/jsconfig.json", "js", 2],
+    ],
+  );
+  assert.ok(jsGraph.report.projects.every((p) => !("tsconfig" in p)));
+  assert.deepEqual([...new Set(jsGraph.symbols.map((s) => s.file))].sort(), [
+    "backend/server.js",
+    "backend/service.js",
+    "frontend/src/App.js",
+    "frontend/src/components/Button.jsx",
+  ]);
+});
+
+test("javascript: skipped files are counted by reason, so none disappears", () => {
+  const s = jsGraph.report.files_skipped;
+  assert.deepEqual(
+    { test: s.test, config: s.config, minified: s.minified, large: s.large, syntax: s.syntax, no_project: s.no_project, unsupported: s.unsupported },
+    { test: 3, config: 2, minified: 2, large: 0, syntax: 1, no_project: 0, unsupported: 1 },
+  );
+  const found = 12; // .js/.jsx files in fixture-js
+  assert.equal(jsGraph.report.files + s.test + s.config + s.minified + s.large + s.syntax + s.no_project, found);
+});
+
+test("javascript: calls, JSX through a jsconfig alias, and the adapters per project", () => {
+  const calls = jsGraph.edges.filter((e) => e.kind === "calls").map((e) => `${e.src} -> ${e.dst}`);
+  assert.deepEqual(calls.sort(), [
+    "backend/server.js#GET /health -> backend/service.js#list",
+    "backend/service.js#list -> backend/service.js#normalise",
+    "frontend/src/App.js#App -> frontend/src/components/Button.jsx#Button",
+  ]);
+  assert.deepEqual(jsGraph.entrypoints, [
+    { symbol: "backend/server.js#GET /health", kind: "http_route", route: "GET /health", framework: "express", version: "" },
+    { symbol: "frontend/src/App.js#App", kind: "root", route: "App", framework: "generic", version: "" },
+  ]);
+  assert.deepEqual(jsGraph.report.adapters, { express: 1, generic: 1 });
+});
+
+test("javascript: files a tsconfig does not include get a JavaScript project of their own", () => {
+  const off = buildGraph(TSJS, { diagnostics: false });
+  const on = buildGraph(TSJS, { diagnostics: false, javascript: true });
+  assert.deepEqual(off.report.projects.map((p) => [p.tsconfig, p.files]), [["tsconfig.json", 1]]);
+  assert.deepEqual(
+    on.report.projects.map((p) => [p.config, p.language, p.files]),
+    [
+      ["tsconfig.json", "ts", 1],
+      ["package.json", "js", 2],
+    ],
+  );
+  const ts = (g) => g.symbols.filter((s) => s.file.endsWith(".ts"));
+  assert.deepEqual(ts(on), ts(off));
+  assert.ok(on.edges.some((e) => e.kind === "calls" && e.src === "lib/core.js#request" && e.dst === "lib/helpers.js#merge"));
+});
+
+test("javascript: a TypeScript package keeps its output; JavaScript around it goes to the root package.json", () => {
+  const off = buildGraph(MIXED, { diagnostics: false });
+  const on = buildGraph(MIXED, { diagnostics: false, javascript: true });
+  const inTs = (g) => rowsOf({
+    symbols: g.symbols.filter((s) => s.file.startsWith("packages/a/src/")),
+    edges: g.edges.filter((e) => e.src_file.startsWith("packages/a/src/")),
+    entrypoints: g.entrypoints.filter((e) => e.symbol.startsWith("packages/a/src/")),
+  });
+  assert.deepEqual(inTs(on), inTs(off));
+  assert.deepEqual(
+    on.report.projects.map((p) => [p.config, p.language, p.files]),
+    [
+      ["packages/a/tsconfig.json", "ts", 1],
+      ["package.json", "js", 2],
+    ],
+  );
+  assert.ok(on.symbols.some((s) => s.id === "packages/a/scripts/build.js#build"));
+  assert.ok(on.symbols.some((s) => s.id === "scripts/release.js#release"));
+});
+
+test("javascript: no project is an empty graph, not an error; a file without package.json is counted", () => {
+  const dir = tmpRepo({ "README.md": "# docs\n", "tools/run.js": "export function run() {}\n" });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(rowsOf(g), { symbols: [], edges: [], entrypoints: [] });
+  assert.deepEqual(g.report.projects, []);
+  assert.equal(g.report.files, 0);
+  assert.equal(g.report.files_skipped.no_project, 1);
+  assert.throws(() => buildGraph(dir, { diagnostics: false }), /no tsconfig\.json/);
+});
+
+test("javascript: a package.json under test/ or tests/ is a fixture, not a project", () => {
+  const dir = tmpRepo({
+    "package.json": "{}",
+    "src/a.js": "export function a() {}\n",
+    "tests/module/esm/package.json": "{}",
+    "tests/module/esm/run.js": "export function run() {}\n",
+    "test/pkg/package.json": "{}",
+    "test/pkg/index.js": "export function idx() {}\n",
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(g.report.projects.map((p) => [p.config, p.files]), [["package.json", 1]]);
+  assert.equal(g.report.files_skipped.test, 2);
+});
+
+test("javascript: a file over 10,000 lines is skipped as large", () => {
+  const dir = tmpRepo({
+    "package.json": "{}",
+    "big.js": "let n = 0;\n".repeat(10_001),
+    "small.js": "export function one() { return 1; }\n",
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.equal(g.report.files_skipped.large, 1);
+  assert.deepEqual(g.symbols.map((s) => s.id), ["small.js#one"]);
+});
+
+test("javascript: symbolic links are not followed", () => {
+  const dir = tmpRepo({ "package.json": "{}", "a.js": "export function a() {}\n" });
+  const outside = tmpRepo({ "secret.js": "export function secret() {}\n" });
+  fs.symlinkSync(outside, path.join(dir, "linked"));
+  fs.symlinkSync(path.join(outside, "secret.js"), path.join(dir, "b.js"));
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(g.symbols.map((s) => s.id), ["a.js#a"]);
+});
+
+test("javascript: the CLI takes --javascript and exits 0 on a repository without projects", () => {
+  const dir = tmpRepo({ "README.md": "# docs\n" });
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "ts-graph-out-"));
+  const cli = path.join(HERE, "..", "index.mjs");
+  const stdout = execFileSync(process.execPath, [cli, "--repo", dir, "--out", out, "--javascript"], { encoding: "utf8" });
+  assert.equal(JSON.parse(stdout).files, 0);
+  assert.equal(fs.readFileSync(path.join(out, "symbols.jsonl"), "utf8"), "");
+  assert.throws(() => execFileSync(process.execPath, [cli, "--repo", dir, "--out", out], { stdio: "pipe" }));
+});
