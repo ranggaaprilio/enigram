@@ -491,15 +491,18 @@ async def test_create_verified_note_detects_conflict(cfg):
 
     note = await create_annotation(cfg, graph, notes, new, "alice", decider=decider)
 
-    assert (note.status, note.conflict) == ("verified", True)
+    assert (note.status, note.conflict, note.conflict_reason) == ("verified", True, "Fake reason.")
     events = await notes.events(note.id)
     assert [(e.actor, e.action) for e in events] == [
         ("alice", "created"),
         ("decider", "conflict_detected"),
     ]
-    assert events[1].new == {"conflict": True, "p": 0.95}
+    assert events[1].new == {"conflict": True, "conflict_reason": "Fake reason.", "p": 0.95}
     ((state, ids),) = decider.calls
     assert ids == ["conflict"] and state["note"] == "Find never loads."
+    # The reason is asked once, over the same note and code the verdict read.
+    (prompt,) = decider.explained
+    assert "Find never loads." in prompt and state["code"][SERVICE] in prompt
     # The symbol body and its resolved direct callees; the external bcrypt call is left out.
     assert list(state["code"]) == [
         SERVICE,
@@ -532,25 +535,55 @@ async def test_verify_clears_conflict_below_threshold(cfg):
     from enigram.application.annotations import change_annotation
 
     graph, notes, note = await _new(cfg)
-    await notes.update(note.id, {"conflict": True, "status": "needs_verification"}, "x", "x")
+    await notes.update(
+        note.id,
+        {"conflict": True, "conflict_reason": "Old.", "status": "needs_verification"},
+        "x",
+        "x",
+    )
+    decider = FakeDecider({"conflict": noul(0.1)})
 
     verified = await change_annotation(
-        cfg,
-        graph,
-        notes,
-        note.id,
-        {"status": "verified"},
-        "alice",
-        decider=FakeDecider({"conflict": noul(0.1)}),
+        cfg, graph, notes, note.id, {"status": "verified"}, "alice", decider=decider
     )
 
-    assert (verified.status, verified.conflict) == ("verified", False)
+    assert (verified.status, verified.conflict, verified.conflict_reason) == (
+        "verified",
+        False,
+        None,
+    )
+    assert decider.explained == []  # no reason is asked for without a conflict
     last = (await notes.events(note.id))[-1]
     assert (last.actor, last.action, last.new) == (
         "decider",
         "conflict_cleared",
-        {"conflict": False, "p": 0.1},
+        {"conflict": False, "conflict_reason": None, "p": 0.1},
     )
+
+
+async def test_conflict_reason_failure_keeps_the_conflict(cfg):
+    from code_fakes import FakeDecider, fixture_graph, noul
+
+    from enigram.application.annotations import NewAnnotation, create_annotation
+
+    graph, notes = FakeCodeGraph(fixture_graph()), FakeAnnotations()
+    decider = FakeDecider({"conflict": noul(0.95)}, reason=None)
+    new = NewAnnotation("symbol", "AppService.find", "Find never loads.", repo_id=1)
+
+    note = await create_annotation(cfg, graph, notes, new, "alice", decider=decider)
+
+    assert (note.conflict, note.conflict_reason) == (True, None)
+
+
+async def test_manual_no_conflict_clears_the_reason(cfg):
+    from enigram.application.annotations import change_annotation
+
+    graph, notes, note = await _new(cfg)
+    await notes.update(note.id, {"conflict": True, "conflict_reason": "Old."}, "x", "x")
+
+    cleared = await change_annotation(cfg, graph, notes, note.id, {"conflict": False}, "alice")
+
+    assert (cleared.conflict, cleared.conflict_reason) == (False, None)
 
 
 async def test_manual_conflict_wins_and_middle_p_leaves_it(cfg):
@@ -587,6 +620,13 @@ async def test_trusted_text_edit_rechecks_and_owner_change_does_not(cfg):
         cfg, graph, notes, note.id, {"text": "Find deletes users."}, "dave", decider=decider
     )
     assert edited.conflict is True and decider.calls[0][0]["note"] == "Find deletes users."
+
+    # Still conflicting after another edit: the reason follows the new text.
+    decider.reason = "New reason."
+    again = await change_annotation(
+        cfg, graph, notes, note.id, {"text": "Find drops tables."}, "dave", decider=decider
+    )
+    assert (again.conflict, again.conflict_reason) == (True, "New reason.")
 
 
 async def test_decider_failure_does_not_block_verification(cfg):

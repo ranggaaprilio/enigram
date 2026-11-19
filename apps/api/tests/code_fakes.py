@@ -803,7 +803,8 @@ def choice(name: str, confidence: float = 0.95, **probs: float) -> Decision:
 class FakeDecider:
     """DecisionProvider: answers by question id from `answers` (a Decision or a callable of the
     state), else `default`; records every (state, question ids); raises `error` when set.
-    `name` is also the answering provider ("jev" for a decision the abstain guard acts on)."""
+    `name` is also the answering provider ("jev" for a decision the abstain guard acts on).
+    `explain` returns `reason` (raises when it is None) and records the prompt in `explained`."""
 
     name = "fake"
 
@@ -813,13 +814,22 @@ class FakeDecider:
         default: Decision | None = None,
         error: str | None = None,
         name: str | None = None,
+        reason: str | None = "Fake reason.",
     ):
         if name is not None:
             self.name = name
         self.answers = dict(answers or {})
         self.default = default if default is not None else noul(0.5)
         self.error = error
+        self.reason = reason
         self.calls: list[tuple[Any, list[str]]] = []
+        self.explained: list[str] = []
+
+    async def explain(self, prompt) -> str:
+        self.explained.append(prompt)
+        if self.reason is None:
+            raise EnigramError("no reason")
+        return self.reason
 
     async def decide(self, state, questions) -> Decisions:
         self.calls.append((state, list(questions)))

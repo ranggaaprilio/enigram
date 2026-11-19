@@ -87,6 +87,10 @@ class FallbackDecider:
         decisions = await self.fallback.decide(state, questions)
         return dataclasses.replace(decisions, fallback=reason)
 
+    async def explain(self, prompt: str) -> str:
+        # Jev answers probabilities only: the text always comes from the judge.
+        return await self.fallback.explain(prompt)
+
 
 async def decide(
     decider: DecisionProvider,

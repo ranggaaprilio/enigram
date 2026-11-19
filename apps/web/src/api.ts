@@ -151,6 +151,9 @@ export interface Annotation {
   // The GET /annotations list leaves the text out.
   summary_kind: 'flow' | 'symbol' | null
   summary_text?: string | null
+  // Why the decider marked the note as conflicting (the judge's words); null otherwise, when it
+  // could not be written, and on conflicts found before it was kept.
+  conflict_reason?: string | null
 }
 
 // What a note claims; old notes and agent proposals are technical.

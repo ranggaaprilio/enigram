@@ -436,6 +436,11 @@ class DecisionProvider(Protocol):
         and seconds of the call."""
         ...
 
+    async def explain(self, prompt: str) -> str:
+        """Free text for a person (why a decision came out as it did), from the judge model;
+        EnigramError when this provider cannot write it."""
+        ...
+
 
 class CodeEmbedder(Protocol):
     """Embeddings for code text (flow summaries, symbols) and code questions."""

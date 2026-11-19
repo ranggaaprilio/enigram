@@ -63,7 +63,14 @@ const QUEUE: ReviewItem[] = [
       ],
     }),
   ),
-  item('conflict', note(4, { status: 'verified', conflict: true })),
+  item(
+    'conflict',
+    note(4, {
+      status: 'verified',
+      conflict: true,
+      conflict_reason: 'The input is `type="text"`.',
+    }),
+  ),
 ]
 
 function renderAs(role: Role, routes: Record<string, Reply> = {}, name = 'me', url = '/review') {
@@ -100,6 +107,10 @@ describe('Review inbox', () => {
     await userEvent.click(screen.getByRole('button', { name: /Conflicts\s*1/ }))
     expect(screen.queryByText('Note 1 text.')).toBeNull()
     expect(screen.getByText('Note 4 text.')).toBeInTheDocument()
+    // The decider's reason, so the reviewer sees what in the code contradicts the note.
+    const conflict = card('Note 4 text.')
+    expect(within(conflict).getByText('Why it conflicts')).toBeInTheDocument()
+    expect(within(conflict).getByText('type="text"')).toBeInTheDocument()
   })
 
   it('opens one filter from ?show= (the Dashboard links)', async () => {
