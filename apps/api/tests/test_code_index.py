@@ -9,6 +9,7 @@ from git_fixture import git_repo as _git_repo
 
 from enigram.application import code_index
 from enigram.application.code_index import index_code, redact_graph, repo_limits
+from enigram.application.ports import ParsedGraph
 from enigram.domain.errors import EnigramError
 
 URL = "https://github.com/org/app"
@@ -43,7 +44,7 @@ def test_repo_limits_counts_ts_files_and_lines(tmp_path):
 @pytest.mark.parametrize(
     ("max_files", "max_loc", "match"),
     [
-        (1, 50_000, "More than 1 TypeScript files"),
+        (1, 50_000, "More than 1 source files"),
         (2000, 2, "More than 2 lines"),
     ],
 )
@@ -126,7 +127,7 @@ async def test_index_code_checks_limits_before_the_sidecar(cfg, deps, tmp_path):
     deps.code_parser = lambda: parser
     cfg = dataclasses.replace(cfg, code_max_files=1)
 
-    with pytest.raises(EnigramError, match="More than 1 TypeScript files"):
+    with pytest.raises(EnigramError, match="More than 1 source files"):
         await index_code(cfg, deps, FakeCodeGraph(), root, URL, None)
     assert parser.roots == []
 
@@ -172,3 +173,106 @@ def test_is_ts_repo(tmp_path):
     (tmp_path / "apps/web").mkdir(parents=True)
     (tmp_path / "apps/web/tsconfig.json").write_text("{}")
     assert code_index.is_ts_repo(tmp_path)
+
+
+def _tree(root, tree):
+    for rel, text in tree.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    return root
+
+
+@pytest.mark.parametrize(
+    ("tree", "expected"),
+    [
+        ({"package.json": "{}", "src/app.js": "x()\n"}, True),
+        ({"web/jsconfig.json": "{}", "web/src/App.jsx": "<A />\n"}, True),
+        ({"package.json": "{}", "index.mjs": "x()\n"}, True),
+        # A file in a subfolder belongs to the nearest package.json above it.
+        ({"package.json": "{}", "server/app.cjs": "x()\n"}, True),
+        # Markdown and a package.json (scripts only): no code.
+        ({"package.json": "{}", "README.md": "# App\n"}, False),
+        # JavaScript but no package.json or jsconfig.json: a folder of scripts.
+        ({"scripts/run.js": "x()\n"}, False),
+        # JavaScript outside the only project: the sidecar leaves it out (no_project).
+        ({"web/package.json": "{}", "scripts/run.js": "x()\n"}, False),
+        # Only tests, fixtures, a tool's config, a minified bundle, or a dependency's code.
+        ({"package.json": "{}", "test/app.test.js": "x()\n"}, False),
+        ({"package.json": "{}", "src/app.test.js": "x()\n"}, False),
+        ({"package.json": "{}", "src/fixtures/a.js": "x()\n"}, False),
+        ({"package.json": "{}", "webpack.config.js": "x()\n", ".eslintrc.js": "x\n"}, False),
+        ({"package.json": "{}", "public/vendor.min.js": "x()\n"}, False),
+        ({"package.json": "{}", "public/app.bundle.mjs": "x()\n"}, False),
+        ({"package.json": "{}", "node_modules/pkg/index.js": "x()\n"}, False),
+        ({"node_modules/pkg/package.json": "{}", "src/app.js": "x()\n"}, False),
+    ],
+)
+def test_is_js_repo(tmp_path, tree, expected):
+    assert code_index.is_js_repo(_tree(tmp_path, tree)) is expected
+
+
+def test_is_js_repo_ignores_symbolic_links(tmp_path):
+    outside = _tree(tmp_path / "outside", {"package.json": "{}", "a.js": "x()\n"})
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").symlink_to(outside / "package.json")
+    (repo / "a.js").symlink_to(outside / "a.js")
+    assert not code_index.is_js_repo(repo)
+    (repo / "package.json").unlink()
+    (repo / "package.json").write_text("{}")
+    assert not code_index.is_js_repo(repo)  # the code is still a link
+
+
+def test_repo_limits_count_javascript_too(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "src/a.ts": "a\n",
+            "src/b.js": "b\nb\n",
+            "src/c.jsx": "c\n",
+            "src/d.mjs": "d\n",
+            "src/e.cjs": "e\n",
+            "public/vendor.min.js": "v\n" * 50,
+            "public/app.bundle.js": "v\n" * 50,
+            "node_modules/pkg/index.js": "n\n",
+            # Counted, as test TypeScript always was: the limit is about the clone's size.
+            "test/f.test.js": "t\n",
+        },
+    )
+    assert repo_limits(tmp_path, 2000, 50_000) == (6, 7)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_git_blob_shas_include_javascript(tmp_path):
+    root = _git_repo(
+        tmp_path / "repo",
+        {"a.ts": "a\n", "b.js": "b\n", "c.cjs": "c\n", "d.jsx": "d\n", "README.md": "# R\n"},
+    )
+    assert {f.path for f in code_index.git_blob_shas(root)} == {"a.ts", "b.js", "c.cjs", "d.jsx"}
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_index_code_warns_about_an_empty_graph(cfg, deps, tmp_path):
+    root = _git_repo(tmp_path / "repo", {"package.json": "{}", "src/a.js": "a\n"})
+    empty = ParsedGraph([], [], [], {"files_skipped": {"syntax": 1}})
+    deps.code_parser = lambda: FakeParser(empty)
+    deps.generator = lambda: FakeChat()
+
+    graph_repo = FakeCodeGraph()
+
+    result = await index_code(cfg, deps, graph_repo, root, URL, None)
+
+    assert result["symbols"] == 0
+    assert "No symbols" in result["warning"] and "files_skipped" in result["warning"]
+    assert graph_repo.repos[result["repo_id"]]["report"]["warning"] == result["warning"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_index_code_no_warning_with_symbols(cfg, deps, tmp_path):
+    root = _git_repo(tmp_path / "repo", TREE)
+    deps.code_parser = lambda: FakeParser(fixture_graph())
+    deps.generator = lambda: FakeChat()
+
+    result = await index_code(cfg, deps, FakeCodeGraph(), root, URL, None)
+
+    assert "warning" not in result

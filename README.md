@@ -70,11 +70,11 @@ there is no verdict yet.
 
 | | Supported | Not yet |
 |---|---|---|
-| Code | TypeScript projects with a `tsconfig.json` (monorepos too: every project is merged into one graph) | Other languages. A repository without a `tsconfig.json` gets its Markdown indexed, not its code |
+| Code | TypeScript projects with a `tsconfig.json` (monorepos too: every project is merged into one graph) | Other languages. A repository without a `tsconfig.json` gets its Markdown indexed, not its code, unless `CODE_JAVASCRIPT=on` (experimental, see [Repositories](docs/guides/repositories.md#javascript-experimental)) |
 | Entry points | **NestJS** (routes, `@Cron`, events, jobs, `bootstrap`), **Next.js** App Router (pages, route handlers, middleware, server actions), **Express** (routes with their mount paths) | Other frameworks: their flows start from the exported functions nothing in the repository calls, so summaries and flows are coarser |
 | Documents | Markdown and PDF | Other formats |
 | Models | DeepSeek (chat) and Voyage AI (embeddings) by default; any OpenAI-compatible chat or embedding endpoint (OpenAI, OpenRouter, Ollama, vLLM, ...), see [Model providers](docs/getting-started/model-providers.md). Accuracy is measured on DeepSeek and one other chat model ([results](docs/evaluation/how-it-works.md#other-chat-models)) | Native Anthropic or Gemini SDKs; a non-Voyage embedding endpoint is unit-tested only |
-| Size | Up to 2,000 TypeScript files and 50,000 lines per repository by default (`CODE_MAX_FILES`, `CODE_MAX_LOC`) | Larger repositories without raising them |
+| Size | Up to 2,000 TypeScript and JavaScript files and 50,000 lines per repository by default (`CODE_MAX_FILES`, `CODE_MAX_LOC`) | Larger repositories without raising them |
 
 Details: [Index a Git repository](docs/guides/repositories.md).
 

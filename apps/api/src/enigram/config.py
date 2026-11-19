@@ -74,11 +74,15 @@ def _int(name: str, default: int) -> int:
         raise EnigramError(f"{name} must be an integer, got {raw!r}") from e
 
 
-def _verify_answers() -> bool:
-    value = os.environ.get("VERIFY_ANSWERS", "").strip().lower() or "off"
+def _on_off(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower() or "off"
     if value not in ("on", "off"):
-        raise EnigramError(f"VERIFY_ANSWERS must be on or off, got {value!r}")
+        raise EnigramError(f"{name} must be on or off, got {value!r}")
     return value == "on"
+
+
+def _verify_answers() -> bool:
+    return _on_off("VERIFY_ANSWERS")
 
 
 BADGE_ORIGINS = ("code", "summary", "human", "document")
@@ -196,8 +200,9 @@ class Config:
     annotation_verifiers: tuple[str, ...]
     # Seconds between `git ls-remote` checks of indexed repositories by the worker; 0 = off.
     repo_poll_secs: int
-    # Largest TypeScript repository the code graph indexes (CODE_MAX_FILES, CODE_MAX_LOC; 0 =
-    # off); a larger one fails before the sidecar runs. Cost and memory grow with the repository.
+    # Largest repository the code graph indexes, TypeScript and JavaScript files together
+    # (CODE_MAX_FILES, CODE_MAX_LOC; 0 = off); a larger one fails before the sidecar runs. Cost
+    # and memory grow with the repository.
     code_max_files: int
     code_max_loc: int
     # Fernet key that encrypts the access tokens of private repositories (REPO_CREDENTIALS_KEY);
@@ -224,6 +229,10 @@ class Config:
     log_level: str
     # The ts-morph sidecar (tools/ts-graph) that parses TypeScript repositories.
     ts_graph_dir: Path
+    # CODE_JAVASCRIPT=on: a repository with a package.json or jsconfig.json and JavaScript files
+    # (no tsconfig.json needed) gets a code graph too; the sidecar runs with --javascript
+    # (plans/javascript-support.md). Off by default until it is measured (J5).
+    code_javascript: bool = False
     # VERIFY_ANSWERS=on: every answer's claim sentences are judged against the text of their
     # citations by the decision layer, recorded in extra["verification"] only (off by default:
     # it sends that text to the decision provider and costs a call per answer).
@@ -408,6 +417,7 @@ class Config:
                 os.environ.get("TS_GRAPH_DIR", "").strip()
                 or Path(__file__).resolve().parents[4] / "tools" / "ts-graph"
             ).expanduser(),
+            code_javascript=_on_off("CODE_JAVASCRIPT"),
             verify_answers=_verify_answers(),
             verify_badges=_verify_badges(),
         )

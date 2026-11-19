@@ -31,6 +31,7 @@ def _rows(path: Path) -> Iterator[dict]:
 class TsGraphSidecar:
     def __init__(self, cfg: Config) -> None:
         self.dir = cfg.ts_graph_dir
+        self.javascript = cfg.code_javascript
 
     def parse(self, root: Path) -> ParsedGraph:
         entry = self.dir / "index.mjs"
@@ -50,8 +51,11 @@ class TsGraphSidecar:
             try:
                 # cwd = the sidecar, so Node resolves ts-morph from its node_modules; the
                 # repository is only an argument, never the working directory.
+                command = [node, str(entry), "--repo", str(root.resolve()), "--out", out]
+                if self.javascript:  # CODE_JAVASCRIPT: JavaScript projects too
+                    command.append("--javascript")
                 done = subprocess.run(
-                    [node, str(entry), "--repo", str(root.resolve()), "--out", out],
+                    command,
                     capture_output=True,
                     text=True,
                     timeout=SIDECAR_TIMEOUT_SECS,

@@ -1,3 +1,4 @@
+import dataclasses
 import shutil
 import subprocess
 from pathlib import Path
@@ -76,6 +77,16 @@ def test_sidecar_runs_from_its_own_dir_with_a_minimal_env(cfg, tmp_path, monkeyp
     assert seen["command"][2:4] == ["--repo", str(repo.resolve())]
     assert set(seen["env"]) == {"PATH", "HOME", "NODE_OPTIONS"}  # no API keys for the sidecar
     assert seen["timeout"] == ts_graph_sidecar.SIDECAR_TIMEOUT_SECS
+    assert "--javascript" not in seen["command"]  # CODE_JAVASCRIPT is off by default
+
+    sidecar.javascript = True
+    sidecar.parse(repo)
+    assert seen["command"][-1] == "--javascript"
+
+
+def test_sidecar_takes_javascript_from_the_config(cfg):
+    assert TsGraphSidecar(cfg).javascript is False
+    assert TsGraphSidecar(dataclasses.replace(cfg, code_javascript=True)).javascript is True
 
 
 def test_sidecar_missing_points_at_ts_graph_dir(cfg, tmp_path):

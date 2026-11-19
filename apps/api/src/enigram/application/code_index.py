@@ -1,10 +1,11 @@
-"""Index a checked-out TypeScript repository: the sidecar's graph into the code tables, then
-flow summaries."""
+"""Index a checked-out TypeScript or JavaScript repository: the sidecar's graph into the code
+tables, then flow summaries."""
 
 import asyncio
 import dataclasses
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -29,12 +30,21 @@ from enigram.domain.secrets import is_secret_path, redact
 log = logging.getLogger(__name__)
 
 TS_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
+JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs")
 SKIP_DIRS = {"node_modules", "dist", "build", ".git", "coverage"}
 GIT_TIMEOUT_SECS = 60
 
 
 # A tsconfig.json in these is a fixture, not the repository's (as tools/ts-graph decides).
 TEST_DIRS = {"test", "__tests__"}
+# Never a JavaScript project or its code (tools/ts-graph/lib/javascript.mjs TEST_DIRS,
+# TEST_FILES, CONFIG_FILES and MINIFIED_FILES: the sidecar skips these files).
+JS_TEST_DIRS = {"test", "tests", "__tests__", "fixtures", "__fixtures__", "__mocks__"}
+JS_CONFIGS = {"package.json", "jsconfig.json"}
+MINIFIED_JS = re.compile(r"\.(min|bundle)\.(js|mjs|cjs)$")
+JS_NOT_CODE = re.compile(
+    r"\.(spec|test|e2e-spec)\.(jsx?|mjs|cjs)$|\.config\.(js|cjs|mjs)$|^\.eslintrc\.(js|cjs)$"
+)
 
 
 def is_ts_repo(root: Path) -> bool:
@@ -47,28 +57,52 @@ def is_ts_repo(root: Path) -> bool:
     return False
 
 
-def _is_ts(name: str) -> bool:
-    return name.endswith(TS_SUFFIXES) and not name.endswith((".d.ts", ".d.mts", ".d.cts"))
+def _is_js(name: str) -> bool:
+    return name.endswith(JS_SUFFIXES) and not MINIFIED_JS.search(name)
+
+
+def is_js_repo(root: Path) -> bool:
+    """A JavaScript file the sidecar would parse (plan D1): not minified, a test or a tool's
+    config, outside SKIP_DIRS and test folders, and under a package.json or jsconfig.json (its
+    project; a file with none is left out by the sidecar too). Symbolic links do not count."""
+    owned: dict[str, bool] = {}
+    for folder, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and d not in JS_TEST_DIRS]
+        here = Path(folder)
+        regular = [n for n in names if not (here / n).is_symlink()]
+        owned[folder] = owned.get(os.path.dirname(folder), False) or not JS_CONFIGS.isdisjoint(
+            regular
+        )
+        if owned[folder] and any(_is_js(n) and not JS_NOT_CODE.search(n) for n in regular):
+            return True
+    return False
+
+
+def _is_source(name: str) -> bool:
+    if name.endswith(TS_SUFFIXES):
+        return not name.endswith((".d.ts", ".d.mts", ".d.cts"))
+    return _is_js(name)
 
 
 def repo_limits(root: Path, max_files: int, max_loc: int) -> tuple[int, int]:
-    """(TypeScript files, lines) outside node_modules/dist/build/.git and declaration files;
-    raises over `max_files` / `max_loc` (CODE_MAX_FILES / CODE_MAX_LOC; 0 = no limit). Symbolic
-    links are not followed or counted."""
+    """(TypeScript and JavaScript files, lines) outside node_modules/dist/build/.git, without
+    declaration files and minified bundles; raises over `max_files` / `max_loc` (CODE_MAX_FILES /
+    CODE_MAX_LOC; 0 = no limit). JavaScript counts without CODE_JAVASCRIPT too: a tsconfig with
+    allowJs already indexes it (plan D10). Symbolic links are not followed or counted."""
     files = lines = 0
     for folder, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for name in names:
             path = Path(folder) / name
-            if not _is_ts(name) or path.is_symlink():
+            if not _is_source(name) or path.is_symlink():
                 continue
             files += 1
             if max_files and files > max_files:
-                raise EnigramError(f"More than {max_files} TypeScript files (CODE_MAX_FILES)")
+                raise EnigramError(f"More than {max_files} source files (CODE_MAX_FILES)")
             with path.open("rb") as f:
                 lines += sum(1 for _ in f)
             if max_loc and lines > max_loc:
-                raise EnigramError(f"More than {max_loc} lines of TypeScript (CODE_MAX_LOC)")
+                raise EnigramError(f"More than {max_loc} lines of source (CODE_MAX_LOC)")
     return files, lines
 
 
@@ -94,13 +128,13 @@ def head_sha(root: Path) -> str:
 
 
 def git_blob_shas(root: Path) -> list[CodeFile]:
-    """Blob SHA of every TypeScript file at HEAD (works on a --depth 1 clone): the baseline a
-    later per-commit diff compares against."""
+    """Blob SHA of every TypeScript and JavaScript file at HEAD (works on a --depth 1 clone):
+    the baseline a later per-commit diff compares against."""
     files = []
     for line in _git(root, "ls-tree", "-r", "HEAD").splitlines():
         meta, _, path = line.partition("\t")
         parts = meta.split()
-        if len(parts) == 3 and parts[1] == "blob" and path.endswith(TS_SUFFIXES):
+        if len(parts) == 3 and parts[1] == "blob" and path.endswith(TS_SUFFIXES + JS_SUFFIXES):
             files.append(CodeFile(path=path, blob_sha=parts[2]))
     return files
 
@@ -153,7 +187,7 @@ async def index_code(
     start = time.perf_counter()
     # Before the sidecar: a huge repository fails fast.
     files, loc = repo_limits(root, cfg.code_max_files, cfg.code_max_loc)
-    log.info("[code] %s: %d TypeScript files, %d lines", url, files, loc)
+    log.info("[code] %s: %d source files, %d lines", url, files, loc)
     parsed = await asyncio.to_thread(deps.code_parser().parse, root)
     parsed, redacted = redact_graph(parsed)
     previous = await graph_repo.get_repo(url, ref)
@@ -204,10 +238,20 @@ async def index_code(
         "staleness": staleness,
         "secs": round(time.perf_counter() - start, 1),
     }
-    await graph_repo.set_report(
-        repo_id,
-        {**report, "secrets_redacted": redacted, "summaries": summary, "embeddings": embeddings},
-    )
+    stored = {
+        **report,
+        "secrets_redacted": redacted,
+        "summaries": summary,
+        "embeddings": embeddings,
+    }
+    if not parsed.symbols:
+        # Not an error (the sidecar ran), but nothing to answer from: say why it may be empty.
+        result["warning"] = stored["warning"] = (
+            "No symbols in the code graph; files_skipped and projects show what the sidecar "
+            "left out"
+        )
+        log.warning("[code] %s: %s", url, result["warning"])
+    await graph_repo.set_report(repo_id, stored)
     log.info(
         "[code] %s: %d symbols, %d edges, %d entry points, %d flows (%.1fs)",
         url,

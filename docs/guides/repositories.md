@@ -19,7 +19,7 @@ only, not commit SHAs), then indexes two things:
 | What | When | Result |
 |---|---|---|
 | **Markdown files** (`.md`, `.markdown`) | always | Copied to `data/books` as `<repo>--<path>.md` (e.g. `org-handbook--docs--onboarding`) and indexed like uploads. The document list says they come from a repository |
-| **Code graph** | the repository has a `tsconfig.json` (needs `STORAGE_BACKEND=postgres`) | Symbols, calls, entry points, summaries and flows (below) |
+| **Code graph** | the repository has a `tsconfig.json`, or with `CODE_JAVASCRIPT=on` a `package.json`/`jsconfig.json` and JavaScript files (needs `STORAGE_BACKEND=postgres`) | Symbols, calls, entry points, summaries and flows (below) |
 
 ## Limits and rules
 
@@ -27,8 +27,11 @@ only, not commit SHAs), then indexes two things:
   bitbucket.org, codeberg.org`). A private repository needs an [access token](#private-repositories).
 - Symlinks, files over 1 MB and anything in `.git` are skipped; a repository with more than 500
   Markdown files is refused.
-- Code: at most 2,000 TypeScript files and 50,000 lines by default (`CODE_MAX_FILES`,
-  `CODE_MAX_LOC`; `0` = no limit). A larger repository fails before parsing. Raising them raises
+- Code: at most 2,000 files and 50,000 lines by default (`CODE_MAX_FILES`, `CODE_MAX_LOC`;
+  `0` = no limit), TypeScript and JavaScript together (`.d.ts`, `*.min.js` and `*.bundle.js`
+  not counted), because a `tsconfig.json` with `allowJs` indexes JavaScript as well. A
+  TypeScript repository with many plain JavaScript files (build scripts, vendored libraries) may
+  need higher limits. A larger repository fails before parsing. Raising them raises
   indexing time, memory and token cost (one summary per entry point), so check
   `MAX_TOKENS_PER_JOB` too.
 - Secret-named files are skipped and secret-looking values redacted.
@@ -57,6 +60,21 @@ folders, and the configs their `references` name (`apps/web/tsconfig.json`,
 paths from the repository root. Framework entry points are found per project folder. A call
 between projects resolves when it goes through a relative import or a `paths` alias, not a
 package name (there is no `node_modules`). The job result's `code.projects` lists them.
+
+### JavaScript (experimental)
+
+With `CODE_JAVASCRIPT=on`, a repository without a `tsconfig.json` gets a code graph when it has a
+`package.json` or `jsconfig.json` and JavaScript files (`.js`, `.jsx`, `.mjs`, `.cjs`) outside
+`node_modules`, build output and test folders. Each file belongs to its nearest `package.json` or
+`jsconfig.json`; JavaScript a `tsconfig.json` does not include in a mixed repository is indexed the
+same way. ESM and CommonJS (`require`, `module.exports`) are followed, as are imports between
+workspace packages by name and `jsconfig.json` `paths`. Aliases set only in a webpack, Vite or
+Babel config are not read (the repository's config is never run). Minified files, files over
+10,000 lines, files that do not parse, and `.vue`/`.svelte` files are skipped and counted in
+`code.files_skipped`. Without Postgres a JavaScript repository's Markdown still syncs and the
+result says why the code graph was skipped. A job whose graph ends up empty carries a
+`code.warning`. Accuracy on JavaScript is not measured yet, which is why the flag is off by
+default.
 
 ### What is extracted
 
