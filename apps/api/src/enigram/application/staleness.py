@@ -72,11 +72,12 @@ async def _conflict(
 ) -> str | None:
     """The decider's verdict on a note just flagged for a code change: "conflicts" when the flag
     flipped to True, "conflicts_cleared" when it flipped to False, None otherwise."""
-    conflict, p = await check_conflict(decider, graph, repo_id, symbol, note.text)
+    conflict, p, why = await check_conflict(decider, graph, repo_id, symbol, note.text)
     if conflict is None or conflict == note.conflict:
         return None
     event = "conflict_detected" if conflict else "conflict_cleared"
-    await notes.update(note.id, {"conflict": conflict, "p": p}, DECIDER_ACTOR, event)
+    changes = {"conflict": conflict, "conflict_reason": why, "p": p}
+    await notes.update(note.id, changes, DECIDER_ACTOR, event)
     return "conflicts" if conflict else "conflicts_cleared"
 
 

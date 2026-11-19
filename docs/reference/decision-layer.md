@@ -64,6 +64,12 @@ relying on the guard.
 The event is `conflict_detected` or `conflict_cleared` by actor `decider`, with the probability
 `p`. A failed decision never blocks a verification.
 
+On a conflict the judge model also writes `conflict_reason`: at most two sentences on what the
+code does that contradicts the note, quoting the line. The Inbox shows it as "Why it conflicts".
+It is one extra judge call per conflict (also with Jev, which answers probabilities only); when
+it fails the conflict stands without a reason. Clearing the conflict clears the reason. Conflicts
+found before this was kept have none until the note is verified again.
+
 The same layer runs [docs-vs-code detection](../guides/mcp.md#docs-vs-code-detection)
 (`doc_code_conflict`, `entity_symbol_same`).
 

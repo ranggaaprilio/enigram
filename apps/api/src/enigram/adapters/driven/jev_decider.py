@@ -118,6 +118,9 @@ class JevDecider:
         log.info("[decide] jev %d questions, %d tokens (%.2fs)", len(questions), tokens_in, secs)
         return Decisions(answers, "jev", str(data.get("model") or self.model), tokens_in, secs)
 
+    async def explain(self, prompt: str) -> str:
+        raise EnigramError("jev answers probabilities only; the judge writes explanations")
+
 
 async def check_jev(cfg: Config) -> str:
     """Fail fast on a bad key or an unserved model; returns "jev (<model>)"."""

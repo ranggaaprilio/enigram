@@ -86,3 +86,9 @@ class LlmDecider:
         secs = round(time.perf_counter() - start, 2)
         log.info("[decide] llm_judge %d questions (%.1fs)", len(questions), secs)
         return Decisions(answers, "llm_judge", self.model, 0, secs)
+
+    async def explain(self, prompt: str) -> str:
+        try:
+            return (await self.chat.complete(prompt, temperature=JUDGE_TEMPERATURE)).strip()
+        except (APIError, httpx.HTTPError) as e:
+            raise EnigramError(f"llm_judge call failed: {e}") from e
