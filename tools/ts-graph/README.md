@@ -146,9 +146,16 @@ and parallel slots drop out of the path, `_private` folders are skipped); `http_
 (`"GET /api/articles"`) for Express: every `get/post/put/patch/delete/options/head/all(path, …,
 handler)` on a router or app made by `express()`, `Router()` or `express.Router()`, with the
 paths of the `use(path, router)` calls that mount it joined in front, across files, `.use()`
-chains and `export default`; the entry point is the last handler (an inline one is its own
-symbol, a named one the symbol it resolves to; a package's handler is skipped). Framework adapters
-live in `lib/entrypoints/` and export `detect({project, root, prefix, symbols, files, deps}) ->
+chains and `export default`, and one route per verb of a `router.route("/p").get(…).post(…)`
+chain at `route()`'s path; the entry point is the last handler (an inline one is its own
+symbol, `GET /p` for a chain too; a named one the symbol it resolves to; a package's handler is
+skipped). With `--javascript` the CommonJS forms count as well: `require("express")` (also
+`require("express").Router()` and `const { Router } = require("express")`), a router a file
+exports with `module.exports = router` and another mounts through `require` (a variable or inline
+`app.use("/x", require("./x"))`), a `list.forEach((r) => router.use(r.path, r.route))` over a
+constant array of `{ path, route }` objects, and a named handler reached through a
+`module.exports` object or a barrel (`authController.login`). Framework adapters live in
+`lib/entrypoints/` and export `detect({project, root, prefix, symbols, files, deps, commonjs}) ->
 {entrypoints, matched}`.
 When no adapter matches anything, `lib/entrypoints/generic.mjs` adds `root` rows (framework
 `generic`, route = the name): exported top-level functions that nothing in the repository calls

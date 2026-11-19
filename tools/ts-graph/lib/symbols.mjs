@@ -249,11 +249,34 @@ export function inlineRouteHandlers(sf) {
       const callee = call.getExpression();
       if (!Node.isPropertyAccessExpression(callee) || !HTTP_VERBS.includes(callee.getName())) continue;
       const args = call.getArguments();
-      const path = pathLiteral(args[0]);
       const handler = args.at(-1);
-      if (path === null || args.length < 2 || !(Node.isArrowFunction(handler) || Node.isFunctionExpression(handler))) continue;
+      if (!(Node.isArrowFunction(handler) || Node.isFunctionExpression(handler))) continue;
+      let path = args.length >= 2 ? pathLiteral(args[0]) : null;
+      // router.route("/:id").get(...).delete(..., (req, res) => {...}): the path is route()'s.
+      if (path === null) path = routeChain(callee.getExpression())?.path ?? null;
+      if (path === null) continue;
       out.push({ handler, verb: callee.getName(), path, call });
     }
   }
   return out;
+}
+
+/**
+ * For the target of a verb call in a `router.route("/p").get(...).post(...)` chain: the
+ * `route()` call's receiver (the router) and path. Null for anything else.
+ * @returns {{router: import("ts-morph").Node, path: string} | null}
+ */
+export function routeChain(target) {
+  let node = target;
+  while (Node.isCallExpression(node)) {
+    const callee = node.getExpression();
+    if (!Node.isPropertyAccessExpression(callee)) return null;
+    if (callee.getName() === "route") {
+      const path = pathLiteral(node.getArguments()[0]);
+      return path === null ? null : { router: callee.getExpression(), path };
+    }
+    if (!HTTP_VERBS.includes(callee.getName())) return null;
+    node = callee.getExpression();
+  }
+  return null;
 }

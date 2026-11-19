@@ -707,3 +707,49 @@ test("modules: a symlinked package.json is not read", () => {
   assert.deepEqual(g.report.projects.map((p) => p.config), ["sub/package.json"]);
   assert.equal(g.report.files_skipped.no_project, 1);
 });
+
+// ---- Express: route() chains and CommonJS ----
+
+const httpRows = (g) => g.entrypoints.filter((e) => e.framework === "express").map((e) => `${e.route} -> ${e.symbol}`);
+
+test("express: route() chains give a route per verb, named and inline handlers", () => {
+  const g = buildGraph(path.join(HERE, "fixture-express-js"), { diagnostics: false, javascript: true });
+  assert.deepEqual(httpRows(g), [
+    "DELETE /api/products/:id -> backend/routes/productRoutes.js#DELETE /:id",
+    "GET /api/products -> backend/controllers/productController.js#getProducts",
+    "GET /api/products/:id -> backend/controllers/productController.js#getProductById",
+    "GET /api/products/top -> backend/controllers/productController.js#getProducts",
+    "POST /api/products -> backend/controllers/productController.js#createProduct",
+  ]);
+  assert.ok(g.edges.some((e) => e.kind === "calls" && e.src === "backend/routes/productRoutes.js#DELETE /:id" && e.dst === "backend/controllers/productController.js#remove"));
+});
+
+test("express: route() chains work in TypeScript without --javascript", () => {
+  const g = buildGraph(tmpRepo({
+    "tsconfig.json": "{}",
+    "package.json": JSON.stringify({ dependencies: { express: "*" } }),
+    "src/main.ts": 'import { Router } from "express";\nconst r = Router();\nfunction show(req: unknown, res: unknown) { return [req, res]; }\nr.route("/items/:id").get(show).put((req, res) => show(req, res));\nexport default r;\n',
+  }), { diagnostics: false });
+  assert.deepEqual(httpRows(g), ["GET /items/:id -> src/main.ts#show", "PUT /items/:id -> src/main.ts#PUT /items/:id"]);
+});
+
+test("express: CommonJS routers, mounted through require, forEach over a route list, and barrels", () => {
+  const g = buildGraph(path.join(HERE, "fixture-express-cjs"), { diagnostics: false, javascript: true });
+  assert.deepEqual(httpRows(g), [
+    "DELETE /v1/users/:userId -> src/controllers/user.controller.js#deleteUser",
+    "GET /health -> src/routes/health.js#GET /",
+    "GET /v1/users/:userId -> src/controllers/user.controller.js#getUser",
+    "POST /v1/auth/login -> src/controllers/auth.controller.js#login",
+  ]);
+  assert.ok(g.edges.some((e) => e.kind === "calls" && e.src === "src/controllers/auth.controller.js#login" && e.dst === "src/controllers/auth.controller.js#token"));
+});
+
+test("express: CommonJS forms give no routes without --javascript, also in a TypeScript project with allowJs", () => {
+  const dir = tmpRepo({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { allowJs: true, noEmit: true }, include: ["src"] }),
+    "package.json": JSON.stringify({ dependencies: { express: "*" } }),
+    "src/app.js": 'const express = require("express");\nconst app = express();\napp.get("/x", (req, res) => res.send("x"));\nmodule.exports = app;\n',
+  });
+  assert.deepEqual(httpRows(buildGraph(dir, { diagnostics: false })), []);
+  assert.deepEqual(httpRows(buildGraph(dir, { diagnostics: false, javascript: true })), ["GET /x -> src/app.js#GET /x"]);
+});

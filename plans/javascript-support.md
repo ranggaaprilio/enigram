@@ -534,6 +534,19 @@ Sisa yang diketahui:
   ada di repo.
 - Batas: paling banyak 1.000 nama paket untuk pemetaan workspace (review keamanan).
 
-### J3–J5
+### J3 (2026-11-19, sidecar saja)
+
+Chain `router.route(path).get(...)` berlaku selalu, juga untuk Express TS (keputusan owner). Bentuk
+CommonJS (require, `module.exports = router`, mount lewat `forEach` atas array `{ path, route }`,
+handler lewat barrel dan objek `module.exports`) hanya dengan `--javascript`.
+
+| Repo | Route Express | Target |
+|---|---|---|
+| proshop_mern | 23 dari 25, semua handler ke fungsi controller yang benar | 23 (2 di dalam `if/else` di luar cakupan) |
+| node-express-boilerplate (CJS) | 13 dari 13, dengan prefix `/v1/auth` dan `/v1/users` | 13 (`GET /v1/docs` memakai handler paket) |
+
+Tanpa `--javascript`, webpack dan axios sama dengan sebelum J3.
+
+### J4–J5
 
 Belum ada.

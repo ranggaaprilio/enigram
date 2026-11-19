@@ -200,7 +200,7 @@ function finishPart(root, ctx, part, diagnostics) {
   const entrypoints = [];
   const adapters = {};
   for (const [name, adapter] of Object.entries(ADAPTERS)) {
-    const found = adapter.detect({ project, root: dir, prefix, symbols, files: sourceFiles, deps });
+    const found = adapter.detect({ project, root: dir, prefix, symbols, files: sourceFiles, deps, commonjs: ctx.commonjs });
     if (found.matched) adapters[name] = found.matched;
     entrypoints.push(...found.entrypoints);
   }

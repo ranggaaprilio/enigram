@@ -51,7 +51,7 @@ const EXPORTS_TARGET = /^(module\.exports|exports)\b/;
  * list, helperAlias: helper }`) stands for the value it names: the symbol of `list` / `helper`.
  * Any other symbol is returned as it is.
  */
-function exportedValue(sym) {
+export function exportedValue(sym) {
   for (let i = 0; sym && i < 5; i += 1) {
     const decl = sym.getDeclarations()[0];
     const object = decl?.getParent();
