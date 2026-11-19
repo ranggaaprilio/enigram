@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { builtinModules } from "node:module";
 import path from "node:path";
 import { Project, ts } from "ts-morph";
 import { relPath, SKIP_DIRS } from "./project.mjs";
@@ -14,6 +15,8 @@ const CONFIG_FILES = [/\.config\.(js|cjs|mjs)$/, /(^|\/)\.eslintrc\.(js|cjs)$/];
 const MINIFIED_FILES = /\.(min|bundle)\.(js|mjs|cjs)$/;
 const MAX_AVG_LINE = 500; // a longer average line is a minified or generated file
 export const MAX_LINES = 10_000;
+export const BUILTINS = new Set(builtinModules);
+export const MAX_PACKAGES = 1000;
 
 /** Skip counters only JavaScript files have (tests are counted with TypeScript's), in report order. */
 export function emptyJsSkips() {
@@ -55,6 +58,7 @@ export function findJsProjects(root, tsFiles, max) {
   const skipped = { test: 0, ...emptyJsSkips() };
   const owned = new Map(); // project dir -> files
   const configOf = new Map(); // project dir -> its config file name
+  const named = []; // [package name, its folder], for workspace imports by name
   const walk = (dir, owner, inTestDir) => {
     let entries;
     try {
@@ -66,6 +70,10 @@ export function findJsProjects(root, tsFiles, max) {
     if (!inTestDir && (names.has("jsconfig.json") || names.has("package.json"))) {
       owner = dir;
       configOf.set(dir, names.has("jsconfig.json") ? "jsconfig.json" : "package.json");
+    }
+    if (!inTestDir && names.has("package.json")) {
+      const name = packageName(path.join(dir, "package.json"));
+      if (name) named.push([name, dir]);
     }
     for (const e of entries) {
       const file = path.join(dir, e.name);
@@ -96,7 +104,59 @@ export function findJsProjects(root, tsFiles, max) {
     }));
   const projects = all.slice(0, Math.max(0, max));
   for (const left of all.slice(projects.length)) skipped.project_limit += left.files.length;
-  return { projects, skipped, truncated: all.length - projects.length };
+  // A name two package.json share goes to the shallower folder (a package over its example copy);
+  // at most MAX_PACKAGES names, each becoming two `paths` entries of every project.
+  const packages = new Map();
+  named.sort(([, a], [, b]) => depth(a) - depth(b) || a.localeCompare(b));
+  for (const [name, dir] of named) {
+    if (packages.size >= MAX_PACKAGES) break;
+    if (!packages.has(name)) packages.set(name, dir);
+  }
+  return { projects, skipped, truncated: all.length - projects.length, packages };
+}
+
+/** The `name` of a package.json (parsed, never run), or null. */
+function packageName(file) {
+  try {
+    const name = JSON.parse(fs.readFileSync(file, "utf8")).name;
+    return typeof name === "string" && /^(@[\w.-]+\/)?[\w.-]+$/.test(name) ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `paths` entries that let imports reach repository code without node_modules: every package of
+ * the repository by its name (a workspace sibling, `@acme/util` → its folder), and every top-level
+ * folder of the project that is not a dependency name (`src/lib/x` → `<project>/src/lib/x`, the
+ * usual Vite/webpack alias). Entries the jsconfig already has win. Targets are absolute, so they
+ * need no `baseUrl` (which would also send every bare import, dependencies included, to the
+ * project folder first).
+ * @param {{dir: string}} found
+ * @param {Map<string, string>} packages package name -> folder
+ * @param {Set<string>} deps dependency names of the project
+ */
+function repositoryPaths(found, packages, deps, own = {}) {
+  const paths = { ...own };
+  const add = (key, dir) => {
+    if (!Object.hasOwn(paths, key)) paths[key] = [key.endsWith("/*") ? path.join(dir, "*") : dir];
+  };
+  for (const [name, dir] of packages) {
+    add(name, dir);
+    add(`${name}/*`, dir);
+  }
+  let entries = [];
+  try {
+    entries = fs.readdirSync(found.dir, { withFileTypes: true });
+  } catch {
+    // an unreadable folder adds no aliases
+  }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".") || SKIP_DIRS.includes(e.name) || deps.has(e.name)) continue;
+    if (BUILTINS.has(e.name)) continue;
+    add(`${e.name}/*`, path.join(found.dir, e.name));
+  }
+  return paths;
 }
 
 const inside = (root, p) => {
@@ -123,21 +183,28 @@ function jsconfigPaths(root, file) {
       Array.isArray(targets) &&
       targets.every((t) => typeof t === "string" && !path.isAbsolute(t) && inside(root, path.resolve(baseUrl ?? dir, t))),
     );
-  if (ok) {
-    out.paths = paths;
-    out.baseUrl ??= dir;
-  }
+  // Without a baseUrl, `paths` targets are relative to the jsconfig's folder (pathsBasePath).
+  if (ok) out.paths = paths;
   return out;
 }
 
 /**
  * One JavaScript project as a ts-morph project: its own files only, with `allowJs` and no type
  * checking. A file with a syntax error (Flow annotations, for one) is dropped and counted.
+ * Imports reach the repository's other packages by name and the project's own top-level folders
+ * (repositoryPaths).
  * @param {string} root absolute repository path
  * @param {{dir: string, config: string, files: string[]}} found
+ * @param {{packages?: Map<string, string>, deps?: Set<string>}} context
  */
-export function openJsProject(root, found) {
+export function openJsProject(root, found, { packages = new Map(), deps = new Set() } = {}) {
   const configFile = path.join(root, found.config);
+  const own = found.config.endsWith("jsconfig.json") ? jsconfigPaths(root, configFile) : {};
+  // A jsconfig's own baseUrl is kept (bare imports then try it first, as the editor does).
+  const resolution = {
+    ...(own.baseUrl ? { baseUrl: own.baseUrl } : { pathsBasePath: found.dir }),
+    paths: repositoryPaths(found, packages, deps, own.paths),
+  };
   const project = new Project({
     skipAddingFilesFromTsConfig: true,
     skipFileDependencyResolution: true,
@@ -151,7 +218,7 @@ export function openJsProject(root, found) {
       skipLibCheck: true,
       types: [],
       typeRoots: [],
-      ...(found.config.endsWith("jsconfig.json") ? jsconfigPaths(root, configFile) : {}),
+      ...resolution,
     },
   });
   let unreadable = 0;

@@ -6,7 +6,7 @@ import * as express from "./entrypoints/express.mjs";
 import * as generic from "./entrypoints/generic.mjs";
 import * as nest from "./entrypoints/nest.mjs";
 import * as next from "./entrypoints/next.mjs";
-import { emptyJsSkips, findJsProjects, openJsProject } from "./javascript.mjs";
+import { BUILTINS, emptyJsSkips, findJsProjects, openJsProject } from "./javascript.mjs";
 import { findProjects, MAX_PROJECTS, openProject, relPath } from "./project.mjs";
 import { fileSymbols } from "./symbols.mjs";
 
@@ -58,7 +58,7 @@ export function buildGraph(root, { tsconfig, diagnostics = true, javascript = fa
   const parts = [];
   for (const config of configs) {
     try {
-      parts.push(openPart(root, config, taken));
+      parts.push(openPart(root, config, taken, withJs));
     } catch (e) {
       if (tsconfig) throw e; // the one asked for
       parts.push({ config, error: e.message });
@@ -76,7 +76,7 @@ export function buildGraph(root, { tsconfig, diagnostics = true, javascript = fa
     truncated = found.truncated;
     for (const project of found.projects) {
       try {
-        parts.push(openJsPart(root, project, jsSkipped));
+        parts.push(openJsPart(root, project, jsSkipped, found.packages));
       } catch (e) {
         parts.push({ config: project.config, language: "js", error: e.message });
       }
@@ -87,7 +87,8 @@ export function buildGraph(root, { tsconfig, diagnostics = true, javascript = fa
   // One context over every project's symbols: a call into a file another project analyses
   // (a relative import, a `paths` alias) still lands on its symbol. declKey is a path and an
   // offset, the same in every project that includes the file.
-  const ctx = edgeContext(root, done.flatMap((p) => p.symbols));
+  const jsFiles = done.filter((p) => p.language === "js").flatMap((p) => p.sourceFiles.map((sf) => sf.getFilePath()));
+  const ctx = edgeContext(root, done.flatMap((p) => p.symbols), jsFiles, { commonjs: withJs });
   for (const part of done) finishPart(root, ctx, part, diagnostics);
 
   const symbols = done.flatMap((p) => p.symbols);
@@ -138,7 +139,7 @@ export function buildGraph(root, { tsconfig, diagnostics = true, javascript = fa
         ? { ...head, error: p.error }
         : { ...head, files: p.files, symbols: p.symbols.length, entrypoints: p.entrypoints.length, adapters: p.adapters };
     }),
-    ...(withJs ? { projects_truncated: truncated } : {}),
+    ...(withJs ? { projects_truncated: truncated, imports_in_repo: importsInRepo(done) } : {}),
     diagnostics_sample: done.flatMap((p) => p.diagnostics).slice(0, MAX_DIAGNOSTICS),
     secs: Number(((performance.now() - start) / 1000).toFixed(1)),
   };
@@ -152,14 +153,15 @@ export function buildGraph(root, { tsconfig, diagnostics = true, javascript = fa
  * @param {string} config tsconfig path relative to root
  * @param {Set<string>} taken absolute paths of files already analysed
  */
-function openPart(root, config, taken) {
+function openPart(root, config, taken, commonjs) {
   const { project, files: all, skipped } = openProject(root, config);
   const files = all.filter((sf) => !taken.has(sf.getFilePath()));
   skipped.other_project = all.length - files.length;
   for (const sf of files) taken.add(sf.getFilePath());
   const dir = path.dirname(path.join(root, config));
   const deps = new Set([...dependencyNames(root), ...dependencyNames(dir)]);
-  const options = { express: deps.has("express") }; // inline route handlers become symbols
+  // express: inline route handlers become symbols; commonjs: JavaScript's CommonJS rules.
+  const options = { express: deps.has("express"), commonjs };
   const symbols = files.flatMap((sf) => fileSymbols(root, sf, options));
   return { config, project, dir, deps, files: files.length, sourceFiles: files, skipped, symbols };
 }
@@ -168,12 +170,12 @@ function openPart(root, config, taken) {
  * One JavaScript project (findJsProjects): its files, minus those with a syntax error (counted
  * in `jsSkipped.syntax`), and their symbols.
  */
-function openJsPart(root, found, jsSkipped) {
-  const { project, files, syntax, unreadable } = openJsProject(root, found);
+function openJsPart(root, found, jsSkipped, packages) {
+  const deps = new Set([...dependencyNames(root), ...dependencyNames(found.dir)]);
+  const { project, files, syntax, unreadable } = openJsProject(root, found, { packages, deps });
   jsSkipped.syntax += syntax;
   jsSkipped.unreadable += unreadable;
-  const deps = new Set([...dependencyNames(root), ...dependencyNames(found.dir)]);
-  const symbols = files.flatMap((sf) => fileSymbols(root, sf, { express: deps.has("express") }));
+  const symbols = files.flatMap((sf) => fileSymbols(root, sf, { express: deps.has("express"), commonjs: true }));
   return {
     config: found.config,
     language: "js",
@@ -220,5 +222,61 @@ function finishPart(root, ctx, part, diagnostics) {
     fallback,
     unmatched: KNOWN_FRAMEWORKS.filter((f) => deps.has(f) && !adapters[f]),
     diagnostics: diagnostics && sourceFiles.length ? diagnosticsSample(root, project, sourceFiles) : [],
+    ...(part.language === "js" ? { repoImports: repoImports(root, edges, deps) } : {}),
   });
+}
+
+/** repoImports of every JavaScript project, summed, with a sample of the unresolved ones. */
+function importsInRepo(parts) {
+  const all = parts.filter((p) => p.repoImports).map((p) => p.repoImports);
+  return {
+    total: all.reduce((n, r) => n + r.total, 0),
+    resolved: all.reduce((n, r) => n + r.resolved, 0),
+    unresolved_sample: all.flatMap((r) => r.unresolved).slice(0, MAX_UNRESOLVED_SAMPLE),
+  };
+}
+
+const COMPONENT = /\.(vue|svelte)$/;
+
+/**
+ * Whether a relative import names a `.vue` / `.svelte` file, with or without the extension. Only
+ * paths inside the repository are looked at.
+ */
+function isComponentImport(root, fromFile, spec) {
+  if (COMPONENT.test(spec)) return true;
+  if (!spec.startsWith(".")) return false;
+  const base = path.resolve(root, path.dirname(fromFile), spec);
+  if (relPath(root, base).startsWith("../")) return false;
+  return [".vue", ".svelte", "/index.vue", "/index.svelte"].some((ext) => fs.existsSync(base + ext));
+}
+
+const MAX_SPECIFIER_CHARS = 200;
+
+const ASSET = /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|eot|json|md|html|txt|graphql|gql|wasm)(\?.*)?$/;
+const MAX_UNRESOLVED_SAMPLE = 10;
+const packageOf = (spec) => (spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0]);
+
+/**
+ * The `imports` rows of a JavaScript project that are meant for repository code: resolved ones,
+ * relative ones, and bare ones that name no dependency or Node built-in (an alias). Imports of
+ * assets (`./app.css`) and of single-file components (`./App.vue`, or `./App` when only an
+ * `App.vue` / `App.svelte` is there) are left out. An unresolved one is an alias or path the graph
+ * cannot follow.
+ */
+function repoImports(root, edges, deps) {
+  const out = { total: 0, resolved: 0, unresolved: [] };
+  for (const e of edges) {
+    if (e.kind !== "imports") continue;
+    if (e.resolved) {
+      out.total += 1;
+      out.resolved += 1;
+      continue;
+    }
+    const spec = e.dst;
+    if (ASSET.test(spec) || isComponentImport(root, e.src_file, spec)) continue;
+    if (!spec.startsWith(".") && (spec.startsWith("node:") || BUILTINS.has(packageOf(spec)) || deps.has(packageOf(spec)))) continue;
+    out.total += 1;
+    out.unresolved.push(`${e.src_file} -> ${spec.slice(0, MAX_SPECIFIER_CHARS)}`);
+  }
+  return out;
 }

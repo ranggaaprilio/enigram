@@ -16,23 +16,62 @@ function resolveSymbol(node) {
 }
 
 /**
- * Edge-building context: which declarations are symbols, which files are analysed.
+ * Edge-building context: which declarations are symbols, which files are analysed. A file counts
+ * as analysed when it has a symbol, or when it is one of `alsoFiles` (the JavaScript projects'
+ * files, so an import of a barrel `index.js` with no symbol of its own still resolves). With
+ * `commonjs` (--javascript), calls through `module.exports` objects and `require()` imports are
+ * followed (exportedValue, importEdges).
  * @param {string} root
  * @param {{row: object, node: import("ts-morph").Node}[]} symbols
+ * @param {string[]} alsoFiles absolute paths
+ * @param {{commonjs?: boolean}} options
  */
-export function edgeContext(root, symbols) {
+export function edgeContext(root, symbols, alsoFiles = [], { commonjs = false } = {}) {
   const byDecl = new Map(symbols.map((s) => [declKey(s.node), s.row.id]));
-  const files = new Set(symbols.map((s) => s.node.getSourceFile().getFilePath()));
-  return { root, byDecl, files };
+  const files = new Set([...symbols.map((s) => s.node.getSourceFile().getFilePath()), ...alsoFiles]);
+  return { root, byDecl, files, commonjs };
 }
 
-/** The symbol id a declaration belongs to: itself, or the nearest enclosing symbol. */
+/**
+ * The symbol id a declaration belongs to: itself, or the nearest enclosing symbol. The source
+ * file is never one: its start offset is its first statement's, which may be a symbol.
+ */
 function owningSymbol(ctx, decl) {
-  for (let node = decl; node; node = node.getParent()) {
+  for (let node = decl; node && !Node.isSourceFile(node); node = node.getParent()) {
     const id = ctx.byDecl.get(declKey(node));
     if (id) return { id, exact: node === decl };
   }
   return null;
+}
+
+const EXPORTS_TARGET = /^(module\.exports|exports)\b/;
+
+/**
+ * A member of an object a file assigns to `module.exports` / `exports.x` (`module.exports = {
+ * list, helperAlias: helper }`) stands for the value it names: the symbol of `list` / `helper`.
+ * Any other symbol is returned as it is.
+ */
+function exportedValue(sym) {
+  for (let i = 0; sym && i < 5; i += 1) {
+    const decl = sym.getDeclarations()[0];
+    const object = decl?.getParent();
+    const assignment = object?.getParent();
+    const viaExports =
+      Node.isObjectLiteralExpression(object) &&
+      Node.isBinaryExpression(assignment) &&
+      EXPORTS_TARGET.test(assignment.getLeft().getText());
+    if (!viaExports) return sym;
+    let next;
+    if (Node.isShorthandPropertyAssignment(decl)) {
+      next = decl.getProject().getTypeChecker().getShorthandAssignmentValueSymbol(decl);
+    } else if (Node.isPropertyAssignment(decl) && Node.isIdentifier(decl.getInitializer())) {
+      next = decl.getInitializer().getSymbol();
+    }
+    if (next?.isAlias()) next = next.getAliasedSymbol() ?? next;
+    if (!next) return sym;
+    sym = next;
+  }
+  return sym;
 }
 
 /**
@@ -41,7 +80,8 @@ function owningSymbol(ctx, decl) {
  * lib, a skipped file), or {} when nothing resolves (typically a package without node_modules).
  */
 function target(ctx, node, callerId) {
-  const sym = resolveSymbol(node);
+  const resolved = resolveSymbol(node);
+  const sym = ctx.commonjs ? exportedValue(resolved) : resolved;
   const decls = sym?.getDeclarations() ?? [];
   if (!decls.length) return {};
   for (const decl of decls) {
@@ -230,15 +270,34 @@ function injectEdges(ctx, sym, file, edges) {
   }
 }
 
+const JS_SOURCE = /\.(js|jsx|mjs|cjs)$/;
+
+/**
+ * `imports` rows: every import declaration, and in a JavaScript file also every `require("x")` and
+ * `import("x")` with a literal specifier (TypeScript files keep their rows as before).
+ */
 function importEdges(ctx, sf, edges) {
   const file = relPath(ctx.root, sf.getFilePath());
-  for (const imp of sf.getImportDeclarations()) {
-    const resolved = imp.getModuleSpecifierSourceFile();
+  const push = (specifier, resolved, line) => {
     const inRepo = resolved && ctx.files.has(resolved.getFilePath());
     edges.push({
-      src: file, dst: inRepo ? relPath(ctx.root, resolved.getFilePath()) : imp.getModuleSpecifierValue(),
-      kind: "imports", src_file: file, line: imp.getStartLineNumber(), resolved: Boolean(inRepo),
+      src: file, dst: inRepo ? relPath(ctx.root, resolved.getFilePath()) : specifier,
+      kind: "imports", src_file: file, line, resolved: Boolean(inRepo),
     });
+  };
+  for (const imp of sf.getImportDeclarations()) {
+    push(imp.getModuleSpecifierValue(), imp.getModuleSpecifierSourceFile(), imp.getStartLineNumber());
+  }
+  if (!ctx.commonjs || !JS_SOURCE.test(sf.getFilePath())) return;
+  for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const callee = call.getExpression();
+    const isRequire = Node.isIdentifier(callee) && callee.getText() === "require";
+    if (!isRequire && callee.getKind() !== SyntaxKind.ImportKeyword) continue;
+    const arg = call.getArguments()[0];
+    const specifier = arg ? literal(arg) : null;
+    if (specifier === null) continue;
+    const decl = arg.getSymbol()?.getDeclarations()?.[0];
+    push(specifier, decl && Node.isSourceFile(decl) ? decl : undefined, call.getStartLineNumber());
   }
 }
 

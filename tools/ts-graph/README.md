@@ -51,8 +51,17 @@ includes are parsed too, after the TypeScript projects:
   `extends` is not followed.
 - All projects, TypeScript and JavaScript, count against the same limit of 50
   (`report.projects_truncated` counts the JavaScript projects left out).
+- Imports reach the repository's own code without `node_modules`: every package of the
+  repository by its `name` (a workspace sibling such as `@acme/util`), and every top-level folder
+  of the project that is not a dependency name (`src/lib/x`, the usual Vite/webpack alias). Other
+  aliases from a bundler config are not read; they stay unresolved and show in `imports_in_repo`.
+- CommonJS is followed, in JavaScript projects and in the `.js` files of TypeScript projects with
+  `allowJs`: a function assigned at the top level is a symbol (see `symbols.jsonl`), what
+  `module.exports` / `exports.x` is set to is exported, a call through a `module.exports = { a,
+  b: c }` member lands on `a` / `c`, and `require("x")` / `import("x")` are `imports` rows.
 - TypeScript rows stay the same, except that a call from a TypeScript project into a JavaScript
-  file that is now parsed becomes a `calls` edge to its symbol instead of `calls_external`.
+  file that is now parsed becomes a `calls` edge to its symbol instead of `calls_external`, and
+  the CommonJS rules above apply to `.js` files a tsconfig includes.
 - Symbolic links are not followed.
 
 ## Files analysed
@@ -84,7 +93,7 @@ counted as [`unsupported`] and not parsed.
 | `file` | repository-relative path, `/`-separated |
 | `line_start`, `line_end` | 1-based, decorators included |
 | `body_hash` | SHA-256 of the declaration's tokens joined by one space: whitespace and comments do not change it; literals, decorators and the signature do |
-| `exported` | own `export`, or the parent class's / interface's |
+| `exported` | own `export`, the parent class's / interface's, or the name is in an export list (`export { a, b as c }`); with `--javascript` also what `module.exports` / `exports.x` is set to |
 | `decorators` | decorator names, e.g. `["Post", "HttpCode"]` |
 | `decorators_text` | each decorator's source text on one line, ≤ 200 chars, in source order, e.g. `["@UseGuards(AuthGuard('jwt'), RolesGuard)"]` |
 | `signature` | `name(param: Type): Return` without parameter decorators, or the declaration's first line |
@@ -96,7 +105,13 @@ through an interface has a target; the `implements` edges lead to the implementa
 property whose value is a function (`getUsers = async (req, res) => {...}`) is a `method` too. In a
 project that depends on `express`, the inline handler of a top-level route registration
 (`router.get("/articles", auth, async (req, res) => {...})`) is a `function` named
-`GET /articles` (not exported), so the route has a flow.
+`GET /articles` (not exported), so the route has a flow. With `--javascript`, in a JavaScript
+file, a function assigned at the top level to a member (not to a plain variable, whose declaration
+is already a symbol) is a `function` too, unless the file already has a symbol of that name; the
+row covers the whole assignment: `exports.run =
+function () {...}` and `module.exports.run = ...` are `run` (exported), `module.exports =
+wrap(async () => {...})` is `default` (exported), `Model.prototype.save = function () {...}` is
+`Model.save`, and anything else keeps its target text (`schema.methods.check`).
 
 ### `edges.jsonl`
 
@@ -108,7 +123,7 @@ project that depends on `express`, the inline handler of a top-level route regis
 | `calls_external` | caller id → the callee expression text (≤ 120 chars) | `true` when TypeScript found a declaration outside the analysed files (its lib, a skipped file); `false` when nothing declares the name, typically a package API without `node_modules` |
 | `injects` | class id → class/interface id of a constructor parameter type | `true` |
 | `extends`, `implements` | class/interface id → the base's id, or its text when outside the repository | `true` only for a repository target |
-| `imports` | file → file (`resolved: true`) or → the bare specifier (`false`) | |
+| `imports` | file → file (`resolved: true`) or → the bare specifier (`false`); with `--javascript` also `require("x")` and `import("x")` with a literal in `.js` files, and a JavaScript file without symbols (a barrel `index.js`) is a resolved target | |
 | `reads_env` | symbol id → `process.env.X` name, or the key of `configService.get("x")` / `getOrThrow("x")` | `true` |
 | `guarded_by`, `intercepted_by` | class/method id → each guard/interceptor of `@UseGuards(...)` / `@UseInterceptors(...)` (`AuthGuard('jwt')` → `AuthGuard`) | `true` only for a repository target; the text otherwise |
 | `module_imports`, `provides` | `@Module` class id → each entry of `imports` / `providers`, following `X.forRoot(...)`, `cond ? A : B`, spreads, consts and `{provide, useClass/useExisting}` | `true` only for a repository target; the text otherwise |
@@ -163,6 +178,10 @@ With `--javascript` the report has a few more keys; without it, it is unchanged:
   `language` (`"ts"` or `"js"`); only a TypeScript project keeps the `tsconfig` key, and a
   JavaScript project that could not be opened is `{config, language, error}`;
 - `projects_truncated` counts the JavaScript projects left out by the limit of 50;
+- `imports_in_repo` (`{total, resolved, unresolved_sample}`, JavaScript projects only) counts the
+  imports meant for repository code: resolved ones, relative ones, and bare ones that name no
+  dependency or Node built-in; imports of assets and of `.vue` / `.svelte` files are left out.
+  `unresolved_sample` lists up to 10 as `<file> -> <specifier>`, typically a bundler alias;
 - `files_skipped` also has `config`, `minified`, `large`, `syntax`, `unreadable`, `no_project`,
   `project_limit` and `unsupported` (see Files analysed), and JavaScript tests are added to
   `test`. Every `.js`/`.jsx`/`.mjs`/`.cjs` file outside the skipped folders that no tsconfig

@@ -503,6 +503,37 @@ webpack 38,8 detik dan 1,35 GB, sebagian besar untuk membaca 25 ribu file.
 9. Repo Vue: 131 file `.vue` tidak terbaca, dan flow-nya akan sangat tidak lengkap. Statusnya
    tetap "tidak didukung, dihitung".
 
-### J1–J5
+### J1 dan J2 (2026-11-19, sidecar saja, branch `feat/js-projects`)
+
+Semua di belakang `--javascript` di sidecar. Tanpa opsi itu, keluaran sama dengan sebelumnya
+kecuali dua perbaikan TS yang disetujui: nama di `export { }` menjadi `exported`, dan
+`owningSymbol` tidak lagi mendaratkan panggilan di symbol pertama sebuah file. Dicek pada
+webpack (identik) dan axios (1 symbol berubah `exported`).
+
+Aturan CommonJS juga berlaku untuk file `.js` di project TS ber-`allowJs` saat opsi menyala. Di
+webpack itu menambah sekitar 600 symbol dan 5.500 edge.
+
+| Repo | Import kode ter-resolve | Edge `imports` | Entry point | Sebelum J1 |
+|---|---|---|---|---|
+| proshop_mern | 129/129 | 262 | 21 (4 Express, 17 generic) | tidak ter-index |
+| node-express-boilerplate | 75/75 | 123 | 4 generic | tidak ter-index |
+| express | 54/57 | 144 | 0 | tidak ter-index |
+| axios (project JS) | 188/191 | 241 | 4 generic | hanya 13 file `.ts` |
+| repo Next | 19/19 | 47 | 11 Next | tidak ter-index |
+| coreui | 129/132 | 341 | 42 generic | tidak ter-index |
+| vue-element-admin | 56/120 | 159 | 25 generic | tidak ter-index |
+| create-react-app | 64/81; antar paket workspace 28/30 | 279 | 19 generic | tidak ter-index |
+| webpack | 227/332 | 4.628 | 96 generic | 1.022 file, 9 entry point |
+
+Sisa yang diketahui:
+
+- express masih 0 entry point: `exports = module.exports = createApplication` (penugasan
+  berantai) dan `app.init = function` pada objek biasa belum dianggap diekspor.
+- vue-element-admin: alias `@/x` yang menunjuk `index.vue` dihitung tidak ter-resolve.
+- create-react-app: 2 import ke paket yang `main`-nya menunjuk hasil build (`lib/`), yang tidak
+  ada di repo.
+- Batas: paling banyak 1.000 nama paket untuk pemetaan workspace (review keamanan).
+
+### J3–J5
 
 Belum ada.

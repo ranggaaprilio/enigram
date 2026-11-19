@@ -540,3 +540,170 @@ test("javascript: the CLI takes --javascript and exits 0 on a repository without
   assert.equal(fs.readFileSync(path.join(out, "symbols.jsonl"), "utf8"), "");
   assert.throws(() => execFileSync(process.execPath, [cli, "--repo", dir, "--out", out], { stdio: "pipe" }));
 });
+
+// ---- JavaScript modules: CommonJS, export lists, workspaces, folder aliases ----
+
+const cjs = buildGraph(path.join(HERE, "fixture-cjs"), { diagnostics: false, javascript: true });
+const cjsSym = (id) => cjs.symbols.find((s) => s.id === id);
+const cjsCalls = () => cjs.edges.filter((e) => e.kind === "calls").map((e) => `${e.src} -> ${e.dst}`).sort();
+
+test("modules: a function assigned at the top level is a symbol", () => {
+  const rows = [
+    ["src/a.js#run", "function", true],
+    ["src/a.js#two", "function", true],
+    ["src/c.js#default", "function", true],
+    ["src/model.js#Model.save", "function", false],
+  ];
+  for (const [id, kind, exported] of rows) {
+    const s = cjsSym(id);
+    assert.ok(s, id);
+    assert.deepEqual([s.kind, s.exported], [kind, exported], id);
+  }
+  assert.match(cjsSym("src/a.js#run").body, /^exports\.run = function run\(\)/);
+  assert.deepEqual([cjsSym("src/a.js#run").line_start, cjsSym("src/a.js#run").line_end], [4, 6]);
+});
+
+test("modules: members of module.exports are exported, and calls through them land on the function", () => {
+  for (const id of ["src/b.js#list", "src/b.js#other", "src/b.js#helper", "src/model.js#Model", "src/d.js#first"]) {
+    assert.equal(cjsSym(id).exported, true, id);
+  }
+  assert.equal(cjsSym("src/model.js#persist").exported, false);
+  assert.deepEqual(cjsCalls(), [
+    "src/a.js#run -> src/b.js#list",
+    "src/a.js#run -> src/b.js#other",
+    "src/a.js#two -> src/b.js#helper",
+    "src/c.js#default -> src/a.js#run",
+    "src/c.js#default -> src/c.js#wrap",
+    "src/model.js#Model.save -> src/model.js#persist",
+  ]);
+});
+
+test("modules: a declaration outside every symbol is not attributed to the file's first symbol", () => {
+  const e = cjs.edges.find((x) => x.src === "src/e.js#useY" && x.kind.startsWith("calls"));
+  assert.deepEqual([e.kind, e.dst], ["calls_external", "d.y"]);
+});
+
+test("modules: require() and import() with a literal are imports edges", () => {
+  const imports = cjs.edges.filter((e) => e.kind === "imports").map((e) => `${e.src} -> ${e.dst} ${e.resolved}`);
+  assert.deepEqual(imports.sort(), [
+    "src/a.js -> src/b.js true",
+    "src/a.js -> src/b.js true",
+    "src/c.js -> src/a.js true",
+    "src/e.js -> src/d.js true",
+    "src/f.js -> src/models/index.js true",
+    "src/models/index.js -> src/model.js true",
+  ]);
+});
+
+test("modules: a repository with no framework but exported CommonJS functions gets generic roots", () => {
+  // run is called by c.js; Model.save is not exported; useY calls nothing in the repository.
+  assert.deepEqual(cjs.entrypoints.map((e) => e.symbol).sort(), ["src/a.js#two", "src/c.js#default"]);
+});
+
+test("modules: an export list marks its names exported, in JavaScript and TypeScript", () => {
+  const js = buildGraph(tmpRepo({
+    "package.json": "{}",
+    "c.js": "const get = (req) => req;\nfunction hidden() {}\nexport { get, hidden as shown };\n",
+  }), { diagnostics: false, javascript: true });
+  assert.deepEqual(js.symbols.map((s) => [s.id, s.exported]), [["c.js#hidden", true], ["c.js#get", true]]);
+  const ts = buildGraph(tmpRepo({
+    "tsconfig.json": "{}",
+    "c.ts": "const get = (req: string) => req;\nfunction local() {}\nexport { get };\n",
+  }), { diagnostics: false });
+  assert.deepEqual(ts.symbols.map((s) => [s.id, s.exported]), [["c.ts#local", false], ["c.ts#get", true]]);
+});
+
+const ws = buildGraph(path.join(HERE, "fixture-ws"), { diagnostics: false, javascript: true });
+
+test("modules: a workspace package and a root folder resolve by name; a dependency never does", () => {
+  const calls = ws.edges.filter((e) => e.kind === "calls").map((e) => `${e.src} -> ${e.dst}`).sort();
+  assert.deepEqual(calls, [
+    "packages/app/index.js#start -> packages/app/src/lib/math.js#twice",
+    "packages/app/index.js#start -> packages/util/index.js#fmt",
+  ]);
+  const imports = ws.edges.filter((e) => e.kind === "imports").map((e) => `${e.dst} ${e.resolved}`).sort();
+  assert.deepEqual(imports, ["lodash false", "packages/app/src/lib/math.js true", "packages/util/index.js true"]);
+});
+
+test("modules: the report counts imports meant for the repository", () => {
+  assert.deepEqual(ws.report.imports_in_repo, { total: 2, resolved: 2, unresolved_sample: [] });
+  const g = buildGraph(tmpRepo({
+    "package.json": JSON.stringify({ dependencies: { react: "*" } }),
+    "a.js": 'import React from "react";\nimport x from "./missing";\nimport y from "@/nowhere";\nexport function a() { return x() + y(); }\n',
+  }), { diagnostics: false, javascript: true });
+  assert.deepEqual(g.report.imports_in_repo, { total: 2, resolved: 0, unresolved_sample: ["a.js -> ./missing", "a.js -> @/nowhere"] });
+  assert.ok(!("imports_in_repo" in buildGraph(path.join(HERE, "fixture"), { diagnostics: false }).report));
+});
+
+test("modules: an import of a file without symbols (a barrel) is resolved", () => {
+  const imports = cjs.edges.filter((e) => e.kind === "imports" && e.src === "src/f.js").map((e) => `${e.dst} ${e.resolved}`);
+  assert.deepEqual(imports, ["src/models/index.js true"]);
+  assert.ok(cjs.edges.some((e) => e.kind === "imports" && e.src === "src/models/index.js" && e.dst === "src/model.js" && e.resolved));
+});
+
+test("modules: an import of a .vue or .svelte file is not counted as a code import", () => {
+  const g = buildGraph(tmpRepo({
+    "package.json": "{}",
+    "src/main.js": 'import App from "./App";\nimport Nav from "./Nav.svelte";\nexport function main() { return [App, Nav]; }\n',
+    "src/App.vue": "<template><div /></template>\n",
+    "src/Nav.svelte": "<nav />\n",
+  }), { diagnostics: false, javascript: true });
+  assert.deepEqual(g.report.imports_in_repo, { total: 0, resolved: 0, unresolved_sample: [] });
+});
+
+test("modules: CommonJS rules apply only with --javascript, also inside a TypeScript project with allowJs", () => {
+  const dir = tmpRepo({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { allowJs: true, noEmit: true }, include: ["src"] }),
+    "src/a.js": 'const b = require("./b");\nexports.run = function run() { return b.list(); };\n',
+    "src/b.js": "function list() { return 1; }\nmodule.exports = { list };\n",
+  });
+  const off = buildGraph(dir, { diagnostics: false });
+  // As before this change: TypeScript itself already reports `list` as exported here.
+  assert.deepEqual(off.symbols.map((s) => [s.id, s.exported]), [["src/a.js#b", false], ["src/b.js#list", true]]);
+  assert.ok(!off.edges.some((e) => e.kind === "calls" && e.src.endsWith("#run")));
+  assert.ok(!off.edges.some((e) => e.kind === "imports"));
+  const on = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(
+    on.symbols.map((s) => [s.id, s.exported]).sort(),
+    [["src/a.js#b", false], ["src/a.js#run", true], ["src/b.js#list", true]],
+  );
+  assert.ok(on.edges.some((e) => e.kind === "calls" && e.src === "src/a.js#run" && e.dst === "src/b.js#list"));
+  assert.ok(on.edges.some((e) => e.kind === "imports" && e.src === "src/a.js" && e.dst === "src/b.js"));
+});
+
+test("modules: the assignment rule is for JavaScript member targets only, and never repeats a name", () => {
+  const dir = tmpRepo({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { allowJs: true, noEmit: true }, include: ["src"] }),
+    "src/c.ts": "let handler: any;\nhandler = () => 2;\nconst app: any = {};\napp.run = () => 1;\n",
+    "src/d.js": "var Foo;\nFoo = function () {};\nfunction x() { return 1; }\nexports.x = function () { return 2; };\nconst api = {};\napi.get = () => x();\n",
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(g.symbols.map((s) => s.id).sort(), [
+    "src/c.ts#app",
+    "src/c.ts#handler",
+    "src/d.js#Foo",
+    "src/d.js#api",
+    "src/d.js#api.get",
+    "src/d.js#x",
+  ]);
+});
+
+test("modules: workspace packages are capped, and a shallower package wins a shared name", async () => {
+  const { findJsProjects, MAX_PACKAGES } = await import("../lib/javascript.mjs");
+  const files = { "package.json": "{}", "examples/demo/a/package.json": '{ "name": "@w/a" }', "packages/a/package.json": '{ "name": "@w/a" }' };
+  const dir = tmpRepo(files);
+  const { packages } = findJsProjects(dir, new Set(), 50);
+  assert.equal(fs.realpathSync(packages.get("@w/a")), fs.realpathSync(path.join(dir, "packages/a")));
+  const many = { "package.json": "{}" };
+  for (let i = 0; i <= MAX_PACKAGES; i += 1) many[`p/${i}/package.json`] = JSON.stringify({ name: `pkg-${i}` });
+  assert.equal(findJsProjects(tmpRepo(many), new Set(), 50).packages.size, MAX_PACKAGES);
+});
+
+test("modules: a symlinked package.json is not read", () => {
+  const outside = tmpRepo({ "package.json": '{ "name": "@evil/pkg" }' });
+  const dir = tmpRepo({ "a.js": "export function a() {}\n", "sub/b.js": "export function b() {}\n", "sub/package.json": "{}" });
+  fs.symlinkSync(path.join(outside, "package.json"), path.join(dir, "package.json"));
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(g.report.projects.map((p) => p.config), ["sub/package.json"]);
+  assert.equal(g.report.files_skipped.no_project, 1);
+});
