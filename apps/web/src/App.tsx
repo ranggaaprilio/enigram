@@ -198,7 +198,8 @@ function WorkspaceShell({ home }: { home: string }) {
           <div
             id="content"
             tabIndex={-1}
-            className="w-full max-w-[1140px] px-4 pt-6 pb-20 outline-none md:px-8"
+            // Chat takes the whole width beside the sidebar; other pages keep a reading width.
+            className={`w-full px-4 pt-6 pb-20 outline-none md:px-8 ${segment === 'chat' ? '' : 'max-w-[1140px]'}`}
           >
             {workspaces === undefined ? null : !known ? (
               <Empty>
