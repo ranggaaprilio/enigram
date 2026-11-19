@@ -6,6 +6,7 @@ import * as express from "./entrypoints/express.mjs";
 import * as generic from "./entrypoints/generic.mjs";
 import * as nest from "./entrypoints/nest.mjs";
 import * as next from "./entrypoints/next.mjs";
+import { isInside } from "./fsguard.mjs";
 import { BUILTINS, emptyJsSkips, findJsProjects, openJsProject } from "./javascript.mjs";
 import { findProjects, MAX_PROJECTS, openProject, relPath } from "./project.mjs";
 import { fileSymbols } from "./symbols.mjs";
@@ -15,10 +16,15 @@ const ADAPTERS = { nest, next, express };
 const KNOWN_FRAMEWORKS = ["express", "next", "fastify", "koa", "hono"];
 const MAX_DIAGNOSTICS = 10;
 
-/** Dependency names from the repository's package.json (parsed, never run). */
-function dependencyNames(root) {
+/**
+ * Dependency names from the package.json in `dir` (parsed, never run); none when that file really
+ * lies outside the repository `root` (a symbolic link).
+ */
+function dependencyNames(dir, root) {
+  const file = path.join(dir, "package.json");
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    if (!isInside(root, file)) return new Set();
+    const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
     return new Set([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})]);
   } catch {
     return new Set();
@@ -159,7 +165,7 @@ function openPart(root, config, taken, commonjs) {
   skipped.other_project = all.length - files.length;
   for (const sf of files) taken.add(sf.getFilePath());
   const dir = path.dirname(path.join(root, config));
-  const deps = new Set([...dependencyNames(root), ...dependencyNames(dir)]);
+  const deps = new Set([...dependencyNames(root, root), ...dependencyNames(dir, root)]);
   // express: inline route handlers become symbols; commonjs: JavaScript's CommonJS rules.
   const options = { express: deps.has("express"), commonjs };
   const symbols = files.flatMap((sf) => fileSymbols(root, sf, options));
@@ -171,7 +177,7 @@ function openPart(root, config, taken, commonjs) {
  * in `jsSkipped.syntax`), and their symbols.
  */
 function openJsPart(root, found, jsSkipped, packages) {
-  const deps = new Set([...dependencyNames(root), ...dependencyNames(found.dir)]);
+  const deps = new Set([...dependencyNames(root, root), ...dependencyNames(found.dir, root)]);
   const { project, files, syntax, unreadable } = openJsProject(root, found, { packages, deps });
   jsSkipped.syntax += syntax;
   jsSkipped.unreadable += unreadable;

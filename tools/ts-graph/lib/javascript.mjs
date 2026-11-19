@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";
 import { Project, ts } from "ts-morph";
+import { guardedFileSystem } from "./fsguard.mjs";
 import { relPath, SKIP_DIRS } from "./project.mjs";
 
 const JS_FILE = /\.(js|jsx|mjs|cjs)$/;
@@ -206,6 +207,7 @@ export function openJsProject(root, found, { packages = new Map(), deps = new Se
     paths: repositoryPaths(found, packages, deps, own.paths),
   };
   const project = new Project({
+    fileSystem: guardedFileSystem(root), // nothing outside the repository, symbolic links included
     skipAddingFilesFromTsConfig: true,
     skipFileDependencyResolution: true,
     compilerOptions: {

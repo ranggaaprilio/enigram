@@ -753,3 +753,75 @@ test("express: CommonJS forms give no routes without --javascript, also in a Typ
   assert.deepEqual(httpRows(buildGraph(dir, { diagnostics: false })), []);
   assert.deepEqual(httpRows(buildGraph(dir, { diagnostics: false, javascript: true })), ["GET /x -> src/app.js#GET /x"]);
 });
+
+// ---- Nothing outside the repository is read, symbolic links included ----
+
+function linkedRepo(files) {
+  const outside = tmpRepo({
+    "leak.ts": "export function leak(): number { return 1; }\n",
+    "leakjs.js": "export function leak() { return 1; }\n",
+  });
+  const dir = tmpRepo(files);
+  fs.symlinkSync(outside, path.join(dir, "linked"));
+  return dir;
+}
+
+test("outside: a tsconfig include does not pull in files behind a symlinked folder", () => {
+  const dir = linkedRepo({
+    "tsconfig.json": "{}",
+    "src/a.ts": 'import { leak } from "../linked/leak";\nexport function a(): number { return leak() + [1].length; }\n',
+  });
+  const g = buildGraph(dir, { diagnostics: false });
+  assert.deepEqual(g.symbols.map((s) => s.id), ["src/a.ts#a"]);
+  const call = g.edges.find((e) => e.src === "src/a.ts#a" && e.dst.endsWith("leak"));
+  assert.deepEqual([call.kind, call.resolved], ["calls_external", false]);
+  assert.deepEqual(g.edges.filter((e) => e.kind === "imports").map((e) => [e.dst, e.resolved]), [["../linked/leak", false]]);
+});
+
+test("outside: a JavaScript import through a symlinked folder does not resolve", () => {
+  const dir = linkedRepo({
+    "package.json": "{}",
+    "src/b.js": 'import { leak } from "../linked/leakjs.js";\nexport function b() { return leak(); }\n',
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  const call = g.edges.find((e) => e.src === "src/b.js#b" && e.kind.startsWith("calls"));
+  assert.deepEqual([call.kind, call.dst, call.resolved], ["calls_external", "leak", false]);
+});
+
+test("outside: the TypeScript lib still resolves with the guarded file system", () => {
+  const g = buildGraph(tmpRepo({
+    "tsconfig.json": "{}",
+    "src/a.ts": "export function a(): Promise<number> { return Promise.resolve([1, 2].map((n) => n).length); }\n",
+  }), { diagnostics: false });
+  const calls = g.edges.filter((e) => e.src === "src/a.ts#a" && e.kind === "calls_external");
+  assert.ok(calls.length >= 2);
+  assert.ok(calls.every((e) => e.resolved), JSON.stringify(calls));
+});
+
+test("outside: a symbolic link that stays inside the repository still resolves", () => {
+  const dir = tmpRepo({
+    "tsconfig.json": JSON.stringify({ include: ["src"] }),
+    "shared/util.ts": "export function util(): number { return 1; }\n",
+    "src/a.ts": 'import { util } from "./shared/util";\nexport function a(): number { return util(); }\n',
+  });
+  fs.symlinkSync(path.join(dir, "shared"), path.join(dir, "src", "shared"));
+  const g = buildGraph(dir, { diagnostics: false });
+  const call = g.edges.find((e) => e.src === "src/a.ts#a" && e.kind.startsWith("calls"));
+  assert.equal(call.resolved, true, JSON.stringify(call));
+});
+
+test("outside: a triple-slash reference through a symlinked folder is a missing file, not a failure", () => {
+  const dir = linkedRepo({
+    "tsconfig.json": JSON.stringify({ include: ["src"] }),
+    "src/q.ts": '/// <reference path="../linked/leak.ts" />\nexport function q(): number { return 1; }\n',
+  });
+  const g = buildGraph(dir, { diagnostics: false });
+  assert.deepEqual(g.symbols.map((s) => s.id), ["src/q.ts#q"]);
+});
+
+test("outside: a package.json symlinked to a file outside the repository is not read", () => {
+  const outside = tmpRepo({ "package.json": JSON.stringify({ dependencies: { express: "1" } }) });
+  const dir = tmpRepo({ "tsconfig.json": "{}", "src/a.ts": "export function a(): number { return 1; }\n" });
+  fs.symlinkSync(path.join(outside, "package.json"), path.join(dir, "package.json"));
+  assert.deepEqual(buildGraph(dir, { diagnostics: false }).report.unmatched_frameworks, []);
+});

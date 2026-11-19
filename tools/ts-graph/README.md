@@ -4,6 +4,11 @@ Static code graph of a TypeScript repository for enigram, built with
 [ts-morph](https://ts-morph.com). It reads the repository's `tsconfig.json` files and source files and
 writes JSONL; it never installs, imports or runs anything from the repository, and it runs without
 the repository's `node_modules` (package types stay unresolved, repository types resolve).
+The compiler sees the repository through a guarded file system (`lib/fsguard.mjs`): a path whose
+real location is outside the repository does not exist for it, so neither a tsconfig `include`
+nor an import reaches a file outside the repository, also through a symbolic link inside it. A
+symbolic link that stays inside the repository works as before. A tsconfig `extends` of a file
+outside the repository is ignored too, so the options it would add are missing.
 
 The Python side (`apps/api/src/enigram/adapters/driven/ts_graph_sidecar.py`) runs it once per
 repository and loads the rows into Postgres. Any other parser (tree-sitter, another language) can
