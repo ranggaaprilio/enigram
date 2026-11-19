@@ -414,3 +414,23 @@ def test_code_set_checks_symbols_in_the_code_graph(cfg, tmp_path, fake_repo):
     assert problems["b02"] == ["evidence 1: no symbol AuthService.missing in the code graph"]
     assert problems["b03"] == ["evidence 1: symbol Dup.run: declared in 2 files; add file:"]
     assert "b04" not in problems and "b01" not in problems
+
+
+def test_read_code_files_reads_typescript_and_javascript(tmp_path):
+    tree = {
+        "src/a.ts": "export class A {}",
+        "src/a.d.ts": "declare const a: number;",
+        "server/app.js": "const getProducts = () => 1",
+        "server/b.cjs": "module.exports = {}",
+        "public/vendor.min.js": "x",
+        "public/app.bundle.js": "x",
+        "node_modules/pkg/index.js": "x",
+    }
+    for rel, text in tree.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+
+    files = golden.read_code_files(tmp_path)
+
+    assert sorted(files) == ["server/app.js", "server/b.cjs", "src/a.ts"]
+    assert files["server/app.js"] == "const getProducts = () => 1"
