@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Project, ts } from "ts-morph";
+import { guardedFileSystem } from "./fsguard.mjs";
 
 export const SKIP_DIRS = ["node_modules", "dist", "build", ".git", "coverage"];
 const TEST_DIRS = ["test", "__tests__"]; // a project in there is a fixture, not the repository
@@ -37,6 +38,7 @@ export function openProject(root, tsconfig = "tsconfig.json") {
   const configPath = path.join(root, tsconfig);
   if (!fs.existsSync(configPath)) throw new Error(`no ${tsconfig} at ${root}`);
   const project = new Project({
+    fileSystem: guardedFileSystem(root), // nothing outside the repository, symbolic links included
     tsConfigFilePath: configPath,
     skipFileDependencyResolution: true, // nothing to resolve: node_modules is absent
     compilerOptions: {

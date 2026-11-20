@@ -1,22 +1,65 @@
 import { Node, SyntaxKind } from "ts-morph";
-import { declKey, HTTP_VERBS } from "../symbols.mjs";
+import { exportedValue } from "../edges.mjs";
+import { declKey, HTTP_VERBS, routeChain } from "../symbols.mjs";
 import { joinRoute } from "./common.mjs";
 
 const MAX_MOUNT_DEPTH = 10; // a mount cycle (a router mounted inside itself) stops here
 
+// Set per detect() call: CommonJS forms (require, module.exports, forEach mounts) are followed
+// only with --javascript.
+let commonjs = false;
+
 function resolved(node) {
   let sym = node.getSymbol();
   if (sym?.isAlias()) sym = sym.getAliasedSymbol() ?? sym;
+  if (commonjs) sym = exportedValue(sym);
   return sym?.getDeclarations()?.[0];
 }
 
-/** Whether a name comes from the `express` package (its default import, `Router`, a namespace). */
+/** `require("<name>")`, with a literal. */
+function isRequireOf(node, name) {
+  if (!Node.isCallExpression(node)) return false;
+  const callee = node.getExpression();
+  const arg = node.getArguments()[0];
+  return Node.isIdentifier(callee) && callee.getText() === "require" && Node.isStringLiteral(arg) && arg.getLiteralValue() === name;
+}
+
+/**
+ * Whether a name comes from the `express` package (its default import, `Router`, a namespace;
+ * with CommonJS also `require("express")`, a variable or destructured name holding it).
+ */
 function fromExpress(node) {
   if (Node.isPropertyAccessExpression(node)) return fromExpress(node.getExpression());
+  if (commonjs && isRequireOf(node, "express")) return true;
   if (!Node.isIdentifier(node)) return false;
   const decl = node.getSymbol()?.getDeclarations()?.[0];
   const imported = decl?.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
-  return imported?.getModuleSpecifierValue() === "express";
+  if (imported) return imported.getModuleSpecifierValue() === "express";
+  if (!commonjs || !decl) return false;
+  const variable = Node.isVariableDeclaration(decl) ? decl : decl.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
+  return Boolean(variable) && isRequireOf(unwrap(variable.getInitializer()), "express");
+}
+
+/** The value a file assigns to `module.exports` (its last top-level assignment), or null. */
+function moduleExportsValue(sf) {
+  let value = null;
+  for (const statement of sf.getStatements()) {
+    const expr = Node.isExpressionStatement(statement) ? statement.getExpression() : null;
+    if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getKind() === SyntaxKind.EqualsToken && expr.getLeft().getText() === "module.exports") {
+      value = expr.getRight();
+    }
+  }
+  return value;
+}
+
+/** The file a `require("./x")` call loads, when it is a repository file. */
+function requiredFile(node) {
+  if (!Node.isCallExpression(node)) return null;
+  const callee = node.getExpression();
+  const arg = node.getArguments()[0];
+  if (!Node.isIdentifier(callee) || callee.getText() !== "require" || !Node.isStringLiteral(arg)) return null;
+  const decl = arg.getSymbol()?.getDeclarations()?.[0];
+  return decl && Node.isSourceFile(decl) ? decl : null;
 }
 
 function unwrap(node) {
@@ -38,7 +81,10 @@ function routerKey(node, depth = 0) {
     if (Node.isPropertyAccessExpression(callee) && ["use", ...HTTP_VERBS].includes(callee.getName())) {
       return routerKey(callee.getExpression(), depth + 1);
     }
-    return null;
+    // app.use("/health", require("./routes/health")): the router that file exports.
+    const file = commonjs ? requiredFile(node) : null;
+    const value = file && moduleExportsValue(file);
+    return value ? routerKey(value, depth + 1) : null;
   }
   if (Node.isIdentifier(node)) {
     const decl = resolved(node);
@@ -47,15 +93,59 @@ function routerKey(node, depth = 0) {
       return init ? routerKey(init, depth + 1) : null;
     }
     if (Node.isExportAssignment(decl)) return routerKey(decl.getExpression(), depth + 1);
+    // const routes = require("./routes"): the module, whose `module.exports = router` is the router.
+    if (commonjs && Node.isSourceFile(decl)) {
+      const value = moduleExportsValue(decl);
+      return value ? routerKey(value, depth + 1) : null;
+    }
+    if (commonjs && Node.isBinaryExpression(decl)) return routerKey(decl.getRight(), depth + 1);
     return null;
   }
   return null;
 }
 
-/** The symbol a handler belongs to: the inline function's own, or what a name resolves to. */
+/**
+ * `list.forEach((r) => router.use(r.path, r.route))` over a constant array of object literals:
+ * one {child, path} per element, read from the properties the call names. Null when `call` is not
+ * such a `use`.
+ */
+function forEachMounts(call, depth) {
+  const [pathArg, childArg] = call.getArguments();
+  if (!Node.isPropertyAccessExpression(pathArg) || !Node.isPropertyAccessExpression(childArg)) return null;
+  const param = pathArg.getExpression();
+  if (!Node.isIdentifier(param) || childArg.getExpression().getText() !== param.getText()) return null;
+  const fn = call.getFirstAncestor((a) => Node.isArrowFunction(a) || Node.isFunctionExpression(a));
+  const loop = fn?.getParent();
+  if (!fn || fn.getParameters()[0]?.getName() !== param.getText() || !Node.isCallExpression(loop)) return null;
+  if (loop.getArguments()[0] !== fn) return null; // the callback, not another argument
+  const loopCallee = loop.getExpression();
+  if (!Node.isPropertyAccessExpression(loopCallee) || loopCallee.getName() !== "forEach") return null;
+  const listDecl = resolved(loopCallee.getExpression());
+  const list = Node.isVariableDeclaration(listDecl) ? unwrap(listDecl.getInitializer()) : null;
+  if (!Node.isArrayLiteralExpression(list)) return null;
+  const out = [];
+  for (const el of list.getElements()) {
+    if (!Node.isObjectLiteralExpression(el)) continue;
+    const value = (name) => {
+      const prop = el.getProperty(name);
+      return Node.isPropertyAssignment(prop) ? unwrap(prop.getInitializer()) : null;
+    };
+    const path = value(pathArg.getName());
+    const child = value(childArg.getName()) && routerKey(value(childArg.getName()), depth + 1);
+    if (child && path && (Node.isStringLiteral(path) || Node.isNoSubstitutionTemplateLiteral(path))) {
+      out.push({ child, path: path.getLiteralValue() });
+    }
+  }
+  return out;
+}
+
+/**
+ * The symbol a handler belongs to: the inline function's own, or what a name resolves to. The
+ * source file is never one (its start offset is its first statement's).
+ */
 function handlerSymbol(handler, byDecl) {
   let node = Node.isArrowFunction(handler) || Node.isFunctionExpression(handler) ? handler : resolved(handler);
-  for (; node; node = node.getParent()) {
+  for (; node && !Node.isSourceFile(node); node = node.getParent()) {
     const row = byDecl.get(declKey(node));
     if (row) return row;
   }
@@ -71,9 +161,10 @@ function handlerSymbol(handler, byDecl) {
  * one the symbol it resolves to. Runs only when the project depends on `express`.
  * @param {{symbols: {row: object, node: import("ts-morph").Node}[], files?: import("ts-morph").SourceFile[], deps: Set<string>}} input
  */
-export function detect({ symbols, files = [], deps }) {
+export function detect({ symbols, files = [], deps, commonjs: cjs = false }) {
   const entrypoints = [];
   if (!deps.has("express")) return { entrypoints, matched: 0 };
+  commonjs = cjs;
   const byDecl = new Map(symbols.map((s) => [declKey(s.node), s.row]));
   const routes = []; // {router, verb, path, handler}
   const mounts = []; // {parent, child, path}
@@ -83,12 +174,21 @@ export function detect({ symbols, files = [], deps }) {
       if (!Node.isPropertyAccessExpression(callee)) continue;
       const name = callee.getName();
       if (name !== "use" && !HTTP_VERBS.includes(name)) continue;
-      const router = routerKey(callee.getExpression());
-      if (!router) continue;
       const args = call.getArguments();
+      const router = routerKey(callee.getExpression());
+      if (!router) {
+        // router.route("/:id").get(h).delete(m, h): one route per verb, at route()'s path.
+        const chain = name === "use" ? null : routeChain(callee.getExpression());
+        const chained = chain && routerKey(chain.router);
+        if (chained && args.length >= 1) routes.push({ router: chained, verb: name, path: chain.path, handler: unwrap(args.at(-1)) });
+        continue;
+      }
       const first = unwrap(args[0]);
       const path = first && (Node.isStringLiteral(first) || Node.isNoSubstitutionTemplateLiteral(first)) ? first.getLiteralValue() : null;
       if (name === "use") {
+        const listed = commonjs && path === null ? forEachMounts(call, 0) : null;
+        for (const m of listed ?? []) if (m.child !== router) mounts.push({ parent: router, child: m.child, path: m.path });
+        if (listed?.length) continue;
         for (const arg of path === null ? args : args.slice(1)) {
           const child = routerKey(arg);
           if (child && child !== router) mounts.push({ parent: router, child, path: path ?? "" });

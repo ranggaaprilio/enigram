@@ -465,6 +465,15 @@ def test_verify_answers_is_off_unless_on(cfg, clean_env, monkeypatch):
         Config.from_env(clean_env)
 
 
+def test_code_javascript_is_off_unless_on(cfg, clean_env, monkeypatch):
+    assert cfg.code_javascript is False
+    monkeypatch.setenv("CODE_JAVASCRIPT", "On")
+    assert Config.from_env(clean_env).code_javascript is True
+    monkeypatch.setenv("CODE_JAVASCRIPT", "1")
+    with pytest.raises(EnigramError, match="CODE_JAVASCRIPT must be on or off"):
+        Config.from_env(clean_env)
+
+
 def test_verify_badges_lists_the_origins_that_may_show_a_verdict(cfg, clean_env, monkeypatch):
     assert cfg.verify_badges == ()
     monkeypatch.setenv("VERIFY_BADGES", "Code, document")

@@ -333,3 +333,495 @@ test("Express: the adapter stays off, and inline handlers are no symbols, withou
   assert.ok(!graph.entrypoints.some((e) => e.framework === "express"));
   assert.ok(!nextGraph.symbols.some((s) => /^[A-Z]+ \//.test(s.qualified_name)));
 });
+
+// ---- JavaScript projects (--javascript) ----
+
+const JS_FIXTURE = path.join(HERE, "fixture-js");
+const TSJS = path.join(HERE, "fixture-tsjs");
+const MIXED = path.join(HERE, "fixture-mixed");
+const OLD_FIXTURES = ["fixture", "fixture-plain", "fixture-mono", "fixture-express", "fixture-next"];
+const rowsOf = (g) => ({ symbols: g.symbols, edges: g.edges, entrypoints: g.entrypoints });
+
+function tmpRepo(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ts-graph-js-"));
+  for (const [rel, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+  }
+  return dir;
+}
+
+test("javascript: off by default, and on it changes nothing for repositories without JavaScript", () => {
+  for (const name of OLD_FIXTURES) {
+    const dir = path.join(HERE, name);
+    const off = buildGraph(dir, { diagnostics: false });
+    const on = buildGraph(dir, { diagnostics: false, javascript: true });
+    assert.deepEqual(rowsOf(on), rowsOf(off), name);
+    assert.deepEqual(on.report.projects.map((p) => p.language), off.report.projects.map(() => "ts"), name);
+    // Without the flag the report keeps its old shape exactly.
+    assert.ok(!("projects_truncated" in off.report), name);
+    assert.deepEqual(Object.keys(off.report.files_skipped), ["test", "dts", "generated", "outside", "other_project"], name);
+    for (const p of off.report.projects) {
+      assert.deepEqual(Object.keys(p), p.error ? ["tsconfig", "error"] : ["tsconfig", "files", "symbols", "entrypoints", "adapters"], name);
+    }
+  }
+  assert.throws(() => buildGraph(JS_FIXTURE), /no tsconfig\.json/);
+});
+
+test("javascript: an unreadable file is counted, not fatal", { skip: process.getuid?.() === 0 }, () => {
+  const dir = tmpRepo({ "package.json": "{}", "a.js": "export function a() {}\n", "b.js": "export function b() {}\n" });
+  fs.chmodSync(path.join(dir, "b.js"), 0o000);
+  try {
+    const g = buildGraph(dir, { diagnostics: false, javascript: true });
+    assert.deepEqual(g.symbols.map((s) => s.id), ["a.js#a"]);
+    assert.equal(g.report.files_skipped.unreadable, 1);
+  } finally {
+    fs.chmodSync(path.join(dir, "b.js"), 0o644);
+  }
+});
+
+test("javascript: a jsconfig baseUrl outside the repository or malformed paths are ignored", () => {
+  const outside = tmpRepo({ "lib/leak.js": "export function leak() {}\n" });
+  const dir = tmpRepo({
+    "package.json": "{}",
+    "jsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: outside, paths: { "@o/*": ["lib/*"] } } }),
+    "a.js": 'import { leak } from "@o/leak";\nexport function a() { return leak(); }\n',
+    "web/jsconfig.json": JSON.stringify({ compilerOptions: { paths: { x: [1] } } }),
+    "web/b.js": 'import y from "x";\nexport function b() { return y(); }\n',
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  const call = g.edges.find((e) => e.src === "a.js#a" && e.kind.startsWith("calls"));
+  assert.deepEqual([call.kind, call.dst, call.resolved], ["calls_external", "leak", false]);
+  assert.ok(g.symbols.some((s) => s.id === "web/b.js#b"));
+});
+
+test("javascript: projects over the limit are counted, and so are their files", () => {
+  const files = { "package.json": "{}" };
+  for (let i = 0; i < 52; i += 1) {
+    files[`pkgs/p${String(i).padStart(2, "0")}/package.json`] = "{}";
+    files[`pkgs/p${String(i).padStart(2, "0")}/index.js`] = `export function f${i}() {}\n`;
+  }
+  const g = buildGraph(tmpRepo(files), { diagnostics: false, javascript: true });
+  assert.equal(g.report.projects.length, 50);
+  assert.equal(g.report.projects_truncated, 2);
+  assert.equal(g.report.files_skipped.project_limit, 2);
+  assert.equal(g.report.files, 50);
+});
+
+const jsGraph = buildGraph(JS_FIXTURE, { diagnostics: false, javascript: true });
+
+test("javascript: the nearest package.json or jsconfig.json owns a file", () => {
+  assert.deepEqual(
+    jsGraph.report.projects.map((p) => [p.config, p.language, p.files]),
+    [
+      ["package.json", "js", 2],
+      ["frontend/jsconfig.json", "js", 2],
+    ],
+  );
+  assert.ok(jsGraph.report.projects.every((p) => !("tsconfig" in p)));
+  assert.deepEqual([...new Set(jsGraph.symbols.map((s) => s.file))].sort(), [
+    "backend/server.js",
+    "backend/service.js",
+    "frontend/src/App.js",
+    "frontend/src/components/Button.jsx",
+  ]);
+});
+
+test("javascript: skipped files are counted by reason, so none disappears", () => {
+  const s = jsGraph.report.files_skipped;
+  assert.deepEqual(
+    { test: s.test, config: s.config, minified: s.minified, large: s.large, syntax: s.syntax, no_project: s.no_project, unsupported: s.unsupported },
+    { test: 3, config: 2, minified: 2, large: 0, syntax: 1, no_project: 0, unsupported: 1 },
+  );
+  const found = 12; // .js/.jsx files in fixture-js
+  assert.equal(jsGraph.report.files + s.test + s.config + s.minified + s.large + s.syntax + s.no_project, found);
+});
+
+test("javascript: calls, JSX through a jsconfig alias, and the adapters per project", () => {
+  const calls = jsGraph.edges.filter((e) => e.kind === "calls").map((e) => `${e.src} -> ${e.dst}`);
+  assert.deepEqual(calls.sort(), [
+    "backend/server.js#GET /health -> backend/service.js#list",
+    "backend/service.js#list -> backend/service.js#normalise",
+    "frontend/src/App.js#App -> frontend/src/components/Button.jsx#Button",
+  ]);
+  assert.deepEqual(jsGraph.entrypoints, [
+    { symbol: "backend/server.js#GET /health", kind: "http_route", route: "GET /health", framework: "express", version: "" },
+    { symbol: "frontend/src/App.js#App", kind: "root", route: "App", framework: "generic", version: "" },
+  ]);
+  assert.deepEqual(jsGraph.report.adapters, { express: 1, generic: 1 });
+});
+
+test("javascript: files a tsconfig does not include get a JavaScript project of their own", () => {
+  const off = buildGraph(TSJS, { diagnostics: false });
+  const on = buildGraph(TSJS, { diagnostics: false, javascript: true });
+  assert.deepEqual(off.report.projects.map((p) => [p.tsconfig, p.files]), [["tsconfig.json", 1]]);
+  assert.deepEqual(
+    on.report.projects.map((p) => [p.config, p.language, p.files]),
+    [
+      ["tsconfig.json", "ts", 1],
+      ["package.json", "js", 2],
+    ],
+  );
+  const ts = (g) => g.symbols.filter((s) => s.file.endsWith(".ts"));
+  assert.deepEqual(ts(on), ts(off));
+  assert.ok(on.edges.some((e) => e.kind === "calls" && e.src === "lib/core.js#request" && e.dst === "lib/helpers.js#merge"));
+});
+
+test("javascript: a TypeScript package keeps its output; JavaScript around it goes to the root package.json", () => {
+  const off = buildGraph(MIXED, { diagnostics: false });
+  const on = buildGraph(MIXED, { diagnostics: false, javascript: true });
+  const inTs = (g) => rowsOf({
+    symbols: g.symbols.filter((s) => s.file.startsWith("packages/a/src/")),
+    edges: g.edges.filter((e) => e.src_file.startsWith("packages/a/src/")),
+    entrypoints: g.entrypoints.filter((e) => e.symbol.startsWith("packages/a/src/")),
+  });
+  assert.deepEqual(inTs(on), inTs(off));
+  assert.deepEqual(
+    on.report.projects.map((p) => [p.config, p.language, p.files]),
+    [
+      ["packages/a/tsconfig.json", "ts", 1],
+      ["package.json", "js", 2],
+    ],
+  );
+  assert.ok(on.symbols.some((s) => s.id === "packages/a/scripts/build.js#build"));
+  assert.ok(on.symbols.some((s) => s.id === "scripts/release.js#release"));
+});
+
+test("javascript: no project is an empty graph, not an error; a file without package.json is counted", () => {
+  const dir = tmpRepo({ "README.md": "# docs\n", "tools/run.js": "export function run() {}\n" });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(rowsOf(g), { symbols: [], edges: [], entrypoints: [] });
+  assert.deepEqual(g.report.projects, []);
+  assert.equal(g.report.files, 0);
+  assert.equal(g.report.files_skipped.no_project, 1);
+  assert.throws(() => buildGraph(dir, { diagnostics: false }), /no tsconfig\.json/);
+});
+
+test("javascript: a package.json under test/ or tests/ is a fixture, not a project", () => {
+  const dir = tmpRepo({
+    "package.json": "{}",
+    "src/a.js": "export function a() {}\n",
+    "tests/module/esm/package.json": "{}",
+    "tests/module/esm/run.js": "export function run() {}\n",
+    "test/pkg/package.json": "{}",
+    "test/pkg/index.js": "export function idx() {}\n",
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(g.report.projects.map((p) => [p.config, p.files]), [["package.json", 1]]);
+  assert.equal(g.report.files_skipped.test, 2);
+});
+
+test("javascript: a file over 10,000 lines is skipped as large", () => {
+  const dir = tmpRepo({
+    "package.json": "{}",
+    "big.js": "let n = 0;\n".repeat(10_001),
+    "small.js": "export function one() { return 1; }\n",
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.equal(g.report.files_skipped.large, 1);
+  assert.deepEqual(g.symbols.map((s) => s.id), ["small.js#one"]);
+});
+
+test("javascript: symbolic links are not followed", () => {
+  const dir = tmpRepo({ "package.json": "{}", "a.js": "export function a() {}\n" });
+  const outside = tmpRepo({ "secret.js": "export function secret() {}\n" });
+  fs.symlinkSync(outside, path.join(dir, "linked"));
+  fs.symlinkSync(path.join(outside, "secret.js"), path.join(dir, "b.js"));
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(g.symbols.map((s) => s.id), ["a.js#a"]);
+});
+
+test("javascript: the CLI takes --javascript and exits 0 on a repository without projects", () => {
+  const dir = tmpRepo({ "README.md": "# docs\n" });
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "ts-graph-out-"));
+  const cli = path.join(HERE, "..", "index.mjs");
+  const stdout = execFileSync(process.execPath, [cli, "--repo", dir, "--out", out, "--javascript"], { encoding: "utf8" });
+  assert.equal(JSON.parse(stdout).files, 0);
+  assert.equal(fs.readFileSync(path.join(out, "symbols.jsonl"), "utf8"), "");
+  assert.throws(() => execFileSync(process.execPath, [cli, "--repo", dir, "--out", out], { stdio: "pipe" }));
+});
+
+// ---- JavaScript modules: CommonJS, export lists, workspaces, folder aliases ----
+
+const cjs = buildGraph(path.join(HERE, "fixture-cjs"), { diagnostics: false, javascript: true });
+const cjsSym = (id) => cjs.symbols.find((s) => s.id === id);
+const cjsCalls = () => cjs.edges.filter((e) => e.kind === "calls").map((e) => `${e.src} -> ${e.dst}`).sort();
+
+test("modules: a function assigned at the top level is a symbol", () => {
+  const rows = [
+    ["src/a.js#run", "function", true],
+    ["src/a.js#two", "function", true],
+    ["src/c.js#default", "function", true],
+    ["src/model.js#Model.save", "function", false],
+  ];
+  for (const [id, kind, exported] of rows) {
+    const s = cjsSym(id);
+    assert.ok(s, id);
+    assert.deepEqual([s.kind, s.exported], [kind, exported], id);
+  }
+  assert.match(cjsSym("src/a.js#run").body, /^exports\.run = function run\(\)/);
+  assert.deepEqual([cjsSym("src/a.js#run").line_start, cjsSym("src/a.js#run").line_end], [4, 6]);
+});
+
+test("modules: members of module.exports are exported, and calls through them land on the function", () => {
+  for (const id of ["src/b.js#list", "src/b.js#other", "src/b.js#helper", "src/model.js#Model", "src/d.js#first"]) {
+    assert.equal(cjsSym(id).exported, true, id);
+  }
+  assert.equal(cjsSym("src/model.js#persist").exported, false);
+  assert.deepEqual(cjsCalls(), [
+    "src/a.js#run -> src/b.js#list",
+    "src/a.js#run -> src/b.js#other",
+    "src/a.js#two -> src/b.js#helper",
+    "src/c.js#default -> src/a.js#run",
+    "src/c.js#default -> src/c.js#wrap",
+    "src/model.js#Model.save -> src/model.js#persist",
+  ]);
+});
+
+test("modules: a declaration outside every symbol is not attributed to the file's first symbol", () => {
+  const e = cjs.edges.find((x) => x.src === "src/e.js#useY" && x.kind.startsWith("calls"));
+  assert.deepEqual([e.kind, e.dst], ["calls_external", "d.y"]);
+});
+
+test("modules: require() and import() with a literal are imports edges", () => {
+  const imports = cjs.edges.filter((e) => e.kind === "imports").map((e) => `${e.src} -> ${e.dst} ${e.resolved}`);
+  assert.deepEqual(imports.sort(), [
+    "src/a.js -> src/b.js true",
+    "src/a.js -> src/b.js true",
+    "src/c.js -> src/a.js true",
+    "src/e.js -> src/d.js true",
+    "src/f.js -> src/models/index.js true",
+    "src/models/index.js -> src/model.js true",
+  ]);
+});
+
+test("modules: a repository with no framework but exported CommonJS functions gets generic roots", () => {
+  // run is called by c.js; Model.save is not exported; useY calls nothing in the repository.
+  assert.deepEqual(cjs.entrypoints.map((e) => e.symbol).sort(), ["src/a.js#two", "src/c.js#default"]);
+});
+
+test("modules: an export list marks its names exported, in JavaScript and TypeScript", () => {
+  const js = buildGraph(tmpRepo({
+    "package.json": "{}",
+    "c.js": "const get = (req) => req;\nfunction hidden() {}\nexport { get, hidden as shown };\n",
+  }), { diagnostics: false, javascript: true });
+  assert.deepEqual(js.symbols.map((s) => [s.id, s.exported]), [["c.js#hidden", true], ["c.js#get", true]]);
+  const ts = buildGraph(tmpRepo({
+    "tsconfig.json": "{}",
+    "c.ts": "const get = (req: string) => req;\nfunction local() {}\nexport { get };\n",
+  }), { diagnostics: false });
+  assert.deepEqual(ts.symbols.map((s) => [s.id, s.exported]), [["c.ts#local", false], ["c.ts#get", true]]);
+});
+
+const ws = buildGraph(path.join(HERE, "fixture-ws"), { diagnostics: false, javascript: true });
+
+test("modules: a workspace package and a root folder resolve by name; a dependency never does", () => {
+  const calls = ws.edges.filter((e) => e.kind === "calls").map((e) => `${e.src} -> ${e.dst}`).sort();
+  assert.deepEqual(calls, [
+    "packages/app/index.js#start -> packages/app/src/lib/math.js#twice",
+    "packages/app/index.js#start -> packages/util/index.js#fmt",
+  ]);
+  const imports = ws.edges.filter((e) => e.kind === "imports").map((e) => `${e.dst} ${e.resolved}`).sort();
+  assert.deepEqual(imports, ["lodash false", "packages/app/src/lib/math.js true", "packages/util/index.js true"]);
+});
+
+test("modules: the report counts imports meant for the repository", () => {
+  assert.deepEqual(ws.report.imports_in_repo, { total: 2, resolved: 2, unresolved_sample: [] });
+  const g = buildGraph(tmpRepo({
+    "package.json": JSON.stringify({ dependencies: { react: "*" } }),
+    "a.js": 'import React from "react";\nimport x from "./missing";\nimport y from "@/nowhere";\nexport function a() { return x() + y(); }\n',
+  }), { diagnostics: false, javascript: true });
+  assert.deepEqual(g.report.imports_in_repo, { total: 2, resolved: 0, unresolved_sample: ["a.js -> ./missing", "a.js -> @/nowhere"] });
+  assert.ok(!("imports_in_repo" in buildGraph(path.join(HERE, "fixture"), { diagnostics: false }).report));
+});
+
+test("modules: an import of a file without symbols (a barrel) is resolved", () => {
+  const imports = cjs.edges.filter((e) => e.kind === "imports" && e.src === "src/f.js").map((e) => `${e.dst} ${e.resolved}`);
+  assert.deepEqual(imports, ["src/models/index.js true"]);
+  assert.ok(cjs.edges.some((e) => e.kind === "imports" && e.src === "src/models/index.js" && e.dst === "src/model.js" && e.resolved));
+});
+
+test("modules: an import of a .vue or .svelte file is not counted as a code import", () => {
+  const g = buildGraph(tmpRepo({
+    "package.json": "{}",
+    "src/main.js": 'import App from "./App";\nimport Nav from "./Nav.svelte";\nexport function main() { return [App, Nav]; }\n',
+    "src/App.vue": "<template><div /></template>\n",
+    "src/Nav.svelte": "<nav />\n",
+  }), { diagnostics: false, javascript: true });
+  assert.deepEqual(g.report.imports_in_repo, { total: 0, resolved: 0, unresolved_sample: [] });
+});
+
+test("modules: CommonJS rules apply only with --javascript, also inside a TypeScript project with allowJs", () => {
+  const dir = tmpRepo({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { allowJs: true, noEmit: true }, include: ["src"] }),
+    "src/a.js": 'const b = require("./b");\nexports.run = function run() { return b.list(); };\n',
+    "src/b.js": "function list() { return 1; }\nmodule.exports = { list };\n",
+  });
+  const off = buildGraph(dir, { diagnostics: false });
+  // As before this change: TypeScript itself already reports `list` as exported here.
+  assert.deepEqual(off.symbols.map((s) => [s.id, s.exported]), [["src/a.js#b", false], ["src/b.js#list", true]]);
+  assert.ok(!off.edges.some((e) => e.kind === "calls" && e.src.endsWith("#run")));
+  assert.ok(!off.edges.some((e) => e.kind === "imports"));
+  const on = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(
+    on.symbols.map((s) => [s.id, s.exported]).sort(),
+    [["src/a.js#b", false], ["src/a.js#run", true], ["src/b.js#list", true]],
+  );
+  assert.ok(on.edges.some((e) => e.kind === "calls" && e.src === "src/a.js#run" && e.dst === "src/b.js#list"));
+  assert.ok(on.edges.some((e) => e.kind === "imports" && e.src === "src/a.js" && e.dst === "src/b.js"));
+});
+
+test("modules: the assignment rule is for JavaScript member targets only, and never repeats a name", () => {
+  const dir = tmpRepo({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { allowJs: true, noEmit: true }, include: ["src"] }),
+    "src/c.ts": "let handler: any;\nhandler = () => 2;\nconst app: any = {};\napp.run = () => 1;\n",
+    "src/d.js": "var Foo;\nFoo = function () {};\nfunction x() { return 1; }\nexports.x = function () { return 2; };\nconst api = {};\napi.get = () => x();\n",
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(g.symbols.map((s) => s.id).sort(), [
+    "src/c.ts#app",
+    "src/c.ts#handler",
+    "src/d.js#Foo",
+    "src/d.js#api",
+    "src/d.js#api.get",
+    "src/d.js#x",
+  ]);
+});
+
+test("modules: workspace packages are capped, and a shallower package wins a shared name", async () => {
+  const { findJsProjects, MAX_PACKAGES } = await import("../lib/javascript.mjs");
+  const files = { "package.json": "{}", "examples/demo/a/package.json": '{ "name": "@w/a" }', "packages/a/package.json": '{ "name": "@w/a" }' };
+  const dir = tmpRepo(files);
+  const { packages } = findJsProjects(dir, new Set(), 50);
+  assert.equal(fs.realpathSync(packages.get("@w/a")), fs.realpathSync(path.join(dir, "packages/a")));
+  const many = { "package.json": "{}" };
+  for (let i = 0; i <= MAX_PACKAGES; i += 1) many[`p/${i}/package.json`] = JSON.stringify({ name: `pkg-${i}` });
+  assert.equal(findJsProjects(tmpRepo(many), new Set(), 50).packages.size, MAX_PACKAGES);
+});
+
+test("modules: a symlinked package.json is not read", () => {
+  const outside = tmpRepo({ "package.json": '{ "name": "@evil/pkg" }' });
+  const dir = tmpRepo({ "a.js": "export function a() {}\n", "sub/b.js": "export function b() {}\n", "sub/package.json": "{}" });
+  fs.symlinkSync(path.join(outside, "package.json"), path.join(dir, "package.json"));
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  assert.deepEqual(g.report.projects.map((p) => p.config), ["sub/package.json"]);
+  assert.equal(g.report.files_skipped.no_project, 1);
+});
+
+// ---- Express: route() chains and CommonJS ----
+
+const httpRows = (g) => g.entrypoints.filter((e) => e.framework === "express").map((e) => `${e.route} -> ${e.symbol}`);
+
+test("express: route() chains give a route per verb, named and inline handlers", () => {
+  const g = buildGraph(path.join(HERE, "fixture-express-js"), { diagnostics: false, javascript: true });
+  assert.deepEqual(httpRows(g), [
+    "DELETE /api/products/:id -> backend/routes/productRoutes.js#DELETE /:id",
+    "GET /api/products -> backend/controllers/productController.js#getProducts",
+    "GET /api/products/:id -> backend/controllers/productController.js#getProductById",
+    "GET /api/products/top -> backend/controllers/productController.js#getProducts",
+    "POST /api/products -> backend/controllers/productController.js#createProduct",
+  ]);
+  assert.ok(g.edges.some((e) => e.kind === "calls" && e.src === "backend/routes/productRoutes.js#DELETE /:id" && e.dst === "backend/controllers/productController.js#remove"));
+});
+
+test("express: route() chains work in TypeScript without --javascript", () => {
+  const g = buildGraph(tmpRepo({
+    "tsconfig.json": "{}",
+    "package.json": JSON.stringify({ dependencies: { express: "*" } }),
+    "src/main.ts": 'import { Router } from "express";\nconst r = Router();\nfunction show(req: unknown, res: unknown) { return [req, res]; }\nr.route("/items/:id").get(show).put((req, res) => show(req, res));\nexport default r;\n',
+  }), { diagnostics: false });
+  assert.deepEqual(httpRows(g), ["GET /items/:id -> src/main.ts#show", "PUT /items/:id -> src/main.ts#PUT /items/:id"]);
+});
+
+test("express: CommonJS routers, mounted through require, forEach over a route list, and barrels", () => {
+  const g = buildGraph(path.join(HERE, "fixture-express-cjs"), { diagnostics: false, javascript: true });
+  assert.deepEqual(httpRows(g), [
+    "DELETE /v1/users/:userId -> src/controllers/user.controller.js#deleteUser",
+    "GET /health -> src/routes/health.js#GET /",
+    "GET /v1/users/:userId -> src/controllers/user.controller.js#getUser",
+    "POST /v1/auth/login -> src/controllers/auth.controller.js#login",
+  ]);
+  assert.ok(g.edges.some((e) => e.kind === "calls" && e.src === "src/controllers/auth.controller.js#login" && e.dst === "src/controllers/auth.controller.js#token"));
+});
+
+test("express: CommonJS forms give no routes without --javascript, also in a TypeScript project with allowJs", () => {
+  const dir = tmpRepo({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { allowJs: true, noEmit: true }, include: ["src"] }),
+    "package.json": JSON.stringify({ dependencies: { express: "*" } }),
+    "src/app.js": 'const express = require("express");\nconst app = express();\napp.get("/x", (req, res) => res.send("x"));\nmodule.exports = app;\n',
+  });
+  assert.deepEqual(httpRows(buildGraph(dir, { diagnostics: false })), []);
+  assert.deepEqual(httpRows(buildGraph(dir, { diagnostics: false, javascript: true })), ["GET /x -> src/app.js#GET /x"]);
+});
+
+// ---- Nothing outside the repository is read, symbolic links included ----
+
+function linkedRepo(files) {
+  const outside = tmpRepo({
+    "leak.ts": "export function leak(): number { return 1; }\n",
+    "leakjs.js": "export function leak() { return 1; }\n",
+  });
+  const dir = tmpRepo(files);
+  fs.symlinkSync(outside, path.join(dir, "linked"));
+  return dir;
+}
+
+test("outside: a tsconfig include does not pull in files behind a symlinked folder", () => {
+  const dir = linkedRepo({
+    "tsconfig.json": "{}",
+    "src/a.ts": 'import { leak } from "../linked/leak";\nexport function a(): number { return leak() + [1].length; }\n',
+  });
+  const g = buildGraph(dir, { diagnostics: false });
+  assert.deepEqual(g.symbols.map((s) => s.id), ["src/a.ts#a"]);
+  const call = g.edges.find((e) => e.src === "src/a.ts#a" && e.dst.endsWith("leak"));
+  assert.deepEqual([call.kind, call.resolved], ["calls_external", false]);
+  assert.deepEqual(g.edges.filter((e) => e.kind === "imports").map((e) => [e.dst, e.resolved]), [["../linked/leak", false]]);
+});
+
+test("outside: a JavaScript import through a symlinked folder does not resolve", () => {
+  const dir = linkedRepo({
+    "package.json": "{}",
+    "src/b.js": 'import { leak } from "../linked/leakjs.js";\nexport function b() { return leak(); }\n',
+  });
+  const g = buildGraph(dir, { diagnostics: false, javascript: true });
+  const call = g.edges.find((e) => e.src === "src/b.js#b" && e.kind.startsWith("calls"));
+  assert.deepEqual([call.kind, call.dst, call.resolved], ["calls_external", "leak", false]);
+});
+
+test("outside: the TypeScript lib still resolves with the guarded file system", () => {
+  const g = buildGraph(tmpRepo({
+    "tsconfig.json": "{}",
+    "src/a.ts": "export function a(): Promise<number> { return Promise.resolve([1, 2].map((n) => n).length); }\n",
+  }), { diagnostics: false });
+  const calls = g.edges.filter((e) => e.src === "src/a.ts#a" && e.kind === "calls_external");
+  assert.ok(calls.length >= 2);
+  assert.ok(calls.every((e) => e.resolved), JSON.stringify(calls));
+});
+
+test("outside: a symbolic link that stays inside the repository still resolves", () => {
+  const dir = tmpRepo({
+    "tsconfig.json": JSON.stringify({ include: ["src"] }),
+    "shared/util.ts": "export function util(): number { return 1; }\n",
+    "src/a.ts": 'import { util } from "./shared/util";\nexport function a(): number { return util(); }\n',
+  });
+  fs.symlinkSync(path.join(dir, "shared"), path.join(dir, "src", "shared"));
+  const g = buildGraph(dir, { diagnostics: false });
+  const call = g.edges.find((e) => e.src === "src/a.ts#a" && e.kind.startsWith("calls"));
+  assert.equal(call.resolved, true, JSON.stringify(call));
+});
+
+test("outside: a triple-slash reference through a symlinked folder is a missing file, not a failure", () => {
+  const dir = linkedRepo({
+    "tsconfig.json": JSON.stringify({ include: ["src"] }),
+    "src/q.ts": '/// <reference path="../linked/leak.ts" />\nexport function q(): number { return 1; }\n',
+  });
+  const g = buildGraph(dir, { diagnostics: false });
+  assert.deepEqual(g.symbols.map((s) => s.id), ["src/q.ts#q"]);
+});
+
+test("outside: a package.json symlinked to a file outside the repository is not read", () => {
+  const outside = tmpRepo({ "package.json": JSON.stringify({ dependencies: { express: "1" } }) });
+  const dir = tmpRepo({ "tsconfig.json": "{}", "src/a.ts": "export function a(): number { return 1; }\n" });
+  fs.symlinkSync(path.join(outside, "package.json"), path.join(dir, "package.json"));
+  assert.deepEqual(buildGraph(dir, { diagnostics: false }).report.unmatched_frameworks, []);
+});

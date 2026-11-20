@@ -1,3 +1,4 @@
+import dataclasses
 import shutil
 import subprocess
 from contextlib import asynccontextmanager
@@ -288,6 +289,66 @@ async def test_index_repo_typescript_needs_postgres(cfg, deps, fake_sync):
     with pytest.raises(EnigramError, match="STORAGE_BACKEND=postgres"):
         await repos.index_repo(cfg, deps, URL)
     assert fake_sync.indexed == []
+
+
+JS_TREE = {"package.json": "{}", "src/app.js": "x()", "README.md": "# Readme"}
+
+
+async def test_index_repo_javascript_needs_code_javascript(cfg, deps, fake_sync):
+    fake_sync.tree = JS_TREE
+
+    result = await repos.index_repo(cfg, deps, URL, graph=object())
+
+    assert result["code"] == {"skipped": "no tsconfig.json in the repository"}
+    assert fake_sync.code == []
+
+
+async def test_index_repo_indexes_javascript_with_code_javascript(cfg, deps, fake_sync):
+    cfg = dataclasses.replace(cfg, code_javascript=True)
+    fake_sync.tree = JS_TREE
+
+    result = await repos.index_repo(cfg, deps, URL, graph=object())
+
+    assert len(fake_sync.code) == 1 and result["code"]["symbols"] == 3
+    assert result["indexed"] == ["org-handbook--README"]
+
+
+async def test_index_repo_javascript_without_postgres_still_syncs_markdown(cfg, deps, fake_sync):
+    cfg = dataclasses.replace(cfg, code_javascript=True)
+    fake_sync.tree = JS_TREE
+
+    result = await repos.index_repo(cfg, deps, URL)
+
+    assert "STORAGE_BACKEND=postgres" in result["code"]["skipped"]
+    assert fake_sync.code == []
+    assert result["indexed"] == ["org-handbook--README"]
+
+
+async def test_index_repo_typescript_wins_with_code_javascript(cfg, deps, fake_sync):
+    cfg = dataclasses.replace(cfg, code_javascript=True)
+    fake_sync.tree = {**JS_TREE, "tsconfig.json": "{}"}
+
+    with pytest.raises(EnigramError, match="Indexing a TypeScript repository"):
+        await repos.index_repo(cfg, deps, URL)  # no Postgres: the TypeScript rule, as before
+
+
+async def test_index_repo_javascript_only_without_postgres_fails(cfg, deps, fake_sync):
+    cfg = dataclasses.replace(cfg, code_javascript=True)
+    fake_sync.tree = {"package.json": "{}", "src/app.js": "x()"}
+
+    with pytest.raises(EnigramError, match="STORAGE_BACKEND=postgres"):
+        await repos.index_repo(cfg, deps, URL)
+
+
+async def test_index_repo_names_javascript_when_nothing_is_found(cfg, deps, fake_sync):
+    cfg = dataclasses.replace(cfg, code_javascript=True)
+    fake_sync.tree = {"README.md": "# Readme"}
+    result = await repos.index_repo(cfg, deps, URL)
+    assert "package.json" in result["code"]["skipped"]
+
+    fake_sync.tree = {"main.py": "print()"}
+    with pytest.raises(EnigramError, match="No Markdown, TypeScript or JavaScript"):
+        await repos.index_repo(cfg, deps, URL)
 
 
 async def test_index_repo_checks_the_url_again(cfg, deps, fake_sync):

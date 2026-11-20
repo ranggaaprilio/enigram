@@ -1,0 +1,1 @@
+{ "name": "ts-graph-fixture-express-cjs", "private": true, "dependencies": { "express": "^4.0.0" } }

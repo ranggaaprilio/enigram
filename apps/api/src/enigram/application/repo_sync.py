@@ -1,7 +1,7 @@
 """Index a Git repository (public, or private with an access token: repo_auth): shallow clone;
 its Markdown files are copied into books_dir as <repo>--<path>.md and go through the normal
 index pipeline, and a TypeScript repository (a tsconfig.json at the root or in a subfolder, as in
-a monorepo) also gets a code graph.
+a monorepo), or with CODE_JAVASCRIPT=on a JavaScript one, also gets a code graph.
 Re-running re-syncs the repository."""
 
 import asyncio
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from enigram.application.code_index import SKIP_DIRS, index_code, is_ts_repo
+from enigram.application.code_index import SKIP_DIRS, index_code, is_js_repo, is_ts_repo
 from enigram.application.files import file_sha256
 from enigram.application.indexing import delete_document, load_manifest, run_index, save_manifest
 from enigram.application.ports import (
@@ -241,10 +241,16 @@ async def index_repo(
         log.info("[repo] cloning %s%s", url, f" ({ref})" if ref else "")
         await asyncio.to_thread(clone, url, ref, root, token)
         files = collect_markdown(root, repo)
-        if is_ts_repo(root):
+        ts = is_ts_repo(root)
+        js = not ts and cfg.code_javascript and is_js_repo(root)
+        if js and graph is None and files:
+            # Opting into CODE_JAVASCRIPT must not break a Markdown sync without Postgres.
+            code = {"skipped": "a JavaScript code graph needs STORAGE_BACKEND=postgres"}
+        elif ts or js:
             if graph is None:
+                language = "TypeScript" if ts else "JavaScript"
                 raise EnigramError(
-                    "Indexing a TypeScript repository needs STORAGE_BACKEND=postgres"
+                    f"Indexing a {language} repository needs STORAGE_BACKEND=postgres"
                 )
             code = await index_code(
                 cfg, deps, graph, root, url, ref, limit=limit, notes=notes, decider=decider
@@ -258,6 +264,10 @@ async def index_repo(
                 repo_store.ensure_store, cfg, url, ref, code["commit_sha"], token=token
             )
             code["store"] = str(store)
+        elif cfg.code_javascript:
+            code = {"skipped": "no tsconfig.json, or package.json/jsconfig.json with JavaScript"}
+            if not files:
+                raise EnigramError(f"No Markdown, TypeScript or JavaScript code in {url}")
         else:
             code = {"skipped": "no tsconfig.json in the repository"}
             if not files:

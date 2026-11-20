@@ -51,12 +51,21 @@ function signature(node, name) {
  * (req, res) => {...}`) is a method. With `express`, an inline handler of a top-level route
  * registration (`router.get("/articles", auth, async (req, res) => {...})`) is a function named
  * `GET /articles`, so the route has a flow (the express adapter makes it the entry point).
- * @param {{express?: boolean}} options
+ * A name in an export list (`export { a, b as c }`) is exported. With `commonjs` (--javascript),
+ * a function assigned at the top level (`exports.run = function () {...}`, `module.exports =
+ * wrap(async () => {...})`, `Model.prototype.save = function () {...}`) is a function too (see
+ * assignedName), and a name `module.exports` / `exports.x` is set to (`module.exports = { a, b: c
+ * }`) is exported.
+ * @param {{express?: boolean, commonjs?: boolean}} options
  * @returns {{row: object, node: import("ts-morph").Node}[]}
  */
-export function fileSymbols(root, sf, { express = false } = {}) {
+export function fileSymbols(root, sf, { express = false, commonjs = false } = {}) {
   const file = relPath(root, sf.getFilePath());
   const out = [];
+  // CommonJS rules are for JavaScript files only, also inside a TypeScript project with allowJs.
+  const cjs = commonjs && JS_FILE.test(file);
+  const listed = exportedNames(sf, cjs);
+  const isExported = (own, name) => own || listed.has(name);
   const seen = new Set();
   const add = (node, qualifiedName, kind, exported, parent = "") => {
     let id = `${file}#${qualifiedName}`;
@@ -86,7 +95,7 @@ export function fileSymbols(root, sf, { express = false } = {}) {
 
   for (const cls of sf.getClasses()) {
     const name = cls.getName() ?? "default";
-    const exported = cls.isExported();
+    const exported = isExported(cls.isExported(), name);
     add(cls, name, "class", exported);
     for (const ctor of cls.getConstructors()) {
       if (ctor.isOverload()) continue;
@@ -124,17 +133,24 @@ export function fileSymbols(root, sf, { express = false } = {}) {
   for (const alias of sf.getTypeAliases()) add(alias, alias.getName(), "type", alias.isExported());
   for (const fn of sf.getFunctions()) {
     if (fn.isOverload()) continue;
-    add(fn, fn.getName() ?? "default", "function", fn.isExported() || fn.isDefaultExport());
+    const name = fn.getName() ?? "default";
+    add(fn, name, "function", isExported(fn.isExported() || fn.isDefaultExport(), name));
   }
   for (const statement of sf.getVariableStatements()) {
     for (const decl of statement.getDeclarations()) {
       if (!Node.isIdentifier(decl.getNameNode())) continue; // destructuring: no single name
-      add(decl, decl.getName(), "variable", statement.isExported());
+      add(decl, decl.getName(), "variable", isExported(statement.isExported(), decl.getName()));
     }
   }
   for (const assignment of sf.getExportAssignments()) {
     if (assignment.isExportEquals()) continue;
     add(assignment, "default", "variable", true);
+  }
+  for (const statement of cjs ? sf.getStatements() : []) {
+    const assigned = assignedFunction(statement);
+    // A name the file already declares (`function x` beside `exports.x = function`) keeps its row.
+    if (!assigned || out.some((s) => s.row.qualified_name === assigned.name)) continue;
+    add(assigned.node, assigned.name, "function", assigned.exported);
   }
   if (express) {
     for (const { handler, verb, path } of inlineRouteHandlers(sf)) {
@@ -142,6 +158,73 @@ export function fileSymbols(root, sf, { express = false } = {}) {
     }
   }
   return out;
+}
+
+const JS_FILE = /\.(js|jsx|mjs|cjs)$/;
+const isFunctionNode = (n) => Boolean(n) && (Node.isArrowFunction(n) || Node.isFunctionExpression(n));
+
+/** `x = ...` at the top level: the assignment, or null. */
+function topLevelAssignment(statement) {
+  if (!Node.isExpressionStatement(statement)) return null;
+  const expr = statement.getExpression();
+  return Node.isBinaryExpression(expr) && expr.getOperatorToken().getKind() === SyntaxKind.EqualsToken ? expr : null;
+}
+
+/**
+ * The symbol name of an assignment target, and whether it is exported: `module.exports` →
+ * `default`; `module.exports.x` / `exports.x` → `x`; `Foo.prototype.x` → `Foo.x`; anything else
+ * (`schema.methods.x`) its own text.
+ */
+export function assignedName(left) {
+  const text = left.getText().replace(/\s+/g, "");
+  if (text === "module.exports") return { name: "default", exported: true };
+  const member = /^(?:module\.exports|exports)\.(.+)$/.exec(text);
+  if (member) return { name: member[1], exported: true };
+  const proto = /^(.+)\.prototype\.([^.]+)$/.exec(text);
+  if (proto) return { name: `${proto[1]}.${proto[2]}`, exported: false };
+  return { name: text, exported: false };
+}
+
+/**
+ * A top-level assignment to a member (`exports.x`, `Foo.prototype.y`, `api.get`) whose value is a
+ * function, or a call with a function argument (`wrap(async () => {...})`): {node, name,
+ * exported}, the node being the assignment. Null otherwise; an assignment to a plain variable
+ * (`handler = () => {}`) is not one, the variable's declaration is already a symbol.
+ */
+function assignedFunction(statement) {
+  const assignment = topLevelAssignment(statement);
+  if (!assignment || !Node.isPropertyAccessExpression(assignment.getLeft())) return null;
+  const right = assignment.getRight();
+  const fn = isFunctionNode(right) || (Node.isCallExpression(right) && right.getArguments().some(isFunctionNode));
+  if (!fn) return null;
+  return { node: assignment, ...assignedName(assignment.getLeft()) };
+}
+
+/**
+ * Local names a file exports without an `export` keyword on the declaration: `export { a, b as c }`
+ * (without `from`), and, with `commonjs`, the identifiers `module.exports` / `module.exports.x` /
+ * `exports.x` are set to (`= a`, `= { a, b: c }`).
+ */
+function exportedNames(sf, commonjs) {
+  const names = new Set();
+  for (const decl of sf.getExportDeclarations()) {
+    if (decl.getModuleSpecifier()) continue; // a re-export names another file's declarations
+    for (const spec of decl.getNamedExports()) names.add(spec.getNameNode().getText());
+  }
+  for (const statement of commonjs ? sf.getStatements() : []) {
+    const assignment = topLevelAssignment(statement);
+    if (!assignment || !/^(module\.exports|exports)\b/.test(assignment.getLeft().getText())) continue;
+    const right = assignment.getRight();
+    if (Node.isIdentifier(right)) names.add(right.getText());
+    if (!Node.isObjectLiteralExpression(right)) continue;
+    for (const prop of right.getProperties()) {
+      if (Node.isShorthandPropertyAssignment(prop)) names.add(prop.getName());
+      else if (Node.isPropertyAssignment(prop) && Node.isIdentifier(prop.getInitializer())) {
+        names.add(prop.getInitializer().getText());
+      }
+    }
+  }
+  return names;
 }
 
 /** A string literal's value, or null. */
@@ -166,11 +249,34 @@ export function inlineRouteHandlers(sf) {
       const callee = call.getExpression();
       if (!Node.isPropertyAccessExpression(callee) || !HTTP_VERBS.includes(callee.getName())) continue;
       const args = call.getArguments();
-      const path = pathLiteral(args[0]);
       const handler = args.at(-1);
-      if (path === null || args.length < 2 || !(Node.isArrowFunction(handler) || Node.isFunctionExpression(handler))) continue;
+      if (!(Node.isArrowFunction(handler) || Node.isFunctionExpression(handler))) continue;
+      let path = args.length >= 2 ? pathLiteral(args[0]) : null;
+      // router.route("/:id").get(...).delete(..., (req, res) => {...}): the path is route()'s.
+      if (path === null) path = routeChain(callee.getExpression())?.path ?? null;
+      if (path === null) continue;
       out.push({ handler, verb: callee.getName(), path, call });
     }
   }
   return out;
+}
+
+/**
+ * For the target of a verb call in a `router.route("/p").get(...).post(...)` chain: the
+ * `route()` call's receiver (the router) and path. Null for anything else.
+ * @returns {{router: import("ts-morph").Node, path: string} | null}
+ */
+export function routeChain(target) {
+  let node = target;
+  while (Node.isCallExpression(node)) {
+    const callee = node.getExpression();
+    if (!Node.isPropertyAccessExpression(callee)) return null;
+    if (callee.getName() === "route") {
+      const path = pathLiteral(node.getArguments()[0]);
+      return path === null ? null : { router: callee.getExpression(), path };
+    }
+    if (!HTTP_VERBS.includes(callee.getName())) return null;
+    node = callee.getExpression();
+  }
+  return null;
 }

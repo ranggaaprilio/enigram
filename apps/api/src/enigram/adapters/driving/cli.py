@@ -58,13 +58,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("auto", "docs", "code"),
         default="auto",
         help="auto = the router picks the documents, the code or both (default); docs = the "
-        "LightRAG index; code = the graph-first agent over the indexed TypeScript repositories "
+        "LightRAG index; code = the graph-first agent over the indexed TypeScript/JavaScript "
+        "repositories "
         "(--mode applies to the documents part only)",
     )
     query.add_argument("--repo", help="repository URL when more than one is indexed")
 
     repo = sub.add_parser(
-        "repo", help="index one repository (Markdown and TypeScript code graph) without the API"
+        "repo",
+        help="index one repository (Markdown and TypeScript/JavaScript code graph) without the API",
     )
     repo.add_argument("url", help="https URL of a public repository")
     repo.add_argument("--ref", help="branch or tag (default: the default branch)")

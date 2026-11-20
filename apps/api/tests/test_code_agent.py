@@ -552,7 +552,7 @@ async def test_a_note_change_misses_the_cache(cfg, graph, tmp_path):
 async def test_agent_guard_abstains_and_is_cached(cfg, graph, tmp_path):
     from code_fakes import FakeDecider, noul
 
-    assert code_agent.AGENT_VERSION == "3.7"
+    assert code_agent.AGENT_VERSION == "3.8"
     cache = tmp_path / "cache"
     decider = FakeDecider({"answerable": noul(0.1)}, name="jev")
     chat = ScriptedChat(
@@ -926,7 +926,7 @@ async def test_the_agent_route_answers_without_repos_and_is_not_cached(cfg, tmp_
         assert len(chat.calls) == 2  # the model ran: no cached answer
     names = [t["function"]["name"] for t in chat.calls[0]["tools"]]
     assert names == ["search_documents", "search_notes"]
-    assert "indexed TypeScript repos" not in chat.calls[0]["messages"][0]["content"]
+    assert "indexed TypeScript/JavaScript repos" not in chat.calls[0]["messages"][0]["content"]
     assert [(s.ref, s.origin) for s in result.sources] == [(1, "document")]
     assert not cache.exists() or not any(cache.iterdir())
 
