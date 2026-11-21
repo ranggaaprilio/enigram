@@ -61,7 +61,7 @@ indexed yet, the index history, graph quality, summaries, what the last run did 
 | **Auto** (default) | `@auto`, `@ask` | Searches the code, documents and team notes, without a focus |
 | **Technical** | `@technical`, `@tech`, `@dev` | Symbols, files and code flows, with code citations |
 | **Business rules** | `@business`, `@rules`, `@pm` | Rules and behaviour in plain language, from documents and team notes |
-| **QA** | `@qa`, `@test`, `@tester` | Test scenarios and edge cases, and what no note covers yet |
+| **QA** | `@qa`, `@test`, `@tester` | Validation rules, test scenarios with steps, and the errors the code returns |
 | **Overview** | `@overview` | A short summary without code detail |
 | Custom agents | their `@name` | Made by an admin in [Settings → Agents](#agents) |
 
