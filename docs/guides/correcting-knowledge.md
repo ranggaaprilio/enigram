@@ -48,7 +48,7 @@ in mind. A fact that only the chunk text states cannot be fixed in the graph.
 A fact that only the text states needs a corrected document. Uploading a changed file under the
 same name is refused (409), so:
 
-1. Delete it (Documents page, or `DELETE /documents/{book}`).
+1. Delete it (Pipeline page, or `DELETE /documents/{book}`).
 2. Wait until it disappears from the list (status `deleting` meanwhile).
 3. Upload the new version.
 

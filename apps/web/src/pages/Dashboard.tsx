@@ -120,7 +120,7 @@ function Panels({ stats }: { stats: Stats }) {
       <Empty
         action={
           <Button asChild size="sm" variant="secondary">
-            <WsLink to="/documents" className="hover:no-underline">
+            <WsLink to="/pipeline" className="hover:no-underline">
               Add documents or a repository
             </WsLink>
           </Button>
@@ -170,7 +170,7 @@ function Panels({ stats }: { stats: Stats }) {
             label="Failed jobs"
             value={jobs}
             hint={`Last ${attention.jobs_since_days} days; ${attention.budget_exceeded_jobs} over the token budget`}
-            to="/documents"
+            to="/pipeline"
           />
         </div>
         <p className="mt-3 mb-0 text-[13px] text-muted-foreground">
@@ -274,8 +274,8 @@ function Panels({ stats }: { stats: Stats }) {
                 .map(([status, n]) => `${number(n)} ${status}`)
                 .join(', ')}
           {' · '}
-          <WsLink to="/documents" className="underline">
-            Documents
+          <WsLink to="/pipeline" className="underline">
+            Pipeline
           </WsLink>
         </p>
         {knowledge.repos.length === 0 ? (

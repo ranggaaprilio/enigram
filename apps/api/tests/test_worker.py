@@ -51,6 +51,9 @@ class FakeJobStore:
     async def finish(self, job_id, status, result=None, error=None):
         self._set(job_id, status=status, result=result, error=error, finished_at=datetime.now(UTC))
 
+    async def set_progress(self, job_id, progress):
+        self._set(job_id, progress=progress)
+
     async def requeue_running(self):
         running = [j for j in self.jobs if j.status == "running"]
         for job in running:
@@ -441,7 +444,7 @@ async def test_repo_job_indexes_the_repository(
     graph = FakeCodeGraph()  # a public repository: no access token stored
 
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
     ):
         calls.append((url, ref, graph))
         return result
@@ -459,7 +462,7 @@ async def test_repo_job_indexes_the_repository(
 
 async def test_repo_job_exception_fails_the_job(cfg, store, deps, monkeypatch):
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
     ):
         raise EnigramError("git clone failed: repository not found")
 
@@ -553,9 +556,49 @@ async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplo
     assert remote["busy"] == (None, None, None)
 
 
+async def test_repo_job_records_each_stage_on_the_job(cfg, store, deps, monkeypatch):
+    seen = []
+
+    async def fake_index_repo(cfg, deps, url, ref=None, *, on_stage=None, **kw):
+        await on_stage("clone", {"stages": ["clone", "scan"]})
+        seen.append((await store.get_job(job.id)).progress)
+        await on_stage("docs", {"stages": ["clone", "scan", "docs"], "markdown": 2})
+        seen.append((await store.get_job(job.id)).progress)
+        return {"failed": []}
+
+    monkeypatch.setattr(worker, "index_repo", fake_index_repo)
+    job = await store.enqueue("index_repo", {"url": "https://github.com/org/h"})
+
+    await worker.process_next(cfg, store, deps)
+
+    assert [(p["stage"], p["detail"]) for p in seen] == [
+        ("clone", {"stages": ["clone", "scan"]}),
+        ("docs", {"stages": ["clone", "scan", "docs"], "markdown": 2}),
+    ]
+    assert datetime.fromisoformat(seen[0]["at"]).tzinfo is not None
+    assert (await store.get_job(job.id)).status == "done"
+
+
+async def test_repo_job_survives_a_failed_stage_write(cfg, store, deps, monkeypatch):
+    async def broken(job_id, progress):
+        raise OSError("connection reset")
+
+    async def fake_index_repo(cfg, deps, url, ref=None, *, on_stage=None, **kw):
+        await on_stage("clone", {})
+        return {"failed": []}
+
+    monkeypatch.setattr(store, "set_progress", broken)
+    monkeypatch.setattr(worker, "index_repo", fake_index_repo)
+    job = await store.enqueue("index_repo", {"url": "https://github.com/org/h"})
+
+    await worker.process_next(cfg, store, deps)
+
+    assert (await store.get_job(job.id)).status == "done"
+
+
 async def test_repo_job_records_trigger_metadata(cfg, store, deps, monkeypatch):
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
     ):
         return {"failed": []}
 
@@ -673,7 +716,7 @@ async def test_worker_forwards_the_decider_to_index_repo(cfg, store, deps, monke
     seen = []
 
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
     ):
         seen.append(decider)
         return {"failed": []}
@@ -704,7 +747,7 @@ async def test_private_repositories_use_their_token_to_index_and_poll(
     seen = []
 
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None
+        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
     ):
         seen.append(("index", token))
         return {"failed": []}

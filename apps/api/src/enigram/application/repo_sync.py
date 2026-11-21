@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -38,6 +39,9 @@ REPO_CLONE_TIMEOUT_SECS = 300
 # Cannot start with "-", so a ref is never read as a git option.
 REF_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")
 _SHA = re.compile(r"[0-9a-f]{40}")
+
+# index_repo's stage callback: (stage name, detail).
+OnStage = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 def check_repo_url(url: str, hosts: tuple[str, ...]) -> str:
@@ -225,12 +229,21 @@ async def index_repo(
     notes: AnnotationRepository | None = None,
     decider: DecisionProvider | None = None,
     token: str | None = None,
+    on_stage: OnStage | None = None,
 ) -> dict[str, Any]:
     """Index (or re-sync) a repository from one clone (`token`: a private repository's access
     token, see repo_auth). Markdown: changed files are deleted and
     indexed again, files gone from the repository are deleted, uploaded documents are never
     overwritten. TypeScript: the code graph and flow summaries (`limit`: only the first N entry
-    points), which need the Postgres `graph`."""
+    points), which need the Postgres `graph`. `on_stage(name, detail)` hears each stage as it
+    starts: clone, scan, then code (the code graph) and docs (Markdown) when they run; from the
+    scan on, `detail["stages"]` lists every stage of this run."""
+    detail: dict[str, Any] = {"stages": ["clone", "scan"]}
+
+    async def stage(name: str) -> None:
+        if on_stage:
+            await on_stage(name, dict(detail))
+
     repo = check_repo_url(url, cfg.repo_hosts)
     ref = check_ref(ref)
     removed: list[str] = []
@@ -239,10 +252,20 @@ async def index_repo(
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         log.info("[repo] cloning %s%s", url, f" ({ref})" if ref else "")
+        await stage("clone")
         await asyncio.to_thread(clone, url, ref, root, token)
+        await stage("scan")
         files = collect_markdown(root, repo)
         ts = is_ts_repo(root)
         js = not ts and cfg.code_javascript and is_js_repo(root)
+        code_graph = bool((ts or js) and graph is not None)
+        detail = {
+            "stages": ["clone", "scan", *(["code"] * code_graph), *(["docs"] * bool(files))],
+            "markdown": len(files),
+            "code": "typescript" if ts else "javascript" if js else None,
+        }
+        if code_graph:
+            await stage("code")
         if js and graph is None and files:
             # Opting into CODE_JAVASCRIPT must not break a Markdown sync without Postgres.
             code = {"skipped": "a JavaScript code graph needs STORAGE_BACKEND=postgres"}
@@ -274,6 +297,7 @@ async def index_repo(
                 raise EnigramError(f"No Markdown or TypeScript (tsconfig.json) in {url}")
 
         if files:
+            await stage("docs")
             books = load_manifest(cfg)["books"]
             foreign = [b for b in files if b in books and books[b].get("repo") != url]
             if foreign:

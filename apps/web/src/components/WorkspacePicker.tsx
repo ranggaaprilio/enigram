@@ -41,7 +41,7 @@ export default function WorkspacePicker(props: {
       setOpen(false)
       setName('')
       setError(null)
-      navigate(`/w/${created.name}/documents`)
+      navigate(`/w/${created.name}/pipeline`)
     } catch (err) {
       setError(messageOf(err))
     } finally {

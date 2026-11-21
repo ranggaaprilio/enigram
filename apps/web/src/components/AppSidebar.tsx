@@ -6,7 +6,7 @@ import {
   ChevronsUpDown,
   BookMarked,
   Brain,
-  FileText,
+  Workflow,
   History,
   MessagesSquare,
   Monitor,
@@ -73,7 +73,7 @@ export const NAV: { label: string; pages: Page[] }[] = [
   {
     label: 'Library',
     pages: [
-      { to: '/documents', label: 'Documents', icon: FileText },
+      { to: '/pipeline', label: 'Pipeline', icon: Workflow },
       { to: '/knowledge', label: 'Knowledge', icon: BookMarked },
       { to: '/graph', label: 'Graph', icon: Network },
       { to: '/memory', label: 'Memory', icon: Brain, minimum: 'contributor' },

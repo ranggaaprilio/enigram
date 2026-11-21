@@ -33,8 +33,8 @@ docker compose up -d --build
 
 ## 2. Index a repository
 
-Open http://localhost:3000, go to **Documents**, add
-`https://github.com/brocoders/nestjs-boilerplate` and wait until its job is `done`.
+Open http://localhost:3000, go to **Pipeline**, choose *Add source*, add
+`https://github.com/brocoders/nestjs-boilerplate` and wait until its row says *Synced*.
 
 Or with curl:
 

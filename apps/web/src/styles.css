@@ -128,6 +128,17 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+  /* Work whose length is unknown (a queued sync, a document being indexed): a segment sliding
+     along a track. Pipeline page. */
+  --animate-indeterminate: indeterminate 1.4s ease-in-out infinite;
+  @keyframes indeterminate {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(250%);
+    }
+  }
 }
 
 @layer base {
