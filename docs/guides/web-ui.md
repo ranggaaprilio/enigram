@@ -17,7 +17,7 @@ The sidebar (a drawer on a phone) groups the pages:
 |---|---|
 | **Overview** | Dashboard (the home page) |
 | **Answers** | Chat, Trace |
-| **Library** | Documents, Knowledge, Graph, Memory (contributors and up) |
+| **Library** | Pipeline, Knowledge, Graph, Memory (contributors and up) |
 | **Review** | Inbox, with the number of waiting notes for maintainers |
 | **Settings** (admins) | Members, Agents, Setup |
 
@@ -45,8 +45,8 @@ The sidebar (a drawer on a phone) groups the pages:
 5. **Knowledge**: documents per status, each repository's commit, index time and size.
 6. **Token usage** against the daily budget, per key for admins.
 
-Hover or focus a day's bar to read it. A repository's name opens its page under Documents
-(`/documents/repos/<id>`; old `/dashboard/repos/<id>` links land there): the indexed commit and its date, whether the remote has commits not
+Hover or focus a day's bar to read it. A repository's name opens its page under Pipeline
+(`/pipeline/repos/<id>`; old `/documents/repos/<id>` and `/dashboard/repos/<id>` links land there): the indexed commit and its date, whether the remote has commits not
 indexed yet, the index history, graph quality, summaries, what the last run did to the notes, and
 *Re-index now* for maintainers. An owner also sees *All workspaces* at the foot of the page.
 
@@ -85,12 +85,24 @@ that entity, code sources have an *Annotate* link, note sources open the note.
 
 ## Library
 
-### Documents
+### Pipeline
 
-Drop PDF or Markdown files to upload them, or add a Git repository (with an access token for a
-private one). *Repositories* lists every indexed repository, as on the Dashboard; a name opens
-its page. The documents table follows each job until it is indexed or failed. See
-[Index a Git repository](repositories.md).
+`/pipeline` (old `/documents` links land here) lists every source of the workspace in one list:
+Git repositories, with the Markdown indexed from them grouped under each, and uploaded files.
+Work in progress comes first, then what failed; *All / Repositories / Files* and a name filter
+narrow it.
+
+- **Add source** (maintainers) opens a drawer: a Git repository (with an access token for a
+  private one, admins) or PDF and Markdown files to upload.
+- A repository being synced shows the worker's stages as they happen: *Queued*, *Clone*,
+  *Scan*, then *Code graph* and *Documents* when the scan found code or Markdown, with the time
+  it has taken. When it ends the row says what changed (*Synced: …*) or why it failed. A sync
+  still running when the page opens is picked up.
+- A row opens its details: for a repository its commit, remote, last run, its documents,
+  *Re-index now* and *Open full details* (`/pipeline/repos/<id>`); for a file its pages, chunks
+  and *Delete*.
+
+See [Index a Git repository](repositories.md).
 
 ### Knowledge → Explore
 

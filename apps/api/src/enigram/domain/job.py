@@ -19,3 +19,5 @@ class Job:
     started_at: datetime | None
     finished_at: datetime | None
     workspace: str  # the workspace whose adapters run it
+    # A running repository job's stage: {"stage": "clone", "detail": {...}, "at": iso time}.
+    progress: dict[str, Any] | None = None

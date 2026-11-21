@@ -210,7 +210,7 @@ function Webhooks({ base }: { base: string }) {
       {repos === null ? (
         !error && <Loading rows={2} />
       ) : repos.length === 0 ? (
-        <Empty action={<WsLink to="/documents">Index a repository on Documents</WsLink>}>
+        <Empty action={<WsLink to="/pipeline">Add a repository on Pipeline</WsLink>}>
           No repositories yet.
         </Empty>
       ) : (

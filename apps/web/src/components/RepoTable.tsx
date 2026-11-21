@@ -55,7 +55,7 @@ export default function RepoTable({ refresh = 0 }: { refresh?: number }) {
         {repos.map((r) => (
           <TableRow key={r.id}>
             <TableCell>
-              <WsLink to={`/documents/repos/${r.id}`}>{r.name}</WsLink>
+              <WsLink to={`/pipeline/repos/${r.id}`}>{r.name}</WsLink>
               <div className="text-[12px] text-muted-foreground">
                 {UPDATES_LABEL[r.updates]} updates
               </div>

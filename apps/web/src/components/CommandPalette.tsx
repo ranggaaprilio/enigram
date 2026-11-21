@@ -32,7 +32,7 @@ function pathOf(t: Target): string {
   if (t.target_kind === 'symbol' && t.repo !== null)
     return `/knowledge?repo=${t.repo}&symbol=${encodeURIComponent(t.target_ref)}`
   if (t.target_kind === 'entity') return `/graph?q=${encodeURIComponent(t.target_ref)}`
-  return '/documents'
+  return '/pipeline'
 }
 
 // Plan item 4, U3: ⌘K / Ctrl+K moves anywhere without the mouse: a page, another workspace, or

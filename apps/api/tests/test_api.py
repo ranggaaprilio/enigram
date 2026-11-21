@@ -237,6 +237,16 @@ def test_job_status_and_unknown_ids(env):
     assert client.get("/queries/999").status_code == 404
 
 
+def test_jobs_lists_only_active_jobs_with_their_progress(env):
+    client, _, _, _ = env
+    assert client.get("/jobs").json() == []
+    job_id = _upload(client, "p.pdf").json()["job"]["id"]
+
+    jobs = client.get("/jobs").json()
+
+    assert [(j["id"], j["status"], j["progress"]) for j in jobs] == [(job_id, "queued", None)]
+
+
 def test_query_returns_answer_and_stores_its_trace(env):
     client, store, rag, _ = env
 

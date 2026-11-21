@@ -6,6 +6,7 @@ import logging
 import time
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
+from typing import Any
 
 from enigram.adapters.driving.workspaces import Workspaces
 from enigram.application.budget import daily_exhausted
@@ -79,6 +80,15 @@ async def _run_repo_job(
     url = job.payload["url"]
     trigger = job.payload.get("trigger", "manual")
     log.info("[worker] job %d: indexing repository %s (%s)", job.id, url, trigger)
+
+    async def on_stage(stage: str, detail: dict[str, Any]) -> None:
+        # Only for the Pipeline page: a failed write never fails the job.
+        progress = {"stage": stage, "detail": detail, "at": datetime.now(UTC).isoformat()}
+        try:
+            await store.set_progress(job.id, progress)
+        except Exception:  # noqa: BLE001
+            log.warning("[worker] job %d: could not record stage %s", job.id, stage, exc_info=True)
+
     try:
         result = await index_repo(
             cfg,
@@ -89,6 +99,7 @@ async def _run_repo_job(
             notes=notes,
             decider=decider,
             token=await token_for(cfg, graph, url),
+            on_stage=on_stage,
         )
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)

@@ -6,7 +6,7 @@ description: Index a repository's code graph and Markdown, re-index on every com
 
 # Index a Git repository
 
-Add a repository on the **Documents** page, or with `POST /repos`:
+Add a repository on the **Pipeline** page (*Add source*), or with `POST /repos`:
 
 ```bash
 curl -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
@@ -183,7 +183,7 @@ Automatic re-indexing spends summary tokens on every changed flow; the
 
 ## Private repositories
 
-Give a read-only personal access token on the Documents page (*Access token*) or as `token` in
+Give a read-only personal access token on the Pipeline page (*Add source* → *Access token*) or as `token` in
 `POST /repos`:
 
 - **GitHub**: a fine-grained token with *Contents: read* on that repository.

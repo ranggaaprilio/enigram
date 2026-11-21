@@ -108,8 +108,8 @@ cp .env.example .env    # fill in DEEPSEEK_API_KEY and VOYAGE_API_KEY
 docker compose up -d --build
 ```
 
-Open http://localhost:3000, go to Documents, add
-`https://github.com/brocoders/nestjs-boilerplate` and wait until its job is `done`. Then ask a
+Open http://localhost:3000, go to Pipeline, choose Add source, add
+`https://github.com/brocoders/nestjs-boilerplate` and wait until its row says *Synced*. Then ask a
 code question, e.g. "Can an unconfirmed user log in?". The same with curl:
 
 ```bash

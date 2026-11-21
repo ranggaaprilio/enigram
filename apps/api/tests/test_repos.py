@@ -283,6 +283,29 @@ async def test_index_repo_indexes_markdown_and_code_from_one_clone(cfg, deps, fa
     assert result["indexed"] == ["org-handbook--README"]
 
 
+@pytest.mark.parametrize(
+    ("tree", "graph", "stages"),
+    [
+        ({"README.md": "# R"}, None, ["clone", "scan", "docs"]),
+        ({"tsconfig.json": "{}"}, object(), ["clone", "scan", "code"]),
+        ({"tsconfig.json": "{}", "README.md": "# R"}, object(), ["clone", "scan", "code", "docs"]),
+    ],
+)
+async def test_index_repo_reports_each_stage(cfg, deps, fake_sync, tree, graph, stages):
+    fake_sync.tree = tree
+    heard = []
+
+    async def on_stage(name, detail):
+        heard.append((name, detail))
+
+    await repos.index_repo(cfg, deps, URL, graph=graph, on_stage=on_stage)
+
+    assert [name for name, _ in heard] == stages
+    assert heard[0][1] == {"stages": ["clone", "scan"]}  # before the scan, the rest is unknown
+    assert heard[-1][1]["stages"] == stages
+    assert heard[-1][1]["markdown"] == ("README.md" in tree)
+
+
 async def test_index_repo_typescript_needs_postgres(cfg, deps, fake_sync):
     fake_sync.tree = {"tsconfig.json": "{}", "README.md": "# Readme"}
 

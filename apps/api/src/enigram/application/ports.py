@@ -93,6 +93,10 @@ class JobRepository(Protocol):
         error: str | None = None,
     ) -> None: ...
 
+    async def set_progress(self, job_id: int, progress: dict[str, Any]) -> None:
+        """A running job's current stage, read by the Pipeline page."""
+        ...
+
     async def requeue_running(self) -> int:
         """Jobs a stopped worker left running; only safe while holding worker_lock."""
         ...

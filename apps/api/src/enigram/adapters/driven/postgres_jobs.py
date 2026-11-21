@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS enigram_jobs (
     finished_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS enigram_jobs_queue ON enigram_jobs (workspace, status, id);
+-- A running repository job's stage (clone, scan, code, docs), for the Pipeline page.
+ALTER TABLE enigram_jobs ADD COLUMN IF NOT EXISTS progress JSONB;
 CREATE TABLE IF NOT EXISTS enigram_queries (
     id BIGSERIAL PRIMARY KEY,
     workspace TEXT NOT NULL,
@@ -81,6 +83,7 @@ def _job(row: asyncpg.Record) -> Job:
         started_at=row["started_at"],
         finished_at=row["finished_at"],
         workspace=row["workspace"],
+        progress=_loads(row["progress"]),
     )
 
 
@@ -156,6 +159,14 @@ class PostgresJobStore:
             status,
             json.dumps(result) if result is not None else None,
             error,
+        )
+
+    async def set_progress(self, job_id: int, progress: dict[str, Any]) -> None:
+        await self.pool.execute(
+            "UPDATE enigram_jobs SET progress = $3::jsonb WHERE workspace = $1 AND id = $2",
+            self.workspace,
+            job_id,
+            json.dumps(progress),
         )
 
     async def requeue_running(self) -> int:

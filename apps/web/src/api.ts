@@ -21,6 +21,16 @@ export interface Job {
   created_at: string
   started_at: string | null
   finished_at: string | null
+  progress?: JobProgress | null // a running repository job's stage (Pipeline page)
+}
+
+// The stage a repository job is in; from the scan on, `detail.stages` lists every stage of the run.
+export type JobStage = 'clone' | 'scan' | 'code' | 'docs'
+
+export interface JobProgress {
+  stage: JobStage
+  detail: { stages?: JobStage[]; markdown?: number; code?: string | null }
+  at: string
 }
 
 export interface DocumentRow {
@@ -405,6 +415,8 @@ export function uploadDocument(file: File) {
 }
 
 export const getJob = (id: number) => request<Job>(`/jobs/${id}`)
+// The queued and running jobs, oldest first.
+export const listActiveJobs = () => request<Job[]>('/jobs')
 
 // A worker job: the document stays listed as `deleting` until it is gone.
 export const deleteDocument = (book: string) =>

@@ -112,7 +112,7 @@ describe('Dashboard', () => {
     expect(link(/Proposals\s*3/)).toHaveAttribute('href', '/review?show=proposed')
     expect(link(/Re-check\s*1/)).toHaveAttribute('href', '/review?show=needs_verification')
     expect(link(/Orphaned or conflicting\s*1/)).toHaveAttribute('href', '/review?show=conflict')
-    expect(link(/Failed jobs\s*2/)).toHaveAttribute('href', '/documents')
+    expect(link(/Failed jobs\s*2/)).toHaveAttribute('href', '/pipeline')
     expect(within(attention).getByText(/42 places where a document/)).toBeInTheDocument()
 
     const questions = panel('Questions')
@@ -127,7 +127,7 @@ describe('Dashboard', () => {
     const knowledge = panel('Knowledge')
     expect(await within(knowledge).findByRole('link', { name: 'org-white-board' })).toHaveAttribute(
       'href',
-      '/documents/repos/4',
+      '/pipeline/repos/4',
     )
     expect(within(knowledge).getByText('Behind')).toBeInTheDocument()
     expect(within(knowledge).getByText('Polling updates')).toBeInTheDocument()
@@ -224,7 +224,7 @@ describe('Dashboard', () => {
     })
     expect(
       await screen.findByRole('link', { name: 'Add documents or a repository' }),
-    ).toHaveAttribute('href', '/documents')
+    ).toHaveAttribute('href', '/pipeline')
     expect(screen.queryByRole('heading', { level: 2 })).toBeNull()
   })
 

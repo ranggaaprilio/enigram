@@ -200,7 +200,7 @@ export default function Code({ embedded = false }: { embedded?: boolean }) {
       <section>
         {header}
         <Empty>
-          No repository indexed yet. Index one on the <WsLink to="/documents">Documents</WsLink>{' '}
+          No repository indexed yet. Index one on the <WsLink to="/pipeline">Pipeline</WsLink>{' '}
           page.
         </Empty>
       </section>
