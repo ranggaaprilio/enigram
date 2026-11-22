@@ -1,6 +1,8 @@
-"""Retrieval metrics of a code golden set (plans/retrieval-accuracy.md, R0): how well
-search_code finds each question's evidence symbols, and, from a stored enigram-agent answers
-file, whether the agent read or cited them. No answer is generated: only query embeddings."""
+"""Retrieval metrics of a golden set (plans/retrieval-accuracy.md, R0), no answer generated.
+Code set: how well search_code finds each question's evidence symbols (query embeddings only),
+and, from a stored enigram-agent answers file, whether the agent read or cited them. Document
+set: context recall and precision of the evidence chunks per LightRAG mode (mix also calls the
+LLM once per question for its keywords)."""
 
 import json
 from datetime import datetime
@@ -18,10 +20,12 @@ from enigram.application.evaluation.golden_run import (
 from enigram.application.evaluation.route_eval import _git_head
 from enigram.application.files import atomic_write_text, file_sha256
 from enigram.config import Config
+from enigram.domain import stats
 from enigram.domain.code import CodeSymbol
 from enigram.domain.errors import EnigramError
 
 WIDE_K = 20  # a bigger pool than the agent sees: what a reranker over it could reach
+DOC_MODES = ("mix", "naive")
 RECALL = f"recall@{SEARCH_MAX_HITS}"
 RECALL_WIDE = f"recall@{WIDE_K}"
 
@@ -134,6 +138,41 @@ def summary(search: list[dict[str, Any]], agent: list[dict[str, Any]]) -> dict[s
     }
 
 
+async def doc_rows(engine: Any, questions: list[GoldenQuestion], mode: str) -> list[dict[str, Any]]:
+    """Per document question with evidence chunks: what the engine retrieves in `mode` (no
+    answer), scored as the eval report scores it (context recall and average precision)."""
+    rows = []
+    for q in questions:
+        evidence = {ev.chunk_id for ev in q.evidence if ev.chunk_id}
+        if not evidence:
+            continue
+        result = await engine.retrieve(q.question, mode)
+        retrieved = [stats.doc_id(c.chunk_id) for c in result.chunks]
+        rows.append(
+            {
+                "id": q.id,
+                "category": q.category,
+                "evidence": sorted(evidence),
+                "retrieved": len(retrieved),
+                "context_recall": stats.context_recall(evidence, retrieved),
+                "context_precision": stats.context_precision(evidence, retrieved),
+            }
+        )
+    return rows
+
+
+async def _run_docs(deps: Any, questions: list[GoldenQuestion]) -> dict[str, Any]:
+    modes: dict[str, list[dict[str, Any]]] = {}
+    async with deps.open_engine() as engine:  # one LightRAG per process
+        for mode in DOC_MODES:
+            modes[mode] = await doc_rows(engine, questions, mode)
+    flat = {"questions": len(modes[DOC_MODES[0]])}
+    for mode, rows in modes.items():
+        flat[f"{mode} context_recall"] = _mean(rows, "context_recall")
+        flat[f"{mode} context_precision"] = _mean(rows, "context_precision")
+    return {"kind": "docs", "summary": flat, "modes": modes}
+
+
 async def run_retrieval_eval(
     cfg: Config,
     deps: Any,
@@ -144,9 +183,17 @@ async def run_retrieval_eval(
     answers_path: Path | None = None,
 ) -> dict[str, Any]:
     golden = load_golden_checked(cfg, golden_path)
-    if golden.repo is None:
-        raise EnigramError("retrieval metrics need a code golden set (one with `repo:`)")
     questions = select_questions(golden.questions, split=split, allow_verdict=allow_verdict)
+    head = {
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "golden_file": str(golden_path),
+        "golden_sha256": file_sha256(golden_path),
+        "split": split,
+    }
+    if golden.repo is None:
+        if answers_path is not None:
+            raise EnigramError("--answers is for a code golden set")
+        return {**head, "embed_model": cfg.embed_model, **await _run_docs(deps, questions)}
     embedder = deps.code_embedder()
     store = await deps.open_store()
     try:
@@ -161,16 +208,37 @@ async def run_retrieval_eval(
     finally:
         await store.close()
     return {
-        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "golden_file": str(golden_path),
-        "golden_sha256": file_sha256(golden_path),
-        "split": split,
+        **head,
+        "kind": "code",
         "embed_model": embedder.model if embedder is not None else "",
         "answers_file": str(answers_path) if answers_path else None,
         "summary": summary(search, agent),
         "search": search,
         "agent": agent,
     }
+
+
+def _docs_markdown(run: dict[str, Any]) -> list[str]:
+    s = run["summary"]
+    lines = [
+        ", ".join(
+            f"{m}: context_recall {s[f'{m} context_recall']}, "
+            f"context_precision {s[f'{m} context_precision']}"
+            for m in run["modes"]
+        )
+        + f" ({s['questions']} questions).",
+        "",
+        "| Question | " + " | ".join(f"{m} recall | {m} precision" for m in run["modes"]) + " |",
+        "|---|" + "---|---|" * len(run["modes"]),
+    ]
+    by_mode = {m: {r["id"]: r for r in rows} for m, rows in run["modes"].items()}
+    for qid in by_mode[next(iter(by_mode))]:
+        cells = " | ".join(
+            f"{by_mode[m][qid]['context_recall']:.2f} | {by_mode[m][qid]['context_precision']:.2f}"
+            for m in by_mode
+        )
+        lines.append(f"| {qid} | {cells} |")
+    return lines
 
 
 def retrieval_markdown(run: dict[str, Any]) -> str:
@@ -182,6 +250,10 @@ def retrieval_markdown(run: dict[str, Any]) -> str:
         f"{run['split'] or 'all'}, embed model {run['embed_model'] or 'none (full text only)'}, "
         f"git {run.get('git_head') or '-'}.",
         "",
+    ]
+    if run.get("kind") == "docs":
+        return "\n".join(lines + _docs_markdown(run)) + "\n"
+    lines += [
         f"search_code over {s['questions']} questions: {RECALL} {s[RECALL]}, "
         f"{RECALL_WIDE} {s[RECALL_WIDE]}, MRR@{w} {s[f'mrr@{w}']}.",
     ]

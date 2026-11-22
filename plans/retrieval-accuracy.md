@@ -1,7 +1,8 @@
 # Akurasi retrieval dan graph
 
 Rencana dibuat 2026-11-22 dari riset best practice 2024-2026 dan peta kode saat ini.
-Belum ada fase yang dibangun.
+R0 dibangun 2026-11-22 (`enigram golden retrieval`); baseline ada di bagian Hasil. Fase lain
+belum.
 
 ## Masalah
 
@@ -77,12 +78,19 @@ walaupun `search_code` meleset.
 
 Tanpa LLM untuk menjawab, jadi murah (hanya embedding query).
 
-**Dokumen.** Index ulang dokumen Kestrel (sumber di `data/backup-before-phase1`), pastikan
-`golden check --file eval/golden-docs.yaml` lulus, lalu catat baseline `context_recall`,
-`context_precision` dan skor jawaban untuk `mix` dan `naive`.
+**Dokumen.** Perintah yang sama pada golden set dokumen: `context_recall` dan
+`context_precision` chunk evidence untuk `mix` dan `naive`, tanpa membuat jawaban. Dokumen
+Kestrel sudah ter-index di workspace `eval-docs` (2026-11-09, untuk L3), jadi tidak perlu index
+ulang:
 
-**Set pengukuran.** Split `dev` + `reserve` (30 soal kode). Split `verdict` tetap terkunci
-untuk Phase 7. Lihat keputusan K1.
+```bash
+DATA_DIR=./data/workspaces/eval-docs WORKSPACE=eval-docs \
+  uv run --project apps/api enigram golden retrieval --file eval/golden-docs.yaml
+```
+
+**Set pengukuran (K1).** Tuning hanya di `dev`. Setiap fase yang di-merge dijalankan sekali di
+semua split (`--allow-verdict`) sebagai konfirmasi, tanpa tuning sesudahnya, seperti
+`golden route`.
 
 ### R1: tokenizer identifier untuk full-text kode
 
@@ -183,11 +191,15 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
 
 ## Keputusan untuk pemilik
 
-- **K1.** Set pengukuran retrieval: `dev` + `reserve` saja (usulan), atau boleh juga `verdict`?
-  Metrik retrieval tidak melihat jawaban, tapi memakai `verdict` untuk memilih perubahan
-  membuatnya kurang bersih untuk Phase 7.
+- **K1 (diputuskan 2026-11-22).** Tuning di `dev` saja; satu run konfirmasi di semua split
+  setelah setiap fase di-merge. `reserve` tidak dipakai untuk tuning, karena ia cadangan
+  `verdict` di Phase 7 (`eval/README.md:30`).
 - **K2.** Reranker: `rerank-2.5` atau `rerank-2.5-lite` (lebih murah dan cepat)?
-- **K3.** Boleh re-index dokumen Kestrel dan menjalankan eval dokumen (pakai LLM)?
+- **K3 (diputuskan 2026-11-22).** Eval dokumen di workspace terpisah. Workspace `eval-docs`
+  yang sudah ada dipakai, tanpa index ulang.
+- **K6 (baru).** Korpus dokumen evaluasi terlalu kecil untuk R2-R6 (lihat Hasil). Pilihan:
+  tambah dokumen pengecoh ke `eval-docs`, pakai korpus lain dengan soal baru, atau tunda fase
+  dokumen.
 - **K4.** Tambah soal yang lebih sulit (multi-hop, paraphrase) ke golden set? Kalau ya, siapa
   yang memberi label.
 - **K5.** Pertanyaan berbahasa Indonesia: perlu full-text dengan config selain `english`?
@@ -208,4 +220,36 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
 
 ## Hasil
 
-Belum ada.
+### R0 baseline (2026-11-22)
+
+**Kode, split `dev`** (`data/reports/retrieval-20261122-093232.md`, golden `acfec67e`,
+`voyage-code-4`):
+
+| Metrik | Nilai |
+|---|---|
+| recall@6 `search_code` | 0,758 |
+| recall@20 | 0,833 |
+| MRR@20 | 0,49 |
+| evidence dibaca agent (run `answers-enigram-agent-20261108-130801`) | 0,833 |
+| evidence dikutip agent | 0,788 |
+
+- 11 soal; satu soal sekitar 9 poin.
+- b63 (`AppModule`, `UsersModule`): recall@6 0, evidence pertama di posisi 20. Search lemah
+  untuk pertanyaan wiring modul.
+- a01: `search_code` menemukan evidence di posisi 3, tapi agent tidak membacanya. Ini masalah
+  agent, bukan retrieval.
+- Agent membaca lebih banyak evidence daripada yang ditemukan `search_code`, lewat `grep` dan
+  `find_symbol`.
+
+**Dokumen, `eval/golden-docs.yaml`, workspace `eval-docs`**
+(`data/workspaces/eval-docs/reports/retrieval-20261122-095340.md`, 30 soal berevidence):
+
+| Mode | context_recall | context_precision |
+|---|---|---|
+| mix | 1,0 | 0,854 |
+| naive | 1,0 | 0,889 |
+
+Korpusnya hanya 29 chunk. `mix` selalu mengambil 20 chunk (`chunk_top_k`), `naive` rata-rata
+17,3. Recall 1,0 karena hampir seluruh korpus terambil, bukan karena retrieval bagus. Set ini
+tidak bisa menunjukkan perbaikan R2-R6; precision hanya memberi sinyal lemah. `naive` tidak
+lebih buruk dari `mix` di sini, tapi korpus terlalu kecil untuk menyimpulkan R6. Lihat K6.

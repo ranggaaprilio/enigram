@@ -174,8 +174,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     retrieval = gsub.add_parser(
         "retrieval",
-        help="search_code recall@k and MRR against the evidence symbols (no answer is "
-        "generated); with --answers, also whether the agent read or cited them",
+        help="retrieval only, no answer: a code set's search_code recall@k and MRR against the "
+        "evidence symbols (with --answers, also whether the agent read or cited them); a "
+        "document set's context recall and precision per mode (mix, naive)",
     )
     retrieval.add_argument("--split", choices=("dev", "verdict", "reserve"), help="only this split")
     retrieval.add_argument(

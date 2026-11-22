@@ -296,3 +296,15 @@ uv run enigram golden retrieval --split dev --answers data/eval/answers-enigram-
 An evidence item matches by qualified name and file; a search hit on its class or a caller does
 not count, so recall is a lower bound. Reports go to `data/reports/retrieval-<ts>.md` and
 `.json`. The verdict lock applies as for `golden route`.
+
+On a document set the command retrieves (no answer) in `mix` and `naive` and reports the
+evidence chunks' context recall and precision, as `enigram eval` scores them. `mix` also calls
+the LLM once per question for its keywords. Run it in the workspace that holds the documents:
+
+```bash
+DATA_DIR=./data/workspaces/eval-docs WORKSPACE=eval-docs \
+  uv run enigram golden retrieval --file eval/golden-docs.yaml
+```
+
+With 29 chunks and `chunk_top_k` 20, nearly the whole corpus is retrieved, so recall there is
+1.0 by construction (plans/retrieval-accuracy.md, K6).

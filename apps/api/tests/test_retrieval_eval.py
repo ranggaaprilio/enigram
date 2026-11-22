@@ -1,4 +1,4 @@
-from code_fakes import FakeCodeGraph, FakeEmbedder, fixture_graph
+from code_fakes import FakeCodeGraph, FakeDocs, FakeEmbedder, doc_result, fixture_graph
 
 from enigram.application.code_embeddings import embed_repo
 from enigram.application.evaluation.golden import Evidence, GoldenQuestion
@@ -6,6 +6,7 @@ from enigram.application.evaluation.retrieval_eval import (
     RECALL,
     RECALL_WIDE,
     agent_rows,
+    doc_rows,
     retrieval_markdown,
     score,
     search_rows,
@@ -135,3 +136,56 @@ def test_summary_and_markdown():
     assert f"{RECALL} 0.5, {RECALL_WIDE} 0.75, MRR@20 0.625" in md
     assert "| q1 | 1.00 | 1.00 | 1.00 | 1.00 | 0.50 | `A.b` |" in md
     assert "| q2 | 0.00 | 0.50 | 0.25 | - | - | `C.d` (unresolved) |" in md
+
+
+async def test_doc_rows_score_the_chunks_each_mode_retrieves():
+    def chunk(cid):  # LightRAG numbers the chunks of one of our chunks
+        return (f"{cid}-chunk-000", f"Paper | Section | #{cid[-5:]}", "text")
+
+    found = doc_result("q1", chunk("p-c00002"), chunk("p-c00001"))
+    docs = FakeDocs({"What is A?": found})
+    questions = [
+        GoldenQuestion(
+            "d1",
+            "multi_section",
+            "What is A?",
+            "-",
+            (
+                Evidence(chunk_id="p-c00001"),
+                Evidence(chunk_id="p-c00009"),
+            ),
+        ),
+        GoldenQuestion("u1", "unanswerable", "Nothing?", "-", ()),  # no evidence: skipped
+    ]
+
+    rows = await doc_rows(docs, questions, "naive")
+
+    assert docs.queries == [("What is A?", "naive")]
+    assert rows == [
+        {
+            "id": "d1",
+            "category": "multi_section",
+            "evidence": ["p-c00001", "p-c00009"],
+            "retrieved": 2,
+            "context_recall": 0.5,
+            "context_precision": 0.5,  # the one evidence chunk found is at rank 2
+        }
+    ]
+    md = retrieval_markdown(
+        {
+            "kind": "docs",
+            "created_at": "2026-11-22T10:00:00+07:00",
+            "golden_file": "eval/golden-docs.yaml",
+            "golden_sha256": "cd" * 32,
+            "split": None,
+            "embed_model": "voyage-4-lite",
+            "summary": {
+                "questions": 1,
+                "naive context_recall": 0.5,
+                "naive context_precision": 0.5,
+            },
+            "modes": {"naive": rows},
+        }
+    )
+    assert "naive: context_recall 0.5, context_precision 0.5 (1 questions)." in md
+    assert "| d1 | 0.50 | 0.50 |" in md
