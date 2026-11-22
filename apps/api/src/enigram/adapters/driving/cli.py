@@ -172,7 +172,20 @@ def _build_parser() -> argparse.ArgumentParser:
     route.add_argument(
         "--no-choice", action="store_true", help="rules only: never ask the decision layer"
     )
-    for p in (check, answer, route):
+    retrieval = gsub.add_parser(
+        "retrieval",
+        help="retrieval only, no answer: a code set's search_code recall@k and MRR against the "
+        "evidence symbols (with --answers, also whether the agent read or cited them); a "
+        "document set's context recall and precision per mode (mix, naive)",
+    )
+    retrieval.add_argument("--split", choices=("dev", "verdict", "reserve"), help="only this split")
+    retrieval.add_argument(
+        "--allow-verdict", action="store_true", help="allow the verdict and reserve splits"
+    )
+    retrieval.add_argument(
+        "--answers", type=Path, help="an enigram-agent answers file (data/eval/answers-*.json)"
+    )
+    for p in (check, answer, route, retrieval):
         p.add_argument("--file", type=Path, default=Path("eval/golden.yaml"), help="golden YAML")
     # Literal copy of golden_run.SYSTEMS so parsing never imports LightRAG; a test keeps them equal.
     answer.add_argument(
@@ -712,6 +725,26 @@ async def _golden_route(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+async def _golden_retrieval(cfg: Config, args: argparse.Namespace) -> int:
+    from enigram.application.evaluation.retrieval_eval import (
+        run_retrieval_eval,
+        write_retrieval_report,
+    )
+    from enigram.bootstrap import build_deps
+
+    run = await run_retrieval_eval(
+        cfg,
+        build_deps(cfg),
+        args.file,
+        split=args.split,
+        allow_verdict=args.allow_verdict,
+        answers_path=args.answers,
+    )
+    print(" · ".join(f"{k} {v}" for k, v in run["summary"].items()))
+    print(f"report: {write_retrieval_report(cfg, run)}")
+    return 0
+
+
 async def _golden_citations(cfg: Config, path: Path) -> int:
     from enigram.application.evaluation.blind import load_answers
     from enigram.application.evaluation.citations import check_answers, citations_path
@@ -850,6 +883,8 @@ def main(argv: list[str] | None = None) -> int:
                 return asyncio.run(_golden_answer(cfg, args))
             if args.golden_command == "route":
                 return asyncio.run(_golden_route(cfg, args))
+            if args.golden_command == "retrieval":
+                return asyncio.run(_golden_retrieval(cfg, args))
             if args.golden_command == "blind":
                 return _golden_blind(cfg, args)
             if args.golden_command == "unblind":

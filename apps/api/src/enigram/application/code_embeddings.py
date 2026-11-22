@@ -46,6 +46,23 @@ def rank_search(
     return [(i, 1.0 / p) for p, i in enumerate([*pinned, *fused][:limit], 1)]
 
 
+async def search_ranking(
+    graph_repo: CodeGraphRepository,
+    repo_id: int,
+    query: str,
+    limit: int,
+    vector: list[float] | None = None,
+    model: str = "",
+) -> tuple[list[tuple[str, float]], int]:
+    """search_code's ranking of one repository: full text (bodies included), fused with the
+    vector ranks when `vector` is given. Returns the ranking and the number of vector hits."""
+    ranked = await graph_repo.search(repo_id, query, limit, bodies=True)
+    if vector is None:
+        return ranked, 0
+    near = await graph_repo.search_vectors(repo_id, vector, model, limit)
+    return rank_search(ranked, near, limit), len(near)
+
+
 async def embed_repo(
     embedder: CodeEmbedder,
     graph_repo: CodeGraphRepository,
