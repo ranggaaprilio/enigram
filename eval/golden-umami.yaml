@@ -1,0 +1,316 @@
+# Code retrieval set for umami (plans/retrieval-accuracy.md, K4). Drafted by Claude from the code
+# at the pinned commit on 2026-11-22; every answer key checked against the code by a second pass
+# and reviewed by the owner on 2026-11-22 (labels are Claude's, not blind).
+#
+# Found while drafting, not a question: in src/permissions/team.ts:115 canCreateTeamWebsite
+# calls the async hasPermission without await, so `!hasPermission(...)` is always false and a
+# globally view-only user who is in a team can still create team websites, pixels, links and
+# boards.
+version: 2
+repo:
+  url: https://github.com/ranggaaprilio/umami
+  ref: eval-v1
+  pinned_sha: "aad2c4cedd5c0b3bc4d361843830a0bb47cf79c4"
+questions:
+  # ================================================================ event collection
+  - id: "u01"   # class: collection
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when a search engine crawler loads a page that has the tracking script on it?"
+    answer: >
+      The collection endpoint (POST /api/send) checks the user agent with isbot after reading the
+      client info; unless DISABLE_BOT_CHECK is set, a bot gets a 200 JSON reply {beep: "boop"}
+      and nothing is saved (no session, no event).
+    evidence:
+      - symbol: POST
+        file: src/app/api/send/route.ts
+
+  - id: "u02"   # class: collection
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What does the tracking endpoint answer when a page view is sent for a website that was deleted or never existed?"
+    answer: >
+      Without a valid cache token for that website, the endpoint looks the website up (from Redis
+      under website:<id> when Redis is enabled, else the database); a missing website or one with
+      deletedAt set gives 400 Bad Request "Website not found.". A valid x-umami-cache token for
+      the same website id skips this lookup, and that token has no expiry, so a client holding
+      one keeps sending to a deleted website.
+    evidence:
+      - symbol: POST
+        file: src/app/api/send/route.ts
+      - symbol: fetchWebsite
+        file: src/lib/load.ts
+
+  - id: "u03"   # class: collection
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "Umami does not use cookies, so how does it decide that two hits come from the same visitor, and when does a new visit start?"
+    answer: >
+      The session id is a uuid derived from the website (source) id, IP, user agent, a salt and
+      the distinct id if given. The salt rotates monthly by default or per SALT_ROTATION (a
+      client salt is mixed in only when ENABLE_CLIENT_SALT is set). The visit id is derived from
+      the session id and the start of the current hour, so without a cache token a new visit
+      starts every clock hour. With a cache token the cached visit is kept until the session
+      changes or, for a live (non-historical) hit, more than 1800 seconds passed since its iat.
+    evidence:
+      - symbol: resolveCollectionSession
+        file: src/lib/collection-session.ts
+      - symbol: getSalt
+        file: src/lib/crypto.ts
+
+  - id: "u04"   # class: ip-filter
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "How can I stop visits from my own office network from being counted?"
+    answer: >
+      Set IGNORE_IP to a comma-separated list of IP addresses or CIDR ranges. The collection
+      endpoint checks the client IP against it (exact match or CIDR match of the same IP family)
+      and answers 403 Forbidden without saving anything.
+    evidence:
+      - symbol: hasBlockedIp
+        file: src/lib/detect.ts
+      - symbol: POST
+        file: src/app/api/send/route.ts
+
+  - id: "u05"   # class: ip-filter
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "What does CLIENT_IP_HEADER do, and which IP is used when it is not set?"
+    answer: >
+      When CLIENT_IP_HEADER is set and that header is present, the visitor IP is read from it.
+      Otherwise a fixed list of headers is tried in order (true-client-ip, cf-connecting-ip, ...,
+      x-real-ip, x-appengine-user-ip, x-forwarded-for, forwarded, ...), skipping values that are
+      trusted proxies from
+      TRUSTED_PROXIES; the first non-proxy IP wins, else the first proxy IP seen.
+    evidence:
+      - symbol: getIpAddress
+        file: src/lib/ip.ts
+
+  - id: "u06"   # class: collection
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "What is the x-umami-cache header sent to /api/send for?"
+    answer: >
+      It carries the signed cache token that /api/send returned on the previous hit (type
+      "cache", with websiteId, sessionId, visitId, iat). If it verifies against the app secret and
+      its websiteId matches, the endpoint skips the website lookup and, on Postgres, skips creating
+      the session again, and it reuses the visit; a fresh token is returned in the response.
+      The token is a JWT with no expiry.
+    evidence:
+      - symbol: POST
+        file: src/app/api/send/route.ts
+      - symbol: resolveCollectionSession
+        file: src/lib/collection-session.ts
+
+  # ================================================================ storage split
+  - id: "u07"   # class: storage
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "Where does a tracked event get written: Postgres, ClickHouse or Kafka?"
+    answer: >
+      If CLICKHOUSE_URL is set the ClickHouse path runs: the event is sent to Kafka topic "event"
+      when Kafka is enabled, else inserted into the ClickHouse website_event table. Without
+      CLICKHOUSE_URL and with a postgres DATABASE_URL it is written through Prisma.
+    evidence:
+      - symbol: saveEvent
+        file: src/queries/sql/events/saveEvent.ts
+      - symbol: runQuery
+        file: src/lib/db.ts
+
+  - id: "u08"   # class: storage
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "How does getWebsiteStats decide whether to query Postgres or ClickHouse?"
+    answer: >
+      It calls runQuery with a Prisma and a ClickHouse variant: when CLICKHOUSE_URL is set the
+      ClickHouse query runs; otherwise, if DATABASE_URL is a postgres URL, the relational (Prisma
+      raw SQL) query runs. It returns pageviews, visitors, visits, bounces and totaltime.
+    evidence:
+      - symbol: getWebsiteStats
+        file: src/queries/sql/getWebsiteStats.ts
+      - symbol: runQuery
+        file: src/lib/db.ts
+
+  # ================================================================ auth
+  - id: "u09"   # class: auth
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What does logging in return for a user who has two-factor authentication turned on?"
+    answer: >
+      After the username/password check (401 incorrect-username-password on failure), a user with
+      2FA enabled (not in CLOUD_MODE) gets {requiresTwoFactor: true, partialToken} instead of a
+      session; the partial token expires in 5 minutes. If 2FA is not configured on the server it
+      answers 503.
+    evidence:
+      - symbol: POST
+        file: src/app/api/auth/login/route.ts
+
+  - id: "u10"   # class: auth
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "If I change my password, are the sessions that were already logged in kicked out?"
+    answer: >
+      Yes for tokens that carry a password fingerprint: the session stores a hash of the password
+      hash (pwd), and on every request the auth check compares it with the current one and treats
+      the request as unauthenticated on mismatch, for both stateless tokens and Redis sessions.
+      Legacy tokens without pwd are still accepted.
+    evidence:
+      - symbol: checkAuth
+        file: src/lib/auth.ts
+      - symbol: createSessionToken
+        file: src/lib/auth.ts
+
+  - id: "u11"   # class: rate-limit
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "What stops someone from brute-forcing the six-digit two-factor code?"
+    answer: >
+      Each verify attempt is counted before the code is checked, in a serializable transaction.
+      At 5 attempts the user is locked for 15 minutes and further attempts get 429
+      two-factor-error-too-many-attempts with lockedUntil; a successful code clears the counter.
+    evidence:
+      - symbol: reserveAttempt
+        file: src/lib/two-factor/rate-limit.ts
+      - symbol: POST
+        file: src/app/api/2fa/verify/route.ts
+
+  - id: "u12"   # class: auth
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "Which parts of the API can't be called with an API key?"
+    answer: >
+      Paths starting with /api/me/password, /api/me/api-keys, /api/2fa, /api/auth, /api/users and
+      /api/admin (after undoing /teams/:id and API_URL rewrites) reject API keys. API keys start
+      with "umami_" and are disabled entirely in CLOUD_MODE.
+    evidence:
+      - symbol: API_KEY_BLOCKED_PATHS
+        file: src/lib/api-key.ts
+      - symbol: isApiKeyBlockedPath
+        file: src/lib/api-key.ts
+      - symbol: checkApiKeyAuth
+        file: src/lib/auth.ts
+
+  # ================================================================ permissions
+  - id: "u13"   # class: permissions
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "What stops someone from viewing another team's website stats?"
+    answer: >
+      Viewing requires being an admin, holding a share token that includes that website, owning a
+      personal website, or being a member (any role) of the team that owns it; in the owner and
+      team cases the billing account must also not be past due. Anyone else is refused.
+    evidence:
+      - symbol: canViewWebsite
+        file: src/permissions/website.ts
+
+  - id: "u14"   # class: permissions
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "Can a read-only team member delete one of the team's websites? Which team roles can?"
+    answer: >
+      No. Deleting a team website needs a team role with the website-delete permission:
+      team-owner, team-manager and team-member have it, team-view-only does not (admins always
+      can). Billing must also not be past due.
+    evidence:
+      - symbol: canDeleteWebsite
+        file: src/permissions/website.ts
+      - symbol: ROLE_PERMISSIONS
+        file: src/lib/constants.ts
+
+  # ================================================================ data handling
+  - id: "u15"   # class: data
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What gets removed when a website is deleted, and is it really gone or just hidden?"
+    answer: >
+      After the delete permission check (401 otherwise), one Prisma transaction deletes the
+      website's events, sessions, event/session data, replays, heatmaps, revenue and error rows,
+      plus its reports, segments, annotations and shares. The website row is hard-deleted, except
+      in CLOUD_MODE where deletedAt is set; the Redis entry website:<id> is dropped. Only Prisma
+      tables are cleared: on a ClickHouse setup the events stay.
+    evidence:
+      - symbol: deleteWebsite
+        file: src/queries/prisma/website.ts
+      - symbol: deleteWebsiteDependentData
+        file: src/queries/prisma/website.ts
+      - symbol: DELETE
+        file: src/app/api/websites/[websiteId]/route.ts
+
+  - id: "u16"   # class: data
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What does resetting a website's data do, and who is allowed to do it?"
+    answer: >
+      Anyone allowed to update the website (else 401) can reset it. The reset deletes all
+      collected data (events, sessions, event/session data, replays, heatmaps, revenue, errors)
+      but keeps the website, its reports, segments and shares, sets resetAt to now, and rewrites
+      the website into Redis when enabled. Only Prisma tables are cleared: on a ClickHouse setup
+      the events stay.
+    evidence:
+      - symbol: POST
+        file: src/app/api/websites/[websiteId]/reset/route.ts
+      - symbol: resetWebsite
+        file: src/queries/prisma/website.ts
+
+  # ================================================================ sharing & teams
+  - id: "u17"   # class: sharing
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "How does opening a public share link give a visitor access to a website's dashboard, and what happens to that access when the share is removed?"
+    answer: >
+      GET /api/share/<slug> finds the share (404 if missing) and returns a JWT of type share signed
+      with the app secret. Later requests send it in x-umami-share-token (with
+      x-umami-share-context); on each request the share is looked up again and its current
+      parameters used, so deleting the share revokes all its tokens.
+    evidence:
+      - symbol: GET
+        file: src/app/api/share/[slug]/route.ts
+      - symbol: parseShareToken
+        file: src/lib/auth.ts
+
+  - id: "u18"   # class: teams
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "What does POST /api/teams/join do with an access code, and what role does the new member get?"
+    answer: >
+      It finds a non-deleted team with that access code (404 team-not-found otherwise), returns 400
+      if the user is already a member, and otherwise adds the user with the team-member role.
+    evidence:
+      - symbol: POST
+        file: src/app/api/teams/join/route.ts

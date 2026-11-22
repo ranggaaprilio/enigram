@@ -200,8 +200,32 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
 - **K6 (baru).** Korpus dokumen evaluasi terlalu kecil untuk R2-R6 (lihat Hasil). Pilihan:
   tambah dokumen pengecoh ke `eval-docs`, pakai korpus lain dengan soal baru, atau tunda fase
   dokumen.
-- **K4.** Tambah soal yang lebih sulit (multi-hop, paraphrase) ke golden set? Kalau ya, siapa
-  yang memberi label.
+- **K4 (diputuskan 2026-11-22).** Soal retrieval kode ditambah: Claude membuat draf soal dan
+  evidence, pemilik me-review (label tidak blind). Dua repo:
+  - `nestjs-boilerplate@eval-v1`: sekitar 40 soal baru di `dev`, tanpa set evidence yang sama
+    dengan soal `verdict`/`reserve`.
+  - **umami** (Next.js App Router, MIT) sebagai repo kedua: sekitar 15-20 soal. Alasannya,
+    nestjs-boilerplate kecil (190 file, 9,6k LOC, 408 simbol) dan namanya rapi seperti buku
+    teks, jadi hasilnya mungkin tidak berlaku umum. Gate R1 menjadi: nestjs tidak turun, umami
+    naik.
+
+  Kandidat diukur 2026-11-22 dengan `repo_limits` dan parse sidecar (tanpa LLM). Tidak ada
+  aplikasi nyata di bawah `CODE_MAX_LOC` 50k:
+
+  | Repo | File / LOC | Simbol | Route HTTP | Call ter-resolve |
+  |---|---|---|---|---|
+  | linkwarden | 678 / 88,8k | 1.555 | 0 | 49% |
+  | ghostfolio | 1.021 / 114,6k | 3.339 | 135 | 49% |
+  | umami | 1.507 / 182,8k | 3.799 | 210 | 71% |
+
+  Perkiraan biaya index umami 2,3-3,2 juta token, dari rasio repo yang sudah di-index (sekitar
+  32% simbol diringkas, 1,9-2,6k token per ringkasan); belum diukur.
+
+  **Celah cakupan parser yang ditemukan di linkwarden** (dikerjakan terpisah):
+  - File TS di `packages/` (46 file `lib`, `router`, `filesystem`) tidak ter-index karena tidak
+    ada `tsconfig.json` yang mencakupnya; hanya 492 dari 678 file yang ter-parse.
+  - Route Next.js di `apps/web/pages/api` (66 file) tidak dikenali sebagai `http_route` di
+    monorepo; semua 145 entry point jatuh ke `root`.
 - **K5.** Pertanyaan berbahasa Indonesia: perlu full-text dengan config selain `english`?
 
 ## Sumber
@@ -240,6 +264,20 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
   agent, bukan retrieval.
 - Agent membaca lebih banyak evidence daripada yang ditemukan `search_code`, lewat `grep` dan
   `find_symbol`.
+
+**Kode, umami `eval-v1`** (`eval/golden-umami.yaml`, 18 soal `dev`, workspace `default`,
+`data/reports/retrieval-20261122-112125.md`): recall@6 0,685, recall@20 0,778, MRR@20 0,534.
+
+- Index umami: 3.799 simbol, 1.392 ringkasan, 5.191 embedding, 2.259.955 token (termasuk 8
+  Markdown), sekitar 595 token per simbol.
+- u08 menyebut `getWebsiteStats`, tapi implementasinya (`src/queries/sql/getWebsiteStats.ts`)
+  tidak masuk top-20: nama yang sama di `packages/api-client` (client hasil generate) dan
+  `packages/mcp` mengisi hasil name match.
+- u02 dan u07: hasil teratas diisi kode hasil generate (`packages/api-client/src/generated`)
+  dan konstanta ClickHouse.
+
+Catatan: database lokal di-reset 2026-11-22, jadi baseline nestjs di atas harus diukur ulang
+setelah nestjs di-index lagi (ringkasan LLM dibuat ulang).
 
 **Dokumen, `eval/golden-docs.yaml`, workspace `eval-docs`**
 (`data/workspaces/eval-docs/reports/retrieval-20261122-095340.md`, 30 soal berevidence):
