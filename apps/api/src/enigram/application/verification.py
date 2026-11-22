@@ -6,6 +6,7 @@ answer waits for the dev-split measurement (plans/answer-verification.md)."""
 import asyncio
 import dataclasses
 import logging
+import re
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping
 from typing import Any
@@ -22,6 +23,40 @@ PURPOSE = "answer_verification"
 SENTENCE_MAX_CHARS = 4_000  # the cited text of one sentence
 # The text of one citation, None when it cannot be had (an unchecked code citation).
 SourceText = Callable[[str], str | None]
+
+# A claim about what the sources lack ("the docs do not say", "no team note covers this"): no
+# cited text can show an absence, so it is not judged (verdict "absence", owner's decision
+# 2026-11-18). A claim that the subject lacks something ("the function has no status check") is
+# judged: the cited code can show it. Matched 103 of 1,589 stored dev answer sentences.
+_SOURCES = (
+    r"(?:(?:indexed |cited |these |the |our )?(?:sources?|documentation|docs|documents?|"
+    r"(?:team |technical )?notes?|changelog|release notes|readme|repository|code ?base|"
+    r"application code|code itself|graph))"
+)
+_SAY = (
+    r"(?:show|say|state|mention|describe|cover|contain|include|spell out|specify|document|"
+    r"record|confirm|list|address|explain|give|tell)"
+)
+_ABSENCE = re.compile(
+    "|".join(
+        [
+            rf"\b{_SOURCES}\b[^.;:]{{0,40}}?\b(?:do|does|did)(?:n't| not)\b[^.;:]{{0,25}}?\b{_SAY}",
+            r"\b(?:no|none of the) (?:team |technical )?(?:notes?|documents?|docs|documentation|"
+            r"sources?)\b[^.;:]{0,40}?\b(?:cover|mention|address|say|describe|state|discuss|"
+            r"apply|about|on this|was found|were found)",
+            rf"\b(?:not|nothing is|is not) (?:shown|stated|mentioned|described|documented|covered|"
+            rf"recorded) (?:in|by|anywhere in) {_SOURCES}",
+            r"\bI (?:found|could find|did not find|didn't find) no\b|\bcould not find\b",
+            rf"\bthe only (?:place|mention|reference) (?:in |where )?{_SOURCES}?",
+        ]
+    ),
+    re.IGNORECASE,
+)
+
+
+def is_absence_claim(text: str) -> bool:
+    """Whether a sentence states what the sources do not show (see _ABSENCE)."""
+    return bool(_ABSENCE.search(text))
 
 
 def _verdict(answer: Any, threshold: float) -> tuple[str, str | None, float | None]:
@@ -54,10 +89,11 @@ async def verify_answer(
     decider: DecisionProvider | None, result: QueryResult, source_text: SourceText
 ) -> QueryResult:
     """The result with extra["verification"]: one entry per claim sentence with its citations
-    and verdict (verified, contradicted, unverified; unsupported without a citation; unchecked
-    when no cited text could be had), the verdict counts, and the provider. A decision that
-    is not from REPLACING_PROVIDERS is recorded with reason "uncalibrated provider". An answer
-    that abstained, or no decider, is not verified."""
+    and verdict (verified, contradicted, unverified; absence for a claim about what the sources
+    lack; unsupported without a citation; unchecked when no cited text could be had), the
+    verdict counts, and the provider. A decision that is not from REPLACING_PROVIDERS is
+    recorded with reason "uncalibrated provider". An answer that abstained, or no decider, is
+    not verified."""
     if decider is None or not result.found:
         return result
     q = question("sentence_relation")
@@ -66,7 +102,9 @@ async def verify_answer(
     sent: list[tuple[int, str, str]] = []
     for i, (text, citations, origins) in enumerate(sentences):
         entry: dict[str, Any] = {"text": text, "citations": citations, "origins": origins}
-        if not citations:
+        if is_absence_claim(text):
+            entry["verdict"] = "absence"
+        elif not citations:
             entry["verdict"] = "unsupported"
         else:
             parts = await asyncio.to_thread(lambda cs=citations: [source_text(c) for c in cs])

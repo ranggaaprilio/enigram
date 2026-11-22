@@ -282,6 +282,14 @@ ada. `contradicted` ditampilkan sebagai `unverified`, verdict dari judge model t
 ditampilkan, dan jawaban gabungan kode+dokumen tidak diberi tanda. Human jangan dinyalakan
 sebelum datanya cukup.
 
+**Klaim ketiadaan tidak dinilai (keputusan pemilik 2026-11-19).** Kalimat yang menyatakan apa
+yang tidak ada di sumber ("the sources do not show", "no team note covers this") diberi verdict
+`absence`: tidak dikirim ke Jev, tidak diberi tanda, tidak dihitung sebagai `unsupported`.
+Ketiadaan tidak bisa ditunjukkan oleh teks yang dikutip, jadi kalimat ini selalu jatuh ke
+`unverified`. Kalimat tentang apa yang tidak dilakukan kode ("fungsi ini tidak mengecek status")
+tetap dinilai, karena kode yang dikutip bisa menunjukkannya. Pengenalnya pola teks
+(`verification.py`); di jawaban `dev` yang tersimpan ia menangkap 103 dari 1.589 kalimat.
+
 1. Jalankan `enigram golden answer --system <x> --split dev` dengan verifikasi menyala (hanya
    dicatat, jawaban tidak diubah).
 2. Bandingkan verdict per kalimat dengan label manusia grounded / tidak

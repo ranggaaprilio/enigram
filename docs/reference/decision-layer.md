@@ -95,6 +95,7 @@ those:
 | `contradicted` | `contradicts` |
 | `unverified` | `partly` (a main assertion of the sentence is not in the cited text), `says_nothing`, or `supports` below 0.5 |
 | `unsupported` | the sentence has no citation (not sent) |
+| `absence` | the sentence states what the sources do not show ("the docs do not say", "no team note covers this"): no cited text can show an absence (not sent, no mark) |
 | `unchecked` | no cited text could be had, such as an inline code citation on the documents path (not sent) |
 
 The answer never changes. By default the verdicts are recorded only; `VERIFY_BADGES` names the

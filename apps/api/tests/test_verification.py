@@ -6,6 +6,7 @@ from code_fakes import FakeDecider, choice
 from enigram.application import verification
 from enigram.application.chat import message_json
 from enigram.application.verification import (
+    is_absence_claim,
     verification_counts,
     verification_line,
     verification_view,
@@ -196,3 +197,52 @@ async def test_chat_message_and_counts_carry_the_view():
     assert verification_counts(view) == {"verified": 1, "checked": 3, "unsupported": 1}
     assert verification_line(view) == "Verified: 1 of 3 cited sentences; 1 without a source"
     assert verification_line(None) == "" and verification_counts(None) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The sources do not show the gateway configuration [1].",
+        "No team note covers first-time social login note#51.",
+        "The docs don't spell out the URL path [2].",
+        "The 5 MB cap is not described in the documentation [3].",
+        "The documents I found do not describe the paging rules.",
+        "I found no team note stating a separate rule.",
+        "The only place the product documentation ties these is the note [3].",
+    ],
+)
+def test_claims_about_what_the_sources_lack_are_absence(text):
+    assert is_absence_claim(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "That function contains no check of `user.status` at all [1].",
+        "The only exceptions are an unverified email and a missing id [1].",
+        "The guard does not throw; it returns false [1].",
+        "No refresh token is returned [1].",
+    ],
+)
+def test_claims_about_the_subject_are_not_absence(text):
+    assert not is_absence_claim(text)
+
+
+async def test_absence_claims_are_not_sent():
+    answer = (
+        "Logins are checked here [1] [document]. "
+        "The sources do not show the error body [1] [document]. "
+        "No team note covers this [unsupported]."
+    )
+    decider = _decider(choice("supports", supports=0.9))
+
+    result = await verify_answer(decider, _result(answer), TEXTS.get)
+
+    v = result.extra["verification"]
+    assert [s["verdict"] for s in v["sentences"]] == ["verified", "absence", "absence"]
+    assert v["counts"] == {"absence": 2, "verified": 1}
+    [(state, _)] = decider.calls
+    assert list(state["claims"]) == ["0"]
+    view = verification_view(result.answer, result.extra, ("document",))
+    assert view["marks"] == ["verified", None, None]
+    assert (view["checked"], view["unsupported"]) == (1, 0)
