@@ -69,11 +69,11 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.8"  # bump when tool output, the prompt or the guard changes: busts the cache;
+AGENT_VERSION = "3.9"  # bump when tool output, the prompt or the guard changes: busts the cache;
 # 3.3: search_code fuses vector hits; 3.5: the loop runs on Pydantic AI; 3.6: citations that
 # point at nothing are removed, tags are never the model's, short sentences are tagged;
 # 3.7: sentence_relation has a `partly` answer and threshold 0.5; 3.8: the prompts name
-# JavaScript repos too (CODE_JAVASCRIPT)
+# JavaScript repos too (CODE_JAVASCRIPT); 3.9: absence claims not judged
 AGENT_MAX_REPOS = 3
 # Lines read around a cited range when verifying its sentence: a claim about behaviour often
 # needs the code around the cited lines (plans/answer-verification.md, V2; tune on the dev split).

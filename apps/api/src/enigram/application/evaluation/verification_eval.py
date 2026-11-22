@@ -109,13 +109,21 @@ def render_verification(data: dict[str, Any] | None) -> list[str]:
             f"provider: {providers}. Judged sentences without a human label: "
             f"{s['judged_without_label']}.",
             "",
-            "| Origin | verified | unverified | contradicted | unsupported | unchecked | failed |",
-            "|---|---|---|---|---|---|---|",
+            "| Origin | verified | unverified | contradicted | unsupported | absence | unchecked "
+            "| failed |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         for origin, c in s["verdicts"].items():
             cells = " | ".join(
                 str(c.get(k, 0))
-                for k in ("verified", "unverified", "contradicted", "unsupported", "unchecked")
+                for k in (
+                    "verified",
+                    "unverified",
+                    "contradicted",
+                    "unsupported",
+                    "absence",
+                    "unchecked",
+                )
             )
             lines.append(f"| {origin} | {cells} | {c.get('failed', 0)} |")
         lines += [
