@@ -105,9 +105,11 @@ of its body) and every summary is embedded with `CODE_EMBED_MODEL` (default `voy
 `CODE_EMBED_DIM` 1024) into the `code_embeddings` table, once per text hash. The job result's
 `code.embeddings` counts `embedded`, `cached` and `pruned`.
 
-The agent's `search_code` fuses these vector hits with full-text hits (reciprocal rank fusion),
-so a question that shares no words with the code still finds it. With no vectors, or when the
-embedding call fails, it searches full text only. Changing `CODE_EMBED_DIM` needs
+The agent's `search_code` lists the symbols the question names exactly (`getWebsiteStats`,
+`AuthService.login`) first, then the nearest vector hits, so a question that shares no words with
+the code still finds it. Full-text hits are not mixed in: on the umami retrieval set they pushed
+right vector hits out of the top 6 (plans/retrieval-accuracy.md, R1). With no vectors, or when
+the embedding call fails, it searches full text only. Changing `CODE_EMBED_DIM` needs
 `DROP TABLE code_embeddings` and a re-index (the API refuses to start otherwise).
 
 ### How the code agent answers
