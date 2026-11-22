@@ -8,12 +8,13 @@ from hashlib import sha256
 from typing import Any
 
 from enigram.application.ports import CodeEmbedder, CodeGraphRepository
-from enigram.domain.code import NAME_MATCH_RANK, CodeSymbol
+from enigram.domain.code import IDENTIFIER, NAME_MATCH_RANK, CodeSymbol
 
 log = logging.getLogger(__name__)
 
 EMBED_BODY_CHARS = 2000  # head of a symbol body; signature and decorators carry the rest
 RRF_K = 60  # reciprocal rank fusion constant (Cormack et al. 2009)
+NAME_POOL = 5  # text hits fetched per search_code hit, so the exact name is among the matches
 SAVE_BATCH = 128  # one Voyage batch per save
 
 
@@ -54,13 +55,27 @@ async def search_ranking(
     vector: list[float] | None = None,
     model: str = "",
 ) -> tuple[list[tuple[str, float]], int]:
-    """search_code's ranking of one repository: full text (bodies included), fused with the
-    vector ranks when `vector` is given. Returns the ranking and the number of vector hits."""
-    ranked = await graph_repo.search(repo_id, query, limit, bodies=True)
+    """search_code's ranking of one repository and the number of vector hits. Without a vector:
+    the full-text ranking. With one: the symbols the question names exactly, then the vector
+    ranking. Fusing the full text in pushed right vector hits out of the top `limit` (umami set:
+    recall@6 0.674 -> 0.779, MRR@20 0.494 -> 0.772; plans/retrieval-accuracy.md, R1)."""
     if vector is None:
-        return ranked, 0
+        return await graph_repo.search(repo_id, query, limit, bodies=True), 0
+    # More text hits than `limit`: copies of a name (a generated client's method, an MCP tool)
+    # sort before src/ by id and would crowd the exactly named symbol out.
+    text = await graph_repo.search(repo_id, query, limit * NAME_POOL, bodies=True)
     near = await graph_repo.search_vectors(repo_id, vector, model, limit)
-    return rank_search(ranked, near, limit), len(near)
+    names = set(IDENTIFIER.findall(query))
+    pinned = [i for i, rank in text if rank >= NAME_MATCH_RANK and _named(i, names)]
+    rest = [i for i, _ in near if i not in pinned]
+    return [(i, 1.0 / p) for p, i in enumerate([*pinned, *rest][:limit], 1)], len(near)
+
+
+def _named(symbol_id: str, names: set[str]) -> bool:
+    """Whether the question names the symbol exactly: `getWebsiteStats` or `Class.method`, not a
+    longer name that contains it (`getWebsiteStatsOperation`)."""
+    qualified = symbol_id.split("#", 1)[-1]
+    return qualified in names or qualified.rsplit(".", 1)[-1] in names
 
 
 async def embed_repo(

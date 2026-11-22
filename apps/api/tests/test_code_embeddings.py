@@ -5,7 +5,13 @@ import pytest
 from code_fakes import FakeCodeGraph, FakeEmbedder, fixture_graph
 
 from enigram.adapters.driven.voyage_embedding import VOYAGE_MAX_BATCH, VoyageCodeEmbedder
-from enigram.application.code_embeddings import embed_repo, fuse_ranks, rank_search, symbol_text
+from enigram.application.code_embeddings import (
+    embed_repo,
+    fuse_ranks,
+    rank_search,
+    search_ranking,
+    symbol_text,
+)
 from enigram.domain.budget import BudgetExceeded, metered
 from enigram.domain.code import FlowSummary
 from enigram.domain.errors import EnigramError
@@ -102,6 +108,31 @@ def test_rank_search_pins_name_matches_and_scores_by_position():
     assert ranked == [("exact", 1.0), ("a", 0.5), ("b", 1 / 3)]
     # A repository without embeddings scores its first hit as high as one with them.
     assert rank_search([("x", 0.2)], [], 3) == [("x", 1.0)]
+
+
+async def test_search_ranking_pins_exact_names_then_follows_the_vectors():
+    graph, embedder = _graph(), FakeEmbedder()
+    await embed_repo(embedder, graph, 1)
+    query = "What does SqlUserRepo load from the database?"
+    vector = (await embedder.embed([query], "query"))[0]
+    near = await graph.search_vectors(1, vector, embedder.model, 3)
+
+    ranked, hits = await search_ranking(graph, 1, query, 3, vector, embedder.model)
+
+    ids = [i for i, _ in ranked]
+    # SqlUserRepo.load also matches the name but is not named exactly: it is not pinned.
+    assert ids[0] == "src/repo.ts#SqlUserRepo"
+    assert ids[1:] == [i for i, _ in near if i != ids[0]][:2]  # then the vector order
+    assert [s for _, s in ranked] == [1.0, 0.5, 1 / 3] and hits == len(near)
+
+
+async def test_search_ranking_without_a_vector_is_the_full_text_ranking():
+    graph = _graph()
+    query = "Finds a user"
+
+    ranked, hits = await search_ranking(graph, 1, query, 3)
+
+    assert ranked == await graph.search(1, query, 3, bodies=True) and hits == 0
 
 
 class _Client:
