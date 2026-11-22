@@ -269,6 +269,24 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
 - Per soal (recall@6): 9 membaik (u02, u07, u08, u12, u15, u17, u21, u27, u33), 0 memburuk.
 - Laporan: `data/reports/retrieval-20261122-122410.md`.
 
+**Agent dengan R1 pada 43 soal** (`answers-enigram-agent-20261122-124859`, DeepSeek,
+`data/reports/retrieval-20261122-124956.md`). Baseline agent untuk fase berikutnya; tidak ada run
+sebelum R1 (keputusan pemilik), dan benar-salah jawaban belum dinilai.
+
+| Metrik | Nilai |
+|---|---|
+| Evidence dibaca agent | 0,907 |
+| Evidence dikutip agent | 0,798 |
+| Kutipan valid | 223/223 (43/43 jawaban) |
+| Kalimat tanpa kutipan | 36 |
+| Token | 1.030.318 (rata-rata 24k, median 14k, maks 118k per soal) |
+| Tool call per soal | 8,1 (read_file 179, search_code 80, grep 39, find_symbol 33, entrypoint_flow 16) |
+| Latensi p50 / maks | 8,9 / 24,1 detik |
+
+- 0 error, 0 abstain.
+- Evidence terlewat atau tidak dikutip di 15 soal. Terburuk u23 (revenue: 1 dari 3 dibaca, 0
+  dikutip; `search_code` juga 0). u28 dan u29 membaca evidence tapi mengutip baris lain.
+
 ### R0 baseline (2026-11-22)
 
 **Kode, split `dev`** (`data/reports/retrieval-20261122-093232.md`, golden `acfec67e`,
