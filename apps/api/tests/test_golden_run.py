@@ -155,8 +155,8 @@ def _fake_graph_deps(deps, graph):
 
 
 @pytest.mark.usefixtures("fake_repo")
-def test_select_questions_filters_and_locks_verdict(cfg, tmp_path):
-    questions = golden_run.load_golden_checked(cfg, _code_set(tmp_path)).questions
+async def test_select_questions_filters_and_locks_verdict(cfg, deps, tmp_path):
+    questions = (await golden_run.load_golden_checked(cfg, deps, _code_set(tmp_path))).questions
 
     dev = select_questions(questions, split="dev", categories=golden_run.CODE_SYSTEM_CATEGORIES)
     assert [q.id for q in dev] == ["b01"]  # a01 needs Phase 2 annotations

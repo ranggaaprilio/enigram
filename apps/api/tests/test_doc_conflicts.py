@@ -9,6 +9,7 @@ from code_fakes import (
     fixture_graph,
     noul,
 )
+from manifest_files import file_state, save_manifest
 
 from enigram.application.doc_conflicts import (
     CANDIDATES,
@@ -17,7 +18,6 @@ from enigram.application.doc_conflicts import (
     detect_doc_conflicts,
     repo_books,
 )
-from enigram.application.indexing import save_manifest
 from enigram.domain.errors import EnigramError
 
 URL = "https://github.com/org/app"
@@ -148,7 +148,13 @@ async def test_detect_links_then_stores_the_conflict(cfg, world):
     decider = FakeDecider(answers={"same": _same_for_find, "conflict": _conflict_for_find})
 
     report = await detect_doc_conflicts(
-        cfg, graph, conflicts, decider, FakeEmbedder(), await graph.get_repo(URL, None)
+        cfg,
+        graph,
+        conflicts,
+        decider,
+        FakeEmbedder(),
+        await graph.get_repo(URL, None),
+        state=file_state(cfg),
     )
 
     assert {k: report[k] for k in ("books", "entities", "linked", "conflicts", "failed")} == {
@@ -185,9 +191,11 @@ async def test_an_unlinked_pair_is_still_checked_for_a_conflict(cfg, world):
 
     repo = await graph.get_repo(URL, None)
     dry = await detect_doc_conflicts(
-        cfg, graph, conflicts, decider, None, repo, only=["User Lookup"]
+        cfg, graph, conflicts, decider, None, repo, only=["User Lookup"], state=file_state(cfg)
     )
-    report = await detect_doc_conflicts(cfg, graph, conflicts, decider, None, repo)
+    report = await detect_doc_conflicts(
+        cfg, graph, conflicts, decider, None, repo, state=file_state(cfg)
+    )
 
     # dry run: the bridge is asked and does not gate
     assert (dry["linked"], dry["conflicts"]) == (0, 1)
@@ -203,7 +211,13 @@ async def test_an_unlinked_pair_is_still_checked_for_a_conflict(cfg, world):
 async def test_decider_failure_is_counted_not_raised(cfg, world):
     graph, conflicts = world
     report = await detect_doc_conflicts(
-        cfg, graph, conflicts, FakeDecider(error="jev down"), None, await graph.get_repo(URL, None)
+        cfg,
+        graph,
+        conflicts,
+        FakeDecider(error="jev down"),
+        None,
+        await graph.get_repo(URL, None),
+        state=file_state(cfg),
     )
     assert (report["failed"], report["conflicts"]) == (PAIRS, 0)
 
@@ -217,6 +231,7 @@ async def test_embedder_failure_falls_back_to_full_text(cfg, world):
         FakeDecider(),
         FakeEmbedder(error="voyage down"),
         await graph.get_repo(URL, None),
+        state=file_state(cfg),
     )
     assert report["fts_only"] is True and report["pairs"] == PAIRS
 
@@ -233,6 +248,7 @@ async def test_only_is_a_dry_run_with_items(cfg, world):
         None,
         await graph.get_repo(URL, None),
         only=["User Lookup", "Nope"],
+        state=file_state(cfg),
     )
 
     assert conflicts.replaced == []
@@ -249,10 +265,10 @@ async def test_detect_needs_a_decider_and_documents(cfg, world):
     graph, conflicts = world
     repo = await graph.get_repo(URL, None)
     with pytest.raises(EnigramError, match="decision layer"):
-        await detect_doc_conflicts(cfg, graph, conflicts, None, None, repo)
+        await detect_doc_conflicts(cfg, graph, conflicts, None, None, repo, state=file_state(cfg))
     with pytest.raises(EnigramError, match="No documents indexed from .*@v9"):
         await detect_doc_conflicts(
-            cfg, graph, conflicts, FakeDecider(), None, {**repo, "ref": "v9"}
+            cfg, graph, conflicts, FakeDecider(), None, {**repo, "ref": "v9"}, state=file_state(cfg)
         )
 
 
@@ -260,7 +276,7 @@ async def test_conflicts_view(cfg, world):
     graph, conflicts = world
     decider = FakeDecider(answers={"same": _same_for_find, "conflict": _conflict_for_find})
     await detect_doc_conflicts(
-        cfg, graph, conflicts, decider, None, await graph.get_repo(URL, None)
+        cfg, graph, conflicts, decider, None, await graph.get_repo(URL, None), state=file_state(cfg)
     )
     notes = FakeAnnotations()
     common = {"text": "t", "author": "w", "owner": "w", "status": "verified", "conflict": True}

@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 
+from manifest_files import file_state, save_manifest
+
 from enigram.application.documents import documents_overview
-from enigram.application.indexing import save_manifest
 from enigram.domain.job import Job
 
 NOW = datetime(2026, 11, 22, tzinfo=UTC)
@@ -28,6 +29,6 @@ async def test_a_repository_sync_is_not_listed_as_a_document(cfg):
         ]
     )
 
-    docs = await documents_overview(cfg, jobs)
+    docs = await documents_overview(cfg, file_state(cfg), jobs)
 
     assert [(d["book"], d["status"]) for d in docs] == [("notes", "running"), ("paper", "indexed")]

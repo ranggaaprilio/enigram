@@ -78,12 +78,11 @@ async def test_load_graph_without_index_raises(cfg):
 async def test_build_report_writes_md_json_and_review(cfg):
     cfg.rag_dir.mkdir(parents=True)
     nx.write_graphml(_graph(), cfg.rag_dir / "graph_chunk_entity_relation.graphml")
-    index.save_manifest(
-        cfg,
-        {"books": {"book-a": {"status": "indexed", "pages": 10, "chunks": 4, "parse_secs": 5.0}}},
-    )
+    manifest = {
+        "books": {"book-a": {"status": "indexed", "pages": 10, "chunks": 4, "parse_secs": 5.0}}
+    }
 
-    md_path = report.build_report(cfg, await load_graph(cfg))
+    md_path = report.build_report(cfg, await load_graph(cfg), manifest)
 
     data = json.loads(md_path.with_suffix(".json").read_text())
     assert data["graph"]["entities"] == 4

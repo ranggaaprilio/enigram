@@ -35,6 +35,7 @@ from enigram.application.evaluation.golden import (
     GoldenSet,
     check_golden,
     checkout_pinned,
+    golden_chunks,
 )
 from enigram.application.files import atomic_write_text, file_sha256
 from enigram.application.ports import (
@@ -92,10 +93,11 @@ def _item(q: GoldenQuestion) -> dict[str, Any]:
     }
 
 
-def load_golden_checked(cfg: Config, golden_path: Path) -> GoldenSet:
+async def load_golden_checked(cfg: Config, deps: Deps, golden_path: Path) -> GoldenSet:
     """The golden set resolved against the index or its pinned repository; refuses a set that
     still has problems."""
-    golden, problems = check_golden(cfg, golden_path)
+    chunks = await golden_chunks(cfg, deps, golden_path)
+    golden, problems = check_golden(cfg, golden_path, chunks=chunks)
     if problems:
         raise EnigramError("Golden set has problems; run `enigram golden check` first")
     if not golden.questions:
@@ -103,10 +105,10 @@ def load_golden_checked(cfg: Config, golden_path: Path) -> GoldenSet:
     return golden
 
 
-def load_questions(
-    cfg: Config, golden_path: Path, limit: int | None = None
+async def load_questions(
+    cfg: Config, deps: Deps, golden_path: Path, limit: int | None = None
 ) -> list[GoldenQuestion]:
-    questions = load_golden_checked(cfg, golden_path).questions
+    questions = (await load_golden_checked(cfg, deps, golden_path)).questions
     return questions[:limit] if limit else questions
 
 
@@ -403,7 +405,7 @@ async def run_golden(
 ) -> GoldenRun:
     if system not in SYSTEMS:
         raise EnigramError(f"system must be one of {SYSTEMS}, got {system!r}")
-    golden = load_golden_checked(cfg, golden_path)
+    golden = await load_golden_checked(cfg, deps, golden_path)
     if system in CODE_SYSTEMS:
         if golden.repo is None:
             raise EnigramError(f"{system} answers a code golden set (one with `repo:`)")

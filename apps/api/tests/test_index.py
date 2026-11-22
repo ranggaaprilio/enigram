@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from manifest_files import file_state, load_manifest, save_manifest
 
 from enigram.adapters.driven import lightrag_engine
 from enigram.adapters.driven.lightrag_engine import LightRagEngine
@@ -69,13 +70,13 @@ async def test_run_index_returns_early_without_llm_when_up_to_date(cfg, deps, tm
     pdf.write_bytes(b"x")
     manifest = {"books": {"p": {"status": "indexed", "sha256": file_sha256(pdf)}}}
     index.guard_chunk_settings(cfg, manifest)
-    index.save_manifest(cfg, manifest)
+    save_manifest(cfg, manifest)
 
     async def no_llm():
         raise AssertionError("check_llm must not run when nothing changed")
 
     deps.check_llm = no_llm
-    run = await index.run_index(cfg, deps, folder)
+    run = await index.run_index(cfg, deps, file_state(cfg), folder)
 
     assert run.up_to_date == ["p"]
     assert run.books == {}
@@ -141,11 +142,11 @@ def test_list_sources_finds_pdf_and_markdown(tmp_path):
     ]
 
 
-def test_load_manifest_reports_corruption(cfg):
+async def test_load_manifest_reports_corruption(cfg):
     cfg.manifest_path.parent.mkdir(parents=True)
     cfg.manifest_path.write_text('{"books": {')
     with pytest.raises(EnigramError, match="corrupt"):
-        index.load_manifest(cfg)
+        await file_state(cfg).load_manifest()
 
 
 def test_atomic_write_text_leaves_no_temp_file(tmp_path):
@@ -229,7 +230,7 @@ def test_guard_llm_model_postgres_trusts_manifest(pg_cfg):
 def test_guard_storage_rejects_file_manifest_on_postgres(pg_cfg):
     # A manifest from before the storage was recorded describes a file index.
     manifest = {"books": {"p": {"status": "indexed"}}}
-    with pytest.raises(EnigramError, match="move .* aside to re-index"):
+    with pytest.raises(EnigramError, match="delete them to re-index"):
         index.guard_storage(pg_cfg, manifest)
 
 
@@ -254,15 +255,15 @@ async def test_run_index_rejects_storage_switch_before_skipping_up_to_date(pg_cf
     folder.mkdir()
     doc = folder / "p.md"
     doc.write_text("# P\n")
-    index.save_manifest(pg_cfg, {"books": {"p": {"status": "indexed", "sha256": file_sha256(doc)}}})
-    with pytest.raises(EnigramError, match="describes an index in"):
-        await index.run_index(pg_cfg, build_deps(pg_cfg), folder)
+    save_manifest(pg_cfg, {"books": {"p": {"status": "indexed", "sha256": file_sha256(doc)}}})
+    with pytest.raises(EnigramError, match="describe an index in"):
+        await index.run_index(pg_cfg, build_deps(pg_cfg), file_state(pg_cfg), folder)
 
 
 async def test_insert_book_inserts_all_when_doc_status_returns_empty(cfg):
     # PGDocStatusStorage.get_by_ids returns [] (not [None, ...]) when no id is stored yet.
     chunks = [_chunk(1), _chunk(2)]
-    index.write_chunks_jsonl(index._chunks_path(cfg, "p"), chunks)
+    await file_state(cfg).write_chunks("p", chunks)
 
     class DocStatus:
         async def get_by_ids(self, ids):
@@ -276,7 +277,7 @@ async def test_insert_book_inserts_all_when_doc_status_returns_empty(cfg):
             self.inserted.extend(ids)
 
     rag = Rag()
-    counts = await index._insert_book(LightRagEngine(rag), cfg, "p")
+    counts = await index._insert_book(LightRagEngine(rag), file_state(cfg), "p")
     assert rag.inserted == ["p-c00001", "p-c00002"]
     assert counts["missing"] == 2
 
@@ -314,9 +315,9 @@ def _book_files(cfg, book, suffix=".pdf"):
     ]
     for path in paths:
         path.write_text("x")
-    manifest = index.load_manifest(cfg)
+    manifest = load_manifest(cfg)
     manifest["books"][book] = {"status": "indexed", "chunks": 2}
-    index.save_manifest(cfg, manifest)
+    save_manifest(cfg, manifest)
     return paths
 
 
@@ -325,18 +326,18 @@ async def test_delete_document_removes_index_entries_files_and_manifest_entry(cf
     kept = _book_files(cfg, "paper-c1", suffix=".md")  # a name that extends "paper"
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"])
 
-    result = await index.delete_document(cfg, LightRagEngine(rag), "paper")
+    result = await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), "paper")
 
     assert rag.deleted == ["paper-c00000", "paper-c00001"]
     assert result == {
         "book": "paper",
         "documents_deleted": 2,
         "already_gone": 0,
-        "files_deleted": [p.name for p in gone],
+        "files_deleted": [p.name for p in gone[1:]],  # chunks go with the state
     }
     assert not any(p.exists() for p in gone)
     assert all(p.exists() for p in kept)
-    assert list(index.load_manifest(cfg)["books"]) == ["paper-c1"]
+    assert list(load_manifest(cfg)["books"]) == ["paper-c1"]
 
 
 async def test_document_ids_use_an_anchored_escaped_pattern():
@@ -352,10 +353,10 @@ async def test_delete_document_resumes_after_an_interrupted_run(cfg):
     _book_files(cfg, "paper")
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"], {"paper-c00000": "not_found"})
 
-    result = await index.delete_document(cfg, LightRagEngine(rag), "paper")
+    result = await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), "paper")
 
     assert (result["documents_deleted"], result["already_gone"]) == (1, 1)
-    assert "paper" not in index.load_manifest(cfg)["books"]
+    assert "paper" not in load_manifest(cfg)["books"]
 
 
 async def test_delete_document_failure_keeps_files_and_marks_deleting(cfg):
@@ -363,20 +364,22 @@ async def test_delete_document_failure_keeps_files_and_marks_deleting(cfg):
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"], {"paper-c00001": "not_allowed"})
 
     with pytest.raises(EnigramError, match="paper-c00001: paper-c00001 not_allowed"):
-        await index.delete_document(cfg, LightRagEngine(rag), "paper")
+        await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), "paper")
 
     assert all(p.exists() for p in paths)
-    assert index.load_manifest(cfg)["books"]["paper"]["status"] == "deleting"
+    assert load_manifest(cfg)["books"]["paper"]["status"] == "deleting"
 
 
 async def test_delete_document_unknown_book(cfg):
     with pytest.raises(EnigramError, match="No document 'ghost'"):
-        await index.delete_document(cfg, LightRagEngine(FakeDeleteRag([])), "ghost")
+        await index.delete_document(
+            cfg, LightRagEngine(FakeDeleteRag([])), file_state(cfg), "ghost"
+        )
 
 
 async def test_delete_document_without_manifest_entry_still_deletes_its_ids(cfg):
     rag = FakeDeleteRag(["orphan-c00000"])
 
-    result = await index.delete_document(cfg, LightRagEngine(rag), "orphan")
+    result = await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), "orphan")
 
     assert (rag.deleted, result["files_deleted"]) == (["orphan-c00000"], [])

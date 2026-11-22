@@ -7,8 +7,12 @@ from typing import Any
 from enigram.application.budget import today
 from enigram.application.code_agent import repo_name
 from enigram.application.documents import documents_overview
-from enigram.application.indexing import load_manifest
-from enigram.application.ports import CodeGraphRepository, DashboardStats, JobRepository
+from enigram.application.ports import (
+    CodeGraphRepository,
+    DashboardStats,
+    IndexState,
+    JobRepository,
+)
 from enigram.config import Config
 from enigram.domain.access import at_least
 
@@ -20,6 +24,7 @@ async def dashboard(
     stats: DashboardStats,
     graph: CodeGraphRepository,
     store: JobRepository,
+    state: IndexState,
     role: str,
     days: int,
 ) -> dict[str, Any]:
@@ -55,7 +60,7 @@ async def dashboard(
         for r in await graph.list_repos()
     ]
     documents: dict[str, int] = {}
-    for doc in await documents_overview(cfg, store):
+    for doc in await documents_overview(cfg, state, store):
         status = doc["status"] or "unknown"
         documents[status] = documents.get(status, 0) + 1
 
@@ -162,20 +167,20 @@ def _repo_row(
     }
 
 
-def _documents_per_repo(cfg: Config) -> dict[str, int]:
+async def _documents_per_repo(state: IndexState) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for entry in load_manifest(cfg)["books"].values():
+    for entry in (await state.load_manifest())["books"].values():
         if url := entry.get("repo"):
             counts[url] = counts.get(url, 0) + 1
     return counts
 
 
 async def repo_rows(
-    cfg: Config, graph: CodeGraphRepository, stats: DashboardStats
+    cfg: Config, graph: CodeGraphRepository, stats: DashboardStats, state: IndexState
 ) -> list[dict[str, Any]]:
     """Every repository of the workspace with its commit, index, remote and size."""
     sizes = await stats.repo_sizes()
-    documents = _documents_per_repo(cfg)
+    documents = await _documents_per_repo(state)
     rows = []
     for repo in await graph.list_repos():
         runs = [index_run(j) for j in await stats.index_jobs(repo["url"], repo["ref"], 5)]
@@ -185,13 +190,17 @@ async def repo_rows(
 
 
 async def repo_detail(
-    cfg: Config, graph: CodeGraphRepository, stats: DashboardStats, repo: dict[str, Any]
+    cfg: Config,
+    graph: CodeGraphRepository,
+    stats: DashboardStats,
+    state: IndexState,
+    repo: dict[str, Any],
 ) -> dict[str, Any]:
     """One repository: its row, the last HISTORY index runs, the quality of its graph and
     summaries (its index report) and what the last run did to the notes on it."""
     runs = [index_run(j) for j in await stats.index_jobs(repo["url"], repo["ref"], HISTORY)]
     sizes = (await stats.repo_sizes()).get(repo["id"], {"files": 0, "symbols": 0, "entrypoints": 0})
-    documents = _documents_per_repo(cfg).get(repo["url"], 0)
+    documents = (await _documents_per_repo(state)).get(repo["url"], 0)
     report = repo["report"] or {}
     last_done = next((r for r in runs if r["status"] == "done"), None)
     return {

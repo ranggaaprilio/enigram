@@ -6,7 +6,7 @@ from typing import Any
 
 from enigram.application.code_agent import repo_name
 from enigram.application.documents import documents_overview
-from enigram.application.ports import CodeGraphRepository, JobRepository
+from enigram.application.ports import CodeGraphRepository, IndexState, JobRepository
 from enigram.config import Config
 from enigram.domain.code import CodeSymbol, shown_summary
 
@@ -54,6 +54,7 @@ async def find_targets(
     cfg: Config,
     graph: CodeGraphRepository,
     store: JobRepository,
+    state: IndexState,
     repos: list[dict[str, Any]],
     q: str,
 ) -> list[dict[str, Any]]:
@@ -101,7 +102,7 @@ async def find_targets(
     ]
     documents = [
         _row("document", "document", d["book"], d["title"] or d["book"], d["book"])
-        for d in await documents_overview(cfg, store)
+        for d in await documents_overview(cfg, state, store)
         if needle in d["book"].lower() or needle in (d["title"] or "").lower()
     ][:PER_GROUP]
     return features + symbols + entities + documents

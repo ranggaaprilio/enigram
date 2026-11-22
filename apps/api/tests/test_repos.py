@@ -6,8 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from manifest_files import file_state, load_manifest, save_manifest
 
-from enigram.application import indexing as index
 from enigram.application import repo_store
 from enigram.application import repo_sync as repos
 from enigram.application.files import file_sha256
@@ -159,9 +159,9 @@ def fake_sync(cfg, deps, monkeypatch):
     def fake_clone(url, ref, dest, token=None):
         _tree(dest, fake.tree)
 
-    async def fake_run_index(cfg, deps, folder, pages=None, only=None):
+    async def fake_run_index(cfg, deps, state, folder, pages=None, only=None):
         fake.indexed.append(only)
-        manifest = index.load_manifest(cfg)
+        manifest = load_manifest(cfg)
         run = IndexRun()
         for book in only:
             sha = file_sha256(folder / f"{book}.md")
@@ -171,7 +171,7 @@ def fake_sync(cfg, deps, monkeypatch):
                 continue
             manifest["books"][book] = {"status": "indexed", "sha256": sha}
             run.books[book] = manifest["books"][book]
-        index.save_manifest(cfg, manifest)
+        save_manifest(cfg, manifest)
         return run
 
     async def fake_clear():
@@ -182,12 +182,12 @@ def fake_sync(cfg, deps, monkeypatch):
         fake.opened += 1
         yield SimpleNamespace(clear_query_cache=fake_clear)
 
-    async def fake_delete(cfg, engine, book):
+    async def fake_delete(cfg, engine, state, book):
         fake.deleted.append(book)
         (cfg.books_dir / f"{book}.md").unlink(missing_ok=True)
-        manifest = index.load_manifest(cfg)
+        manifest = load_manifest(cfg)
         manifest["books"].pop(book, None)
-        index.save_manifest(cfg, manifest)
+        save_manifest(cfg, manifest)
 
     monkeypatch.setattr(repos, "clone", fake_clone)
     monkeypatch.setattr(repos, "run_index", fake_run_index)
@@ -205,38 +205,38 @@ def fake_sync(cfg, deps, monkeypatch):
 async def test_index_repo_indexes_and_tags_every_markdown_file(cfg, deps, fake_sync):
     fake_sync.tree = {"README.md": "# Readme", "docs/guide.md": "# Guide"}
 
-    result = await repos.index_repo(cfg, deps, URL, "main")
+    result = await repos.index_repo(cfg, deps, URL, "main", state=file_state(cfg))
 
     names = ["org-handbook--README", "org-handbook--docs--guide"]
     assert fake_sync.indexed == [names]
     assert (result["files"], result["indexed"], result["deleted"]) == (2, names, [])
     assert fake_sync.opened == 0  # nothing to delete: no index needed
-    entry = index.load_manifest(cfg)["books"]["org-handbook--docs--guide"]
+    entry = load_manifest(cfg)["books"]["org-handbook--docs--guide"]
     assert (entry["repo"], entry["repo_path"], entry["repo_ref"]) == (URL, "docs/guide.md", "main")
     assert (cfg.books_dir / "org-handbook--README.md").read_text() == "# Readme"
 
 
 async def test_index_repo_resync_reindexes_changed_and_deletes_removed(cfg, deps, fake_sync):
     fake_sync.tree = {"README.md": "# Readme", "a.md": "# A", "b.md": "# B"}
-    await repos.index_repo(cfg, deps, URL)
+    await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
     fake_sync.tree = {"README.md": "# Readme", "a.md": "# A, revised"}
-    result = await repos.index_repo(cfg, deps, URL)
+    result = await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
     assert fake_sync.deleted == ["org-handbook--b", "org-handbook--a"]
     assert (result["deleted"], result["reindexed"]) == (["org-handbook--b"], ["org-handbook--a"])
     assert (result["indexed"], result["unchanged"]) == (["org-handbook--a"], 1)
     assert not (cfg.books_dir / "org-handbook--b.md").exists()
     assert (cfg.books_dir / "org-handbook--a.md").read_text() == "# A, revised"
-    assert "org-handbook--b" not in index.load_manifest(cfg)["books"]
+    assert "org-handbook--b" not in load_manifest(cfg)["books"]
 
 
 async def test_index_repo_never_overwrites_an_uploaded_document(cfg, deps, fake_sync):
-    index.save_manifest(cfg, {"books": {"org-handbook--README": {"status": "indexed"}}})
+    save_manifest(cfg, {"books": {"org-handbook--README": {"status": "indexed"}}})
     fake_sync.tree = {"README.md": "# Readme"}
 
     with pytest.raises(EnigramError, match="Documents not from"):
-        await repos.index_repo(cfg, deps, URL)
+        await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
     assert (fake_sync.deleted, fake_sync.indexed) == ([], [])
 
@@ -245,13 +245,13 @@ async def test_index_repo_without_markdown(cfg, deps, fake_sync):
     fake_sync.tree = {"main.py": "print()"}
 
     with pytest.raises(EnigramError, match="No Markdown or TypeScript"):
-        await repos.index_repo(cfg, deps, URL)
+        await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
 
 async def test_index_repo_markdown_only_skips_the_code_graph(cfg, deps, fake_sync):
     fake_sync.tree = {"README.md": "# Readme"}
 
-    result = await repos.index_repo(cfg, deps, URL)
+    result = await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
     assert result["code"] == {"skipped": "no tsconfig.json in the repository"}
     assert fake_sync.code == []
@@ -261,7 +261,9 @@ async def test_index_repo_typescript_only_indexes_code(cfg, deps, fake_sync):
     fake_sync.tree = {"tsconfig.json": "{}", "src/main.ts": "bootstrap();"}
     graph = object()
 
-    result = await repos.index_repo(cfg, deps, URL, "eval-v1", graph=graph, limit=2)
+    result = await repos.index_repo(
+        cfg, deps, URL, "eval-v1", graph=graph, limit=2, state=file_state(cfg)
+    )
 
     assert fake_sync.code == [(graph, URL, "eval-v1", 2, True)]  # inside the clone
     assert result["code"] == {
@@ -277,7 +279,7 @@ async def test_index_repo_typescript_only_indexes_code(cfg, deps, fake_sync):
 async def test_index_repo_indexes_markdown_and_code_from_one_clone(cfg, deps, fake_sync):
     fake_sync.tree = {"tsconfig.json": "{}", "README.md": "# Readme"}
 
-    result = await repos.index_repo(cfg, deps, URL, graph=object())
+    result = await repos.index_repo(cfg, deps, URL, graph=object(), state=file_state(cfg))
 
     assert len(fake_sync.code) == 1 and result["code"]["symbols"] == 3
     assert result["indexed"] == ["org-handbook--README"]
@@ -298,7 +300,7 @@ async def test_index_repo_reports_each_stage(cfg, deps, fake_sync, tree, graph, 
     async def on_stage(name, detail):
         heard.append((name, detail))
 
-    await repos.index_repo(cfg, deps, URL, graph=graph, on_stage=on_stage)
+    await repos.index_repo(cfg, deps, URL, graph=graph, on_stage=on_stage, state=file_state(cfg))
 
     assert [name for name, _ in heard] == stages
     assert heard[0][1] == {"stages": ["clone", "scan"]}  # before the scan, the rest is unknown
@@ -310,7 +312,7 @@ async def test_index_repo_typescript_needs_postgres(cfg, deps, fake_sync):
     fake_sync.tree = {"tsconfig.json": "{}", "README.md": "# Readme"}
 
     with pytest.raises(EnigramError, match="STORAGE_BACKEND=postgres"):
-        await repos.index_repo(cfg, deps, URL)
+        await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
     assert fake_sync.indexed == []
 
 
@@ -320,7 +322,7 @@ JS_TREE = {"package.json": "{}", "src/app.js": "x()", "README.md": "# Readme"}
 async def test_index_repo_javascript_needs_code_javascript(cfg, deps, fake_sync):
     fake_sync.tree = JS_TREE
 
-    result = await repos.index_repo(cfg, deps, URL, graph=object())
+    result = await repos.index_repo(cfg, deps, URL, graph=object(), state=file_state(cfg))
 
     assert result["code"] == {"skipped": "no tsconfig.json in the repository"}
     assert fake_sync.code == []
@@ -330,7 +332,7 @@ async def test_index_repo_indexes_javascript_with_code_javascript(cfg, deps, fak
     cfg = dataclasses.replace(cfg, code_javascript=True)
     fake_sync.tree = JS_TREE
 
-    result = await repos.index_repo(cfg, deps, URL, graph=object())
+    result = await repos.index_repo(cfg, deps, URL, graph=object(), state=file_state(cfg))
 
     assert len(fake_sync.code) == 1 and result["code"]["symbols"] == 3
     assert result["indexed"] == ["org-handbook--README"]
@@ -340,7 +342,7 @@ async def test_index_repo_javascript_without_postgres_still_syncs_markdown(cfg, 
     cfg = dataclasses.replace(cfg, code_javascript=True)
     fake_sync.tree = JS_TREE
 
-    result = await repos.index_repo(cfg, deps, URL)
+    result = await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
     assert "STORAGE_BACKEND=postgres" in result["code"]["skipped"]
     assert fake_sync.code == []
@@ -352,7 +354,9 @@ async def test_index_repo_typescript_wins_with_code_javascript(cfg, deps, fake_s
     fake_sync.tree = {**JS_TREE, "tsconfig.json": "{}"}
 
     with pytest.raises(EnigramError, match="Indexing a TypeScript repository"):
-        await repos.index_repo(cfg, deps, URL)  # no Postgres: the TypeScript rule, as before
+        await repos.index_repo(
+            cfg, deps, URL, state=file_state(cfg)
+        )  # no Postgres: the TypeScript rule, as before
 
 
 async def test_index_repo_javascript_only_without_postgres_fails(cfg, deps, fake_sync):
@@ -360,23 +364,25 @@ async def test_index_repo_javascript_only_without_postgres_fails(cfg, deps, fake
     fake_sync.tree = {"package.json": "{}", "src/app.js": "x()"}
 
     with pytest.raises(EnigramError, match="STORAGE_BACKEND=postgres"):
-        await repos.index_repo(cfg, deps, URL)
+        await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
 
 async def test_index_repo_names_javascript_when_nothing_is_found(cfg, deps, fake_sync):
     cfg = dataclasses.replace(cfg, code_javascript=True)
     fake_sync.tree = {"README.md": "# Readme"}
-    result = await repos.index_repo(cfg, deps, URL)
+    result = await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
     assert "package.json" in result["code"]["skipped"]
 
     fake_sync.tree = {"main.py": "print()"}
     with pytest.raises(EnigramError, match="No Markdown, TypeScript or JavaScript"):
-        await repos.index_repo(cfg, deps, URL)
+        await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
 
 async def test_index_repo_checks_the_url_again(cfg, deps, fake_sync):
     with pytest.raises(EnigramError, match="not in REPO_HOSTS"):
-        await repos.index_repo(cfg, deps, "https://intranet.local/org/handbook")
+        await repos.index_repo(
+            cfg, deps, "https://intranet.local/org/handbook", state=file_state(cfg)
+        )
 
 
 @pytest.mark.parametrize(

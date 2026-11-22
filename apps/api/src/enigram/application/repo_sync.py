@@ -18,12 +18,13 @@ from urllib.parse import urlsplit
 
 from enigram.application.code_index import SKIP_DIRS, index_code, is_js_repo, is_ts_repo
 from enigram.application.files import file_sha256
-from enigram.application.indexing import delete_document, load_manifest, run_index, save_manifest
+from enigram.application.indexing import delete_document, run_index
 from enigram.application.ports import (
     AnnotationRepository,
     CodeGraphRepository,
     DecisionProvider,
     Deps,
+    IndexState,
 )
 from enigram.application.repo_auth import auth_env, scrub
 from enigram.application.staleness import WORKER_ACTOR, expire_verify_by
@@ -224,6 +225,7 @@ async def index_repo(
     url: str,
     ref: str | None = None,
     *,
+    state: IndexState,
     graph: CodeGraphRepository | None = None,
     limit: int | None = None,
     notes: AnnotationRepository | None = None,
@@ -298,7 +300,7 @@ async def index_repo(
 
         if files:
             await stage("docs")
-            books = load_manifest(cfg)["books"]
+            books = (await state.load_manifest())["books"]
             foreign = [b for b in files if b in books and books[b].get("repo") != url]
             if foreign:
                 raise EnigramError(
@@ -313,7 +315,7 @@ async def index_repo(
                 # Only on a re-sync: a fresh deployment has no index to open.
                 async with deps.open_engine() as engine:
                     for book in [*removed, *changed]:
-                        await delete_document(cfg, engine, book)
+                        await delete_document(cfg, engine, state, book)
                     await engine.clear_query_cache()
 
             cfg.books_dir.mkdir(parents=True, exist_ok=True)
@@ -325,13 +327,13 @@ async def index_repo(
     statuses: dict[str, Any] = {}
     run = None
     if files:
-        run = await run_index(cfg, deps, cfg.books_dir, only=sorted(files))
+        run = await run_index(cfg, deps, state, cfg.books_dir, only=sorted(files))
         # After run_index, which rewrites the entries it indexes.
-        manifest = load_manifest(cfg)
+        manifest = await state.load_manifest()
         for book, rel in rel_paths.items():
             if entry := manifest["books"].get(book):
                 entry.update(repo=url, repo_path=rel, repo_ref=ref)
-        save_manifest(cfg, manifest)
+        await state.save_manifest(manifest)
         statuses = {b: e.get("status") for b, e in run.books.items()}
 
     log.info("[repo] %s: %d Markdown files, %d indexed", url, len(files), len(statuses))

@@ -1,6 +1,7 @@
 # API dan worker tanpa disk bersama
 
-Rencana dibuat 2026-11-22 dari peta kode saat ini. Belum ada fase yang dibangun.
+Rencana dibuat 2026-11-22 dari peta kode saat ini. S1 dan S3 dibangun 2026-11-22 (lihat
+bagiannya); fase lain belum.
 Path kode relatif ke `apps/api/src/enigram/`.
 
 ## Masalah
@@ -58,7 +59,7 @@ di-deploy di platform tanpa persistent disk yang bisa dipakai bersama.
 |---|---|---|---|
 | D1 | Targetnya apa? | (a) beberapa replika API, (b) platform tanpa persistent disk (Cloud Run, ECS Fargate), (c) keduanya | (c). Fase S1-S4 dibutuhkan keduanya; S5 hanya untuk throughput worker |
 | D2 | Di mana file sumber disimpan? | (a) S3-compatible (S3, GCS, MinIO lokal), (b) kolom `bytea` di Postgres | (a). PDF bisa puluhan MB; Postgres tetap kecil dan backup cepat |
-| D3 | Di mana chunk hasil parse disimpan? | (a) tabel Postgres, (b) object storage seperti file sumber | (a). Ukurannya kecil, dan delete atau re-insert tidak perlu unduh file |
+| D3 | Di mana chunk hasil parse disimpan? | (a) tabel Postgres, (b) object storage seperti file sumber | (a). Ukurannya kecil, dan delete atau re-insert tidak perlu unduh file. **Diputuskan (a)** saat S3 dikerjakan (2026-11-22) |
 | D4 | Bagaimana API membaca source kode? | (a) clone lokal di tiap pod API, dibuat saat pertama dipakai, (b) isi file disimpan di Postgres saat index, (c) volume RWX bersama (EFS, Filestore) | (a) dulu. Paling sedikit perubahan, dan `ensure_store` sudah ada. (b) kalau cold start terlalu lambat |
 | D5 | Perlu lebih dari satu worker? | ya / tidak sekarang | Tidak sekarang. Antrean FIFO cukup selama belum diukur lambat |
 
@@ -79,6 +80,16 @@ Setiap fase bisa di-merge sendiri, dan perilaku compose default tidak berubah sa
 
 **Cek:** test yang ada lulus dengan kedua adapter; test impor dari JSON lama; daftar dokumen di
 UI sama sebelum dan sesudah impor pada data lokal.
+
+**Dibangun (2026-11-22), berbeda dari rencana di atas:**
+- Port `IndexState` (`load_manifest`, `save_manifest`, `read/write/delete_chunks`) memegang manifest
+  dan chunk sekaligus (S1 + S3), dengan `FileIndexState` dan `PostgresIndexState`.
+- Entry dokumen dan setting disimpan sebagai jsonb (`enigram_documents.entry`,
+  `enigram_index_settings.settings`), bukan satu kolom per field. Isinya dibaca dan ditulis utuh.
+- `save_manifest` tetap mengganti seluruh manifest dalam satu transaksi, sama seperti menimpa file.
+- Impor berjalan di bootstrap (`_new_index_state`) di bawah `pg_advisory_xact_lock`, hanya kalau
+  workspace belum punya baris settings. Sesudah commit, file diganti nama menjadi `*.imported`.
+- Test: `tests/test_index_state.py`. Kontrak pada kedua adapter lulus pada Postgres lokal.
 
 ### S2: File sumber ke blob store
 
@@ -102,6 +113,10 @@ dengan `BLOB_URL` ke MinIO.
 
 **Cek:** hapus folder `parsed/` lalu re-index satu dokumen yang tidak berubah: tidak ada chunk
 yang di-insert ulang (`plan_inserts` melihat semua sudah ada).
+
+**Dibangun (2026-11-22)** bersama S1, lihat di atas. Tabel `enigram_chunks` menyimpan satu baris
+per chunk (`chunk` jsonb). `delete_document` menghapus baris itu dan cache Docling di disk.
+`golden check` membaca chunk lewat port.
 
 ### S4: Source kode di API tanpa disk bersama
 

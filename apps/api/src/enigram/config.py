@@ -479,6 +479,16 @@ class Config:
         return str(self.rag_dir)
 
     @property
+    def manifest_location(self) -> str:
+        """Where the manifest and parsed chunks live (IndexState), for the same messages."""
+        if self.storage == "postgres":
+            return (
+                "the enigram_index_settings, enigram_documents and enigram_chunks rows of "
+                f"workspace {self.workspace!r}"
+            )
+        return f"{self.manifest_path} and {self.parsed_dir}"
+
+    @property
     def reports_dir(self) -> Path:
         return self.data_dir / "reports"
 

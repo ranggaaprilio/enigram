@@ -206,9 +206,9 @@ def _render_markdown(data: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_report(cfg: Config, graph: nx.Graph, review_file: Path | None = None) -> Path:
-    manifest_path = cfg.manifest_path
-    manifest = json.loads(manifest_path.read_text("utf-8")) if manifest_path.exists() else {}
+def build_report(
+    cfg: Config, graph: nx.Graph, manifest: dict[str, Any], review_file: Path | None = None
+) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if review_file is None:
