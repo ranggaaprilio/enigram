@@ -170,7 +170,7 @@ dikerjakan setelah gate itu lulus.
 | PR | Isi | Gate merge |
 |---|---|---|
 | R0 | perintah `golden retrieval`, metrik dari trace agent, re-index Kestrel, baseline tercatat | angka baseline tertulis di rencana ini |
-| R1 | tokenizer identifier | recall@6 dan MRR kode naik, skor jawaban `dev` tidak turun |
+| R1 | tokenizer identifier | recall@6 dan MRR@20 umami (43 soal) naik |
 | R2 | reranker dokumen | `context_recall`/`context_precision` dokumen naik, latensi p50 dicatat |
 | R3+R4 | `input_type` + contextual retrieval, satu re-index | metrik dokumen naik dibanding R2, biaya re-index dicatat |
 | R5 | full-text + RRF dokumen | hanya kalau R2-R4 belum cukup |
@@ -201,13 +201,13 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
   tambah dokumen pengecoh ke `eval-docs`, pakai korpus lain dengan soal baru, atau tunda fase
   dokumen.
 - **K4 (diputuskan 2026-11-22).** Soal retrieval kode ditambah: Claude membuat draf soal dan
-  evidence, pemilik me-review (label tidak blind). Dua repo:
-  - `nestjs-boilerplate@eval-v1`: sekitar 40 soal baru di `dev`, tanpa set evidence yang sama
-    dengan soal `verdict`/`reserve`.
-  - **umami** (Next.js App Router, MIT) sebagai repo kedua: sekitar 15-20 soal. Alasannya,
-    nestjs-boilerplate kecil (190 file, 9,6k LOC, 408 simbol) dan namanya rapi seperti buku
-    teks, jadi hasilnya mungkin tidak berlaku umum. Gate R1 menjadi: nestjs tidak turun, umami
-    naik.
+  evidence, pemilik me-review (label tidak blind). Setiap kunci jawaban dicek ulang terhadap
+  kode oleh pemeriksa kedua; yang salah atau kurang diputuskan pemilik.
+  - **Diubah 2026-11-22 (pemilik): eval retrieval hanya memakai umami** (Next.js App Router,
+    MIT, `eval/golden-umami.yaml`, 43 soal `dev`). nestjs-boilerplate tidak dipakai lagi untuk
+    retrieval: kecil (190 file, 9,6k LOC, 408 simbol) dan namanya rapi seperti buku teks.
+  - Gate setiap fase kode: recall@6 dan MRR@20 umami naik, dibandingkan per soal (soal yang
+    membaik dan memburuk), bukan hanya rata-rata.
 
   Kandidat diukur 2026-11-22 dengan `repo_limits` dan parse sidecar (tanpa LLM). Tidak ada
   aplikasi nyata di bawah `CODE_MAX_LOC` 50k:
@@ -265,8 +265,13 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
 - Agent membaca lebih banyak evidence daripada yang ditemukan `search_code`, lewat `grep` dan
   `find_symbol`.
 
-**Kode, umami `eval-v1`** (`eval/golden-umami.yaml`, 18 soal `dev`, workspace `default`,
-`data/reports/retrieval-20261122-112125.md`): recall@6 0,685, recall@20 0,778, MRR@20 0,534.
+**Kode, umami `eval-v1`** (`eval/golden-umami.yaml`, workspace `default`). Ini baseline yang
+dipakai untuk gate fase kode:
+
+| Set | Laporan | recall@6 | recall@20 | MRR@20 |
+|---|---|---|---|---|
+| 18 soal pertama | `retrieval-20261122-112125` | 0,685 | 0,778 | 0,534 |
+| **43 soal (u01-u43)** | `retrieval-20261122-114152` | **0,674** | **0,775** | **0,494** |
 
 - Index umami: 3.799 simbol, 1.392 ringkasan, 5.191 embedding, 2.259.955 token (termasuk 8
   Markdown), sekitar 595 token per simbol.
@@ -276,8 +281,8 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
 - u02 dan u07: hasil teratas diisi kode hasil generate (`packages/api-client/src/generated`)
   dan konstanta ClickHouse.
 
-Catatan: database lokal di-reset 2026-11-22, jadi baseline nestjs di atas harus diukur ulang
-setelah nestjs di-index lagi (ringkasan LLM dibuat ulang).
+Baseline nestjs di atas hanya catatan sejarah: database lokal di-reset 2026-11-22 dan nestjs
+tidak dipakai lagi untuk eval retrieval (K4).
 
 **Dokumen, `eval/golden-docs.yaml`, workspace `eval-docs`**
 (`data/workspaces/eval-docs/reports/retrieval-20261122-095340.md`, 30 soal berevidence):

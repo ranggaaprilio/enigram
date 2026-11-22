@@ -1,6 +1,7 @@
 # Code retrieval set for umami (plans/retrieval-accuracy.md, K4). Drafted by Claude from the code
-# at the pinned commit on 2026-11-22; every answer key checked against the code by a second pass
-# and reviewed by the owner on 2026-11-22 (labels are Claude's, not blind).
+# at the pinned commit on 2026-11-22 (u01-u18, then u19-u43); every answer key checked against
+# the code by a second pass and reviewed by the owner on 2026-11-22 (labels are Claude's, not
+# blind).
 #
 # Found while drafting, not a question: in src/permissions/team.ts:115 canCreateTeamWebsite
 # calls the async hasPermission without await, so `!hasPermission(...)` is always false and a
@@ -314,3 +315,453 @@ questions:
     evidence:
       - symbol: POST
         file: src/app/api/teams/join/route.ts
+
+  # ================================================================ links & pixels
+  - id: "u19"   # class: links
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when someone opens one of my short links?"
+    answer: >
+      GET /q/<slug> looks up the link by slug that is not deleted (cached in Redis under
+      link:<slug> for 86400 seconds when Redis is enabled) and answers 404 if it is missing or its
+      URL is not absolute. Otherwise it builds an "event" payload with the link id, request URL
+      and referer, passes it to the /api/send handler (saved as a link event, type 3), and
+      redirects to the link's URL whatever the send handler answered.
+    evidence:
+      - symbol: GET
+        file: src/app/(collect)/q/[slug]/route.ts
+
+  - id: "u20"   # class: pixels
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when an email client loads one of my tracking pixel images?"
+    answer: >
+      GET /p/<slug> finds the non-deleted pixel by slug (Redis key pixel:<slug>, 86400 seconds,
+      when Redis is enabled; 404 if missing), sends an "event" payload with the pixel id, URL and
+      referer through the /api/send handler (saved as a pixel event, type 4), and returns a 1x1
+      GIF with no-cache headers.
+    evidence:
+      - symbol: GET
+        file: src/app/(collect)/p/[slug]/route.ts
+
+  # ================================================================ identify & event data
+  - id: "u21"   # class: identify
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when the tracker identifies a visitor with my own user id and some profile fields?"
+    answer: >
+      An "identify" hit with a website and distinct id links the session to that id (session_link
+      row, duplicates ignored) and sets the session's distinct id; a failure there is only logged.
+      The cache token carries the link id, so repeat identify calls with the same id skip that
+      write. The profile fields are flattened and saved as session data; on Postgres each key is
+      upserted per (session_id, data_key), so a newer value replaces the old one.
+    evidence:
+      - symbol: POST
+        file: src/app/api/send/route.ts
+      - symbol: saveSessionData
+        file: src/queries/sql/sessions/saveSessionData.ts
+      - symbol: saveSessionLink
+        file: src/queries/sql/sessions/saveSessionLink.ts
+
+  - id: "u22"   # class: event-data
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "How are the custom properties attached to a tracked event stored, especially nested objects and arrays?"
+    answer: >
+      The properties are flattened: nested objects become dot-separated keys (a.b), arrays are
+      stored as a JSON string with type array, booleans as "true"/"false", ISO-like date strings as
+      dates, and numbers also as a 4-decimal string. Keys and string values are cut to 500 chars
+      (an array string longer than that is stored as null). Each key is one row in event_data linked to
+      the event (Prisma on Postgres; on ClickHouse an insert or the Kafka topic event_data).
+    evidence:
+      - symbol: saveEventData
+        file: src/queries/sql/events/saveEventData.ts
+      - symbol: flattenJSON
+        file: src/lib/data.ts
+
+  - id: "u23"   # class: revenue
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "How do purchase amounts sent with a custom event end up in the revenue reports?"
+    answer: >
+      When the event data has a revenue that is a finite number (or numeric string) above 0 and a
+      non-empty currency string, a revenue row is written next to the event data (revenue table
+      via Prisma, website_revenue in ClickHouse). The collection request is rejected with 400 when
+      a currency is given and revenue is 1e14 or more.
+    evidence:
+      - symbol: saveEvent
+        file: src/queries/sql/events/saveEvent.ts
+      - symbol: saveRevenue
+        file: src/queries/sql/events/saveRevenue.ts
+      - symbol: isRevenueOutOfRange
+        file: src/app/api/send/request-schema.ts
+
+  # ================================================================ batch & recordings
+  - id: "u24"   # class: collection
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "How does POST /api/batch process many tracking payloads at once, and what does it return?"
+    answer: >
+      It needs no login and accepts a JSON array of at most 500 objects. Each one is replayed in
+      order through the /api/send handler as a new request with the original headers. It returns
+      size, processed, the number of errors, details (index and response of each failure) and the
+      cache token of the first successful item.
+    evidence:
+      - symbol: POST
+        file: src/app/api/batch/route.ts
+
+  - id: "u25"   # class: replay
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "What does /api/record check before it saves session replay or heatmap data?"
+    answer: >
+      Bodies over 1,000,000 bytes get 413; a body holds at most 200 events. It needs an
+      x-umami-cache token issued by /api/send for the same website (400 otherwise), the website's
+      recorderEnabled flag, and in CLOUD_MODE an unblocked business or no-billing account (403).
+      Bots and blocked IPs are refused. "record" chunks are saved only when replayEnabled is set in
+      the website's replay config, "heatmap" clicks/scrolls only when heatmapEnabled is set.
+    evidence:
+      - symbol: POST
+        file: src/app/api/record/route.ts
+      - symbol: getRecorderConfig
+        file: src/lib/recorder.ts
+
+  # ================================================================ error tracking
+  - id: "u26"   # class: errors
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when a JavaScript error from a visitor's browser is reported to Umami?"
+    answer: >
+      The collect endpoint routes type "error" to its own path: bodies over 48000 bytes get 413, a
+      missing or deleted website or a timestamp more than 5 minutes ahead (or before resetAt) gets
+      400, bots are ignored and blocked IPs get 403, and each website may send ERRORS_PER_MINUTE (default
+      120) errors per minute before 429 with Retry-After 60 (counted in a Postgres table). The
+      error is normalized and grouped by a fingerprint into an issue, then the issue and event rows
+      are written (event to ClickHouse when it is enabled).
+    evidence:
+      - symbol: collectError
+        file: src/lib/errors/collect.ts
+      - symbol: consumeErrorQuota
+        file: src/queries/sql/errors/store.ts
+      - symbol: saveError
+        file: src/queries/sql/errors/store.ts
+
+  # ================================================================ reports
+  - id: "u27"   # class: reports
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "How is a saved funnel stored, and how are its conversion numbers worked out?"
+    answer: >
+      A funnel is a report row of type "funnel" with its steps and window as parameters. Its stats
+      reload that report and count distinct sessions per step: step 1 matches a page path or event
+      name (a * acts as a wildcard), and each later step must happen in the same session within
+      "window" minutes after the previous step. Each step returns visitors, previous, dropped,
+      dropoff (1 - visitors/previous) and remaining (visitors/first step).
+    evidence:
+      - symbol: GET
+        file: src/app/api/websites/[websiteId]/funnels/[funnelId]/stats/route.ts
+      - symbol: getFunnel
+        file: src/queries/sql/funnels/getFunnel.ts
+
+  - id: "u28"   # class: reports
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "How is the retention table calculated: what is a cohort and what does the percentage mean?"
+    answer: >
+      A session's cohort is the first day (in the requested timezone) it had an event in the date
+      range. For each cohort day and each day number after it (up to day 31) it counts sessions
+      active again; percentage is those return visitors * 100 / the cohort size. Same logic for
+      Postgres and ClickHouse.
+    evidence:
+      - symbol: getRetention
+        file: src/queries/sql/retention/getRetention.ts
+
+  - id: "u29"   # class: reports
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "In the attribution report, what is the difference between the first-click and last-click models?"
+    answer: >
+      Both start from sessions that hit the conversion step (a page path or event name) in the date
+      range. First-click credits the session's earliest event in the range; otherwise (last-click)
+      it credits the latest event before the session's last conversion. Referrer, paid ads (click
+      ids) and UTM values of that event are counted as distinct sessions, top 20 each.
+    evidence:
+      - symbol: getAttribution
+        file: src/queries/sql/attribution/getAttribution.ts
+
+  # ================================================================ realtime
+  - id: "u30"   # class: realtime
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "Who counts as a visitor online right now, and how much time does the realtime page cover?"
+    answer: >
+      The active-visitors number is the count of distinct sessions with any event in the last 5
+      minutes. The realtime view covers the last 30 minutes (REALTIME_RANGE, from the start of the
+      current minute) and returns pageview/visitor series, totals, and counts by country, URL and
+      referrer. A board share gets the aggregates but an empty event list.
+    evidence:
+      - symbol: getActiveVisitors
+        file: src/queries/sql/getActiveVisitors.ts
+      - symbol: GET
+        file: src/app/api/realtime/[websiteId]/route.ts
+      - symbol: getRealtimeData
+        file: src/queries/sql/getRealtimeData.ts
+
+  # ================================================================ query parameters
+  - id: "u31"   # class: dates
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "If I ask for hourly buckets on a three-month date range, which time unit does the API actually use?"
+    answer: >
+      Daily. The smallest unit allowed comes from the range: up to 60 minutes is minute, up to 30
+      days is hour, up to 7 calendar months is day, up to 24 months is month, else year. A
+      requested unit is kept only if it is that unit or coarser (over 24 months, month is still
+      allowed); otherwise the smallest allowed unit is used.
+    evidence:
+      - symbol: getRequestDateRange
+        file: src/lib/request.ts
+      - symbol: getMinimumUnit
+        file: src/lib/date.ts
+      - symbol: getAllowedUnits
+        file: src/lib/date.ts
+
+  - id: "u32"   # class: filters
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "How does a filter in the dashboard URL like browser=neq.chrome,firefox turn into a SQL condition?"
+    answer: >
+      Only query keys whose name (minus a numeric suffix) is a known filter column are kept. The
+      value is split into "<operator>.<value>", eq by default, and eq/neq values are split on
+      commas. On Postgres eq becomes = ANY(...), neq coalesce(col, '') != ALL(...), c ilike
+      %value% and dnc coalesce(col, '') not ilike %value%, re ~* and nre coalesce(col, '') !~*. match=any joins the clauses with OR (the event type stays AND).
+    evidence:
+      - symbol: getRequestFilters
+        file: src/lib/request.ts
+      - symbol: parseFilterValue
+        file: src/lib/params.ts
+      - symbol: mapFilter
+        file: src/lib/prisma.ts
+
+  - id: "u33"   # class: segments
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "How are saved segments and cohorts applied when I view a website's stats?"
+    answer: >
+      Both are stored per website (creating one needs website update rights; a cohort needs an
+      action type, value and date range and cannot use session property filters). A ?segment=<id>
+      merges the stored filters (real filter columns only), session property filters and match
+      into the request. A ?cohort=<id> adds cohort_-prefixed filters, its path or event action and
+      its own date range; other action types throw an error.
+    evidence:
+      - symbol: getQueryFilters
+        file: src/lib/request.ts
+      - symbol: POST
+        file: src/app/api/websites/[websiteId]/segments/route.ts
+
+  - id: "u34"   # class: dates
+    category: behavior
+    split: dev
+    expected_route: semantic
+    confidence: high
+    question: "Why do my charts never show data from before a certain date even though I picked a longer range?"
+    answer: >
+      The start date is clamped: never before the website's resetAt, and in CLOUD_MODE for a
+      personal (non-team) website whose owner has no subscription, never before the start of the
+      month six months ago.
+    evidence:
+      - symbol: setWebsiteDate
+        file: src/lib/request.ts
+
+  - id: "u35"   # class: lists
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "What do page, pageSize, search and orderBy do on GET /api/websites?"
+    answer: >
+      search matches name or domain (case-insensitive contains); orderBy is accepted only for
+      name, domain or createdAt and otherwise falls back to name; pageSize defaults to 20 and page
+      to 1. Deleted websites are excluded; includeTeams adds websites of non-deleted teams the user
+      belongs to. The result is {data, count, page, pageSize, orderBy, search}.
+    evidence:
+      - symbol: GET
+        file: src/app/api/websites/route.ts
+      - symbol: getWebsites
+        file: src/queries/prisma/website.ts
+      - symbol: pagedQuery
+        file: src/lib/prisma.ts
+
+  # ================================================================ users & teams
+  - id: "u36"   # class: teams
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when a user creates a new team?"
+    answer: >
+      Admins, and users with the "user" role whose billing is not past due, may create teams (401
+      otherwise; view-only cannot). In CLOUD_MODE the owner's team count is checked: no
+      subscription allows 0, pro 10, business or no-billing unlimited ("Team limit reached.", 401).
+      The team gets an access code team_<16 random chars> and the creator (or an ownerId given by an
+      admin) is added as team-owner in the same transaction.
+    evidence:
+      - symbol: POST
+        file: src/app/api/teams/route.ts
+      - symbol: createTeam
+        file: src/queries/prisma/team.ts
+      - symbol: getCloudTeamLimit
+        file: src/lib/subscription.ts
+
+  - id: "u37"   # class: teams
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when I move one of my personal websites into a team?"
+    answer: >
+      POST /api/websites/<id>/transfer with teamId is allowed for admins, or for the website's
+      personal owner who is a team-owner or team-manager of the target team, with neither billing
+      past due (401 otherwise; no userId or teamId gives 400). One transaction sets the website's
+      owner to the team and moves its website boards too, then the Redis entry website:<id> is
+      deleted.
+    evidence:
+      - symbol: POST
+        file: src/app/api/websites/[websiteId]/transfer/route.ts
+      - symbol: canTransferWebsiteToTeam
+        file: src/permissions/website.ts
+      - symbol: transferWebsite
+        file: src/queries/prisma/website.ts
+
+  - id: "u38"   # class: users
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens to a user's websites and teams when an admin deletes that user?"
+    answer: >
+      Only admins may delete users (401) and not themselves (400). Self-hosted, one transaction
+      hard-deletes the user's personal websites with their events, sessions and event/session data,
+      the teams the user owns with all memberships, the user's memberships in other teams, the
+      reports on the user's websites, and the links, pixels and boards (with their shares) of the
+      user and of the owned teams, then the user. The websites of the owned teams are not deleted.
+      In CLOUD_MODE it is a soft delete: websites, links and pixels get
+      deletedAt, the username is randomized, boards are deleted. Redis link:/pixel: entries are
+      dropped afterwards.
+    evidence:
+      - symbol: DELETE
+        file: src/app/api/users/[userId]/route.ts
+      - symbol: deleteUser
+        file: src/queries/prisma/user.ts
+
+  - id: "u39"   # class: limits
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when a free Umami Cloud user tries to add a second website?"
+    answer: >
+      In CLOUD_MODE website creation first reads the account (or team) from Redis and checks a
+      limit: no subscription 1, pro 20, unlimitedWebsites, business or no-billing none. With the
+      count already at the limit it answers 401 "Website limit reached." before the permission
+      check. Self-hosted there is no such limit.
+    evidence:
+      - symbol: POST
+        file: src/app/api/websites/route.ts
+      - symbol: getCloudWebsiteLimit
+        file: src/lib/subscription.ts
+
+  # ================================================================ data management
+  - id: "u40"   # class: export
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when I download my website's data as a file?"
+    answer: >
+      Only a logged-in user who can view the website may export (share links get 401). For the
+      date range it builds events, pages, referrers, browsers, os, devices and countries CSVs,
+      prefixes cells starting with = + - @ tab or CR with a quote, zips them and returns JSON
+      {zip: <base64>}.
+    evidence:
+      - symbol: GET
+        file: src/app/api/websites/[websiteId]/export/route.ts
+
+  - id: "u41"   # class: data
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    confidence: high
+    question: "What happens when I delete a single visitor's session from the sessions view?"
+    answer: >
+      It works only with Postgres and no ClickHouse (400 otherwise), needs website delete rights
+      (401), and gives 404 if the session is not in that website. One transaction removes its event
+      data, saved replays of its visits, replays, heatmap events, revenue, session data, session
+      links, events and finally the session.
+    evidence:
+      - symbol: DELETE
+        file: src/app/api/websites/[websiteId]/sessions/[sessionId]/route.ts
+      - symbol: deleteSession
+        file: src/queries/prisma/session.ts
+
+  # ================================================================ server config
+  - id: "u42"   # class: config
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "What does MCP_ENABLED turn on, and how does a client authenticate to /mcp?"
+    answer: >
+      Unless MCP_ENABLED is "1", /mcp answers 404. Requests need a bearer API key (umami_...,
+      unavailable in CLOUD_MODE); a missing or invalid key gets 401 with a WWW-Authenticate header.
+      The MCP server then calls the normal API route handlers in-process with that key, so the
+      usual permission checks apply.
+    evidence:
+      - symbol: handle
+        file: src/app/mcp/route.ts
+      - symbol: authenticateMcpRequest
+        file: src/lib/mcp/auth.ts
+
+  - id: "u43"   # class: config
+    category: behavior
+    split: dev
+    expected_route: symbol
+    confidence: high
+    question: "How does ALLOWED_FRAME_URLS let me embed the Umami dashboard in an iframe on another site?"
+    answer: >
+      Its value is appended to the Content-Security-Policy frame-ancestors directive after 'self';
+      without it only same-origin framing is allowed. API_URL's origin is likewise added to
+      connect-src. A normal Next build reads it at build time; the Docker image computes the policy
+      once when the container starts, so a change needs a restart, not a rebuild.
+    evidence:
+      - symbol: getContentSecurityPolicy
+        file: src/lib/csp.ts
