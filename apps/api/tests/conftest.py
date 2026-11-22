@@ -83,6 +83,16 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(autouse=True)
+def no_clone_for_reading(monkeypatch):
+    """The code agent prepares its repository store before reading (plans/stateless.md, S4):
+    unit tests use fake stores and must never run git against them or clone a real URL.
+    tests/test_store_on_demand.py checks the real one."""
+    from enigram.application import code_agent
+
+    monkeypatch.setattr(code_agent, "prepare_store", lambda *args, **kw: None)
+
+
+@pytest.fixture(autouse=True)
 def reset_lightrag_shared_storage():
     # LightRAG keeps storage data in process-global state keyed by namespace, so a second
     # LightRAG in the same process sees the first one's documents as already processed.

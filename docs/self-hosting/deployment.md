@@ -69,7 +69,11 @@ log and daily budget. An owner creates one in the web UI's sidebar or with `POST
 Two things are shared:
 
 - **The Git clone cache** (`REPO_STORE`, default `data/repos`) holds one clone per repository URL
-  and ref for every workspace. What is indexed from it stays in the workspace that asked.
+  and ref for every workspace. What is indexed from it stays in the workspace that asked. The
+  API reads source code from it. When the API has no disk shared with the worker, the API clones
+  a repository on its first code question (and fetches when the worker indexed a newer commit),
+  then reuses the clone; the log records `clone for reading took N s`. A private repository then
+  needs the same `REPO_CREDENTIALS_KEY` in the API as in the worker.
 - **Memory.** A workspace's LightRAG engine opens in the API on its first document question and
   stays open. With Postgres storage one small workspace measured about 25 MiB (473 MiB API with
   one engine, 498 MiB with two); a workspace with a large graph costs more.

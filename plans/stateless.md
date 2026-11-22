@@ -1,6 +1,6 @@
 # API dan worker tanpa disk bersama
 
-Rencana dibuat 2026-11-22 dari peta kode saat ini. S1, S2 dan S3 dibangun 2026-11-22 (lihat
+Rencana dibuat 2026-11-22 dari peta kode saat ini. S1, S2, S3 dan S4 dibangun 2026-11-22 (lihat
 bagiannya); fase lain belum.
 Path kode relatif ke `apps/api/src/enigram/`.
 
@@ -57,11 +57,11 @@ di-deploy di platform tanpa persistent disk yang bisa dipakai bersama.
 
 | # | Pertanyaan | Pilihan | Saran |
 |---|---|---|---|
-| D1 | Targetnya apa? | (a) beberapa replika API, (b) platform tanpa persistent disk (Cloud Run, ECS Fargate), (c) keduanya | (c). Fase S1-S4 dibutuhkan keduanya; S5 hanya untuk throughput worker |
+| D1 | Targetnya apa? | (a) beberapa replika API, (b) platform tanpa persistent disk (Cloud Run, ECS Fargate), (c) keduanya | (c). Fase S1-S4 dibutuhkan keduanya; S5 hanya untuk throughput worker. **Diputuskan (c)** oleh pemilik 2026-11-22 |
 | D2 | Di mana file sumber disimpan? | (a) S3-compatible (S3, GCS, MinIO lokal), (b) kolom `bytea` di Postgres | (a). PDF bisa puluhan MB; Postgres tetap kecil dan backup cepat. **Diputuskan (a)** oleh pemilik saat S2 dikerjakan (2026-11-22) |
 | D3 | Di mana chunk hasil parse disimpan? | (a) tabel Postgres, (b) object storage seperti file sumber | (a). Ukurannya kecil, dan delete atau re-insert tidak perlu unduh file. **Diputuskan (a)** saat S3 dikerjakan (2026-11-22) |
-| D4 | Bagaimana API membaca source kode? | (a) clone lokal di tiap pod API, dibuat saat pertama dipakai, (b) isi file disimpan di Postgres saat index, (c) volume RWX bersama (EFS, Filestore) | (a) dulu. Paling sedikit perubahan, dan `ensure_store` sudah ada. (b) kalau cold start terlalu lambat |
-| D5 | Perlu lebih dari satu worker? | ya / tidak sekarang | Tidak sekarang. Antrean FIFO cukup selama belum diukur lambat |
+| D4 | Bagaimana API membaca source kode? | (a) clone lokal di tiap pod API, dibuat saat pertama dipakai, (b) isi file disimpan di Postgres saat index, (c) volume RWX bersama (EFS, Filestore) | (a) dulu. Paling sedikit perubahan, dan `ensure_store` sudah ada. (b) kalau cold start terlalu lambat. **Diputuskan (a)** oleh pemilik 2026-11-22 |
+| D5 | Perlu lebih dari satu worker? | ya / tidak sekarang | Tidak sekarang. Antrean FIFO cukup selama belum diukur lambat. **Diputuskan: tidak sekarang** oleh pemilik 2026-11-22 |
 
 ## Fase
 
@@ -141,6 +141,19 @@ Dengan D4 (a):
 
 **Cek:** jalankan API dengan `REPO_STORE` kosong, tanya soal kode umami: jawaban punya sitasi
 dan log menunjukkan satu clone. Ulangi pertanyaan: tidak ada clone kedua.
+
+**Dibangun (2026-11-22):**
+- `CodeAgentTools.ensure_git` memanggil `repo_store.prepare_store` sekali per pertanyaan per repo:
+  tidak ada apa-apa kalau store sudah memegang commit yang di-index, clone kalau store tidak ada,
+  fetch kalau worker sudah meng-index commit yang lebih baru. Cek commit memakai
+  `GIT_NO_LAZY_FETCH=1`, karena partial clone akan mengambil commit yang hilang diam-diam.
+- Lock per path store (asyncio, satu proses). Sebelum cek sitasi, store repo yang dikutip juga
+  disiapkan, karena agent bisa mengutip baris dari graph tanpa membaca file.
+- Hasil cek (umami 182k LOC, `REPO_STORE=/tmp/enigram-repos` di container API): pertanyaan pertama
+  clone dalam **1,4 s**, sitasi valid; pertanyaan kedua (berbeda) membaca 2 file tanpa clone kedua.
+  Dengan angka ini D4 (b) belum perlu.
+- Test: `tests/test_store_on_demand.py` (repo `file://` lokal). Unit test lain memakai
+  `prepare_store` palsu (conftest), supaya tidak ada git atau jaringan.
 
 ### S5: Worker lebih dari satu (hanya kalau D5 = ya)
 

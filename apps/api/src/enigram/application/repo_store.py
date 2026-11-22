@@ -56,6 +56,7 @@ def _run(
     check: bool = True,
     timeout: int = GIT_READ_TIMEOUT_SECS,
     token: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     command = args[2] if args[0] == "-C" else args[0]
     # A store may be owned by another user than the one running git (created by the CLI on the
@@ -67,7 +68,7 @@ def _run(
             [*_GIT, *trust, *args],
             capture_output=True,
             timeout=timeout,
-            env=git_env(home, token),
+            env={**git_env(home, token), **(env or {})},
             check=False,
         )
     except subprocess.TimeoutExpired as e:
@@ -119,6 +120,37 @@ def ensure_store(
     if present.returncode != 0:
         raise EnigramError(f"{url} ({ref or 'default'}) has no commit {sha[:12]} after fetch")
     return dest
+
+
+def has_commit(cfg: Config, url: str, ref: str | None, sha: str) -> bool:
+    """The store of (url, ref) exists here and holds `sha`, without asking the remote: on a
+    partial clone git would otherwise fetch a missing commit lazily (git 2.44+ honours this)."""
+    dest = store_path(cfg, url, ref)
+    if not (dest / "HEAD").exists():
+        return False
+    args = ["-C", str(dest), "cat-file", "-e", f"{sha}^{{commit}}"]
+    local = {"GIT_NO_LAZY_FETCH": "1"}
+    return _run(args, home=dest.parent, check=False, env=local).returncode == 0
+
+
+def prepare_store(
+    cfg: Config,
+    url: str,
+    ref: str | None,
+    sha: str,
+    token: str | None = None,
+    *,
+    source: str | None = None,
+) -> str | None:
+    """Makes the store hold `sha` for reading: None when it already does, else "clone" or
+    "fetch" for what it ran. The API runs this where it has no disk shared with the worker
+    (plans/stateless.md, S4); next to the worker the store is already there. `source` as in
+    ensure_store."""
+    if has_commit(cfg, url, ref, sha):
+        return None
+    action = "fetch" if (store_path(cfg, url, ref) / "HEAD").exists() else "clone"
+    ensure_store(cfg, url, ref, sha, source=source, token=token)
+    return action
 
 
 class GitTools:
