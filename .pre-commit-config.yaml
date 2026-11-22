@@ -11,6 +11,7 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
       - id: check-yaml
+        args: [--unsafe] # syntax only: compose overlays use !override and !reset
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files

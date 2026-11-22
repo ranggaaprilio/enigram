@@ -93,6 +93,13 @@ def _on_off(name: str) -> bool:
     return value == "on"
 
 
+def _shutdown_grace_secs() -> int:
+    value = _int("SHUTDOWN_GRACE_SECS", 30)
+    if value < 0:
+        raise EnigramError(f"SHUTDOWN_GRACE_SECS must be 0 or more, got {value}")
+    return value
+
+
 def _blob_url() -> str:
     value = os.environ.get("BLOB_URL", "").strip().rstrip("/")
     if value and not (value.startswith("s3://") and value[len("s3://") :].split("/")[0]):
@@ -265,6 +272,9 @@ class Config:
     # s3://bucket[/prefix] on any S3-compatible store (AWS_* credentials, AWS_ENDPOINT_URL for
     # MinIO); empty (default): the books folder in DATA_DIR.
     blob_url: str = ""
+    # Seconds the API waits on shutdown (SIGTERM) for open connections, then again for chat
+    # answers still running, before it exits (plans/stateless.md, S6); 0 = no wait.
+    shutdown_grace_secs: int = 30
 
     @classmethod
     def from_env(cls, dotenv_path: Path | None = None) -> "Config":
@@ -446,6 +456,7 @@ class Config:
             verify_answers=_verify_answers(),
             verify_badges=_verify_badges(),
             blob_url=_blob_url(),
+            shutdown_grace_secs=_shutdown_grace_secs(),
         )
 
     @property

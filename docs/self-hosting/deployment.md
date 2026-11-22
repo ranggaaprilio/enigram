@@ -95,6 +95,38 @@ Setting `BLOB_URL` does not move existing files. Copy them first, for example
 `data/workspaces/<name>/books/`). A document whose file was not copied stays indexed and can be
 deleted, but the document list shows no file name for it.
 
+## Run the API without a shared disk
+
+With the defaults the API and the worker share `./data`. On a platform without shared disks
+(Cloud Run, ECS Fargate, Kubernetes without a ReadWriteMany volume), or to run several API
+replicas, the API needs none:
+
+- Source files in a bucket (`BLOB_URL`, see [Source files](#source-files)).
+- The manifest, parsed chunks, index, jobs and chats are in Postgres.
+- The code agent clones a repository in the API container on its first code question
+  (`REPO_STORE` can be a temporary folder).
+- The worker's `DATA_DIR` is a cache (Docling conversions, repository clones). Losing it costs
+  a re-parse or a re-clone, nothing else.
+
+`docker-compose.stateless.yml` runs this shape locally, with SeaweedFS as the bucket:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.stateless.yml up -d --scale api=2
+```
+
+The API then has no published port: open the UI on http://localhost:3000, whose nginx spreads
+`/api` calls over the replicas. Run exactly one worker.
+
+On shutdown (SIGTERM) the API stops taking requests and gives open connections
+`SHUTDOWN_GRACE_SECS` (default 30) to finish, then gives chat answers still running the same
+again. An answer still running after that is stored as failed ("The server restarted before this
+answer finished"). Give the container at least twice the grace period plus a few seconds before
+it is killed:
+
+- Compose: `stop_grace_period` (the overlay sets 70 s).
+- Kubernetes: `terminationGracePeriodSeconds`.
+- Cloud Run kills 10 s after SIGTERM, so set `SHUTDOWN_GRACE_SECS=4` there.
+
 ## Token caps
 
 Every chat-model call (LightRAG extraction and answers, summaries, the code agent, judges) and

@@ -59,6 +59,7 @@ OnTool = Callable[[str, dict[str, Any]], Awaitable[None]]
 Answer = Callable[[ChatAgent, str, list[dict[str, str]], OnTool, str], Awaitable[QueryResult]]
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 TOKEN_SOURCE = "chat"  # the daily budget's and the Dashboard's source name
+STOPPED = "The server restarted before this answer finished; ask again"
 
 # What a tool call looks like while an answer is on its way.
 TOOL_STEPS = {
@@ -398,6 +399,11 @@ async def ask(
                     TOKEN_SOURCE, question, agent.name, error=str(e), api_key=api_key
                 )
                 return await _failed(chat, emit, session, agent, str(e), query_id, meter.total)
+            except asyncio.CancelledError:
+                # The API is stopping past its grace period (plans/stateless.md, S6): the
+                # session shows why its question has no answer, instead of nothing.
+                await _failed(chat, emit, session, agent, STOPPED, None, meter.total)
+                raise
             finally:
                 if meter.total:
                     await store.add_tokens(TOKEN_SOURCE, api_key, meter.total)

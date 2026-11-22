@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 from urllib.parse import quote
@@ -1503,3 +1504,32 @@ def test_query_carries_what_of_the_verification_may_show(env, monkeypatch):
     assert body["verification"]["marks"] == ["verified"]
     assert client.get(f"/queries/{body['id']}").json()["verification"]["checked"] == 1
     assert seen[0] == ("Mira Okafor [1] [document].", ())
+
+
+async def test_shutdown_waits_for_chat_answers_within_the_grace_period():
+    done = []
+
+    async def answer(secs):
+        await asyncio.sleep(secs)
+        done.append(secs)
+
+    quick, slow = asyncio.create_task(answer(0.01)), asyncio.create_task(answer(30))
+
+    await api.finish_chat_turns({quick, slow}, 1)
+
+    assert done == [0.01]
+    assert slow.cancelled()
+
+
+async def test_shutdown_without_grace_cancels_at_once():
+    slow = asyncio.create_task(asyncio.sleep(30))
+    await api.finish_chat_turns({slow}, 0)
+    assert slow.cancelled()
+
+
+def test_shutdown_grace_must_not_be_negative(clean_env, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("VOYAGE_API_KEY", "vo-key-not-real")
+    monkeypatch.setenv("SHUTDOWN_GRACE_SECS", "-1")
+    with pytest.raises(EnigramError, match="SHUTDOWN_GRACE_SECS must be 0 or more"):
+        Config.from_env(clean_env)
