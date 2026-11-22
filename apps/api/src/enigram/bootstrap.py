@@ -5,6 +5,7 @@ from functools import partial
 
 from enigram.adapters.driven.docling_parser import DoclingParser
 from enigram.adapters.driven.embedding import code_embedder, make_embedding_func
+from enigram.adapters.driven.file_index_state import FileIndexState
 from enigram.adapters.driven.jev_decider import JevDecider
 from enigram.adapters.driven.lightrag_engine import (
     QUERY_MAX_ENTITY_TOKENS,
@@ -19,6 +20,7 @@ from enigram.adapters.driven.postgres_annotations import PostgresAnnotations
 from enigram.adapters.driven.postgres_chat import PostgresChat
 from enigram.adapters.driven.postgres_code_graph import PostgresCodeGraph
 from enigram.adapters.driven.postgres_conflicts import PostgresConflicts
+from enigram.adapters.driven.postgres_index_state import PostgresIndexState
 from enigram.adapters.driven.postgres_jobs import PostgresJobStore, open_store
 from enigram.adapters.driven.postgres_memory import PostgresMemoryStore
 from enigram.adapters.driven.postgres_principals import PostgresPrincipals
@@ -35,11 +37,13 @@ from enigram.application.ports import (
     DecisionProvider,
     Deps,
     IdentityProvider,
+    IndexState,
     JobRepository,
     MemoryRepository,
     PrincipalRepository,
 )
 from enigram.config import Config
+from enigram.domain.errors import EnigramError
 
 
 async def _new_memory(cfg: Config, store: JobRepository) -> MemoryRepository:
@@ -100,6 +104,19 @@ async def _new_chat(cfg: Config, store: JobRepository) -> ChatRepository:
     return chat
 
 
+async def _new_index_state(cfg: Config, store: JobRepository | None) -> IndexState:
+    """Files for STORAGE_BACKEND=file; Postgres otherwise, importing a DATA_DIR manifest once
+    (plans/stateless.md, S1 and S3)."""
+    if cfg.storage != "postgres":
+        return FileIndexState(cfg)
+    if not isinstance(store, PostgresJobStore):
+        raise EnigramError("The Postgres manifest needs the job store's connection")
+    state = PostgresIndexState(store.pool, cfg.workspace)
+    await state.ensure_schema()
+    await state.import_files(cfg.manifest_path, cfg.parsed_dir)
+    return state
+
+
 def _decider(cfg: Config) -> DecisionProvider:
     """Jev first when DECISION_PROVIDER=jev, the judge model as the automatic fallback."""
     fallback = LlmDecider(OpenAIChatModel(cfg.judge), cfg.judge_model)
@@ -132,6 +149,7 @@ def build_deps(cfg: Config) -> Deps:
         new_conflicts=partial(_new_conflicts, cfg),
         new_stats=partial(_new_stats, cfg),
         new_chat=partial(_new_chat, cfg),
+        new_index_state=partial(_new_index_state, cfg),
         judge=partial(OpenAIChatModel, cfg.judge),
         answer_scorer=partial(RagasScorer, cfg),
         decider=partial(_decider, cfg),

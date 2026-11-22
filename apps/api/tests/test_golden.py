@@ -1,11 +1,13 @@
+import asyncio
 from itertools import zip_longest
 from pathlib import Path
 
 import pytest
+from manifest_files import save_manifest
 
 from enigram.application.evaluation import golden
 from enigram.application.files import write_chunks_jsonl
-from enigram.application.indexing import save_manifest
+from enigram.bootstrap import build_deps
 from enigram.domain.chunk import Chunk
 from enigram.domain.errors import EnigramError
 
@@ -28,6 +30,12 @@ def write_index(cfg) -> None:
     write_chunks_jsonl(cfg.parsed_dir / "p1.chunks.jsonl", p1)
     write_chunks_jsonl(cfg.parsed_dir / "p2.chunks.jsonl", p2)
     save_manifest(cfg, {"books": {"p1": {"status": "indexed"}, "p2": {"status": "indexed"}}})
+
+
+def check(cfg, path, **kw):
+    """check_golden with the chunks a document set resolves against, as the CLI does."""
+    chunks = asyncio.run(golden.golden_chunks(cfg, build_deps(cfg), path))
+    return golden.check_golden(cfg, path, chunks=chunks, **kw)
 
 
 def write_golden(path: Path, body: str) -> Path:
@@ -65,7 +73,7 @@ def test_check_resolves_quote_to_chunk(cfg, tmp_path):
         tmp_path / "g.yaml", _golden("single_hop", "86.9% of repositories lack guidelines")
     )
 
-    golden_set, problems = golden.check_golden(cfg, path)
+    golden_set, problems = check(cfg, path)
 
     assert problems == {}
     (ev,) = golden_set.questions[0].evidence
@@ -82,7 +90,7 @@ def test_check_resolves_quote_to_chunk(cfg, tmp_path):
 def test_check_reports_unresolved_quotes(cfg, tmp_path, quote, problem):
     write_index(cfg)
     path = write_golden(tmp_path / "g.yaml", _golden("single_hop", quote))
-    _, problems = golden.check_golden(cfg, path)
+    _, problems = check(cfg, path)
     assert problem in problems["q01"][0]
 
 
@@ -92,7 +100,7 @@ def test_check_reports_ambiguous_quote(cfg, tmp_path):
     write_chunks_jsonl(cfg.parsed_dir / "p3.chunks.jsonl", [duplicate])
     save_manifest(cfg, {"books": {b: {"status": "indexed"} for b in ("p1", "p2", "p3")}})
     path = write_golden(tmp_path / "g.yaml", _golden("single_hop", INTRO))
-    _, problems = golden.check_golden(cfg, path)
+    _, problems = check(cfg, path)
     assert "matches 2 chunks" in problems["q01"][0]
 
 
@@ -113,7 +121,7 @@ def test_check_reports_ambiguous_quote(cfg, tmp_path):
 def test_category_rules(cfg, tmp_path, category, quotes, problem):
     write_index(cfg)
     path = write_golden(tmp_path / "g.yaml", _golden(category, *quotes))
-    _, problems = golden.check_golden(cfg, path)
+    _, problems = check(cfg, path)
     if problem is None:
         assert problems == {}
     else:
@@ -164,7 +172,7 @@ def test_load_golden_empty_file_and_int_id(tmp_path):
 def test_check_without_index_raises(cfg, tmp_path):
     path = write_golden(tmp_path / "g.yaml", _golden("single_hop", INTRO))
     with pytest.raises(EnigramError, match="No indexed documents"):
-        golden.check_golden(cfg, path)
+        check(cfg, path)
 
 
 # ------------------------------------------------------------------ code golden sets
@@ -245,7 +253,7 @@ def test_code_set_resolves_symbols_without_an_index(cfg, tmp_path, fake_repo):
         ),
     )
 
-    golden_set, problems = golden.check_golden(cfg, path)
+    golden_set, problems = check(cfg, path)
 
     assert problems == {}
     assert golden_set.repo == golden.GoldenRepo("https://github.com/org/app", "eval-v1", PINNED)
@@ -263,8 +271,8 @@ def test_code_set_clones_once(cfg, tmp_path, fake_repo):
     path = write_golden(
         tmp_path / "g.yaml", code_golden(code_question_yaml("behavior", "validateConfig"))
     )
-    golden.check_golden(cfg, path)
-    golden.check_golden(cfg, path)
+    check(cfg, path)
+    check(cfg, path)
     assert fake_repo == ["eval-v1"]
 
 
@@ -283,7 +291,7 @@ def test_code_set_reports_unresolved_symbols(cfg, tmp_path, fake_repo, symbol, f
     path = write_golden(
         tmp_path / "g.yaml", code_golden(code_question_yaml("behavior", symbol, files=files))
     )
-    _, problems = golden.check_golden(cfg, path)
+    _, problems = check(cfg, path)
     assert problem in problems["b01"][0]
 
 
@@ -292,14 +300,14 @@ def test_code_set_reports_ambiguous_symbol(cfg, tmp_path, fake_repo, monkeypatch
     path = write_golden(
         tmp_path / "g.yaml", code_golden(code_question_yaml("behavior", "validateConfig"))
     )
-    _, problems = golden.check_golden(cfg, path)
+    _, problems = check(cfg, path)
     assert "declared in 2 files; add file:" in problems["b01"][0]
 
 
 def test_code_set_rejects_quote_evidence(cfg, tmp_path, fake_repo):
     question = code_question_yaml("behavior") + '    evidence:\n      - quote: "some text"\n'
     path = write_golden(tmp_path / "g.yaml", code_golden(question))
-    _, problems = golden.check_golden(cfg, path)
+    _, problems = check(cfg, path)
     assert "symbol evidence, not quotes" in problems["b01"][0]
 
 
@@ -323,7 +331,7 @@ ANNOTATION = "    setup: {annotation: {target: AuthService.validateLogin, text: 
 def test_code_category_rules(cfg, tmp_path, fake_repo, category, kwargs, problem):
     question = code_question_yaml(category, "validateConfig", **kwargs)
     path = write_golden(tmp_path / "g.yaml", code_golden(question))
-    _, problems = golden.check_golden(cfg, path)
+    _, problems = check(cfg, path)
     if problem is None:
         assert problems == {}
     else:
@@ -332,7 +340,7 @@ def test_code_category_rules(cfg, tmp_path, fake_repo, category, kwargs, problem
 
 def test_code_behavior_needs_evidence(cfg, tmp_path, fake_repo):
     path = write_golden(tmp_path / "g.yaml", code_golden(code_question_yaml("behavior")))
-    _, problems = golden.check_golden(cfg, path)
+    _, problems = check(cfg, path)
     assert problems["b01"] == ["needs at least one evidence symbol"]
 
 
@@ -342,7 +350,7 @@ def test_code_set_head_must_be_the_pinned_commit(cfg, tmp_path, fake_repo, monke
         tmp_path / "g.yaml", code_golden(code_question_yaml("behavior", "validateConfig"))
     )
     with pytest.raises(EnigramError, match="golden pins aaaaaaaaaaaa"):
-        golden.check_golden(cfg, path)
+        check(cfg, path)
 
 
 @pytest.mark.parametrize(
@@ -404,7 +412,7 @@ def test_code_set_checks_symbols_in_the_code_graph(cfg, tmp_path, fake_repo):
         ),
     )
 
-    resolved, problems = golden.check_golden(cfg, path, symbols=symbols)
+    resolved, problems = check(cfg, path, symbols=symbols)
 
     b01 = resolved.questions[0]
     assert [ev.file for ev in b01.evidence] == [

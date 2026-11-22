@@ -56,8 +56,9 @@ async def _run_delete_job(cfg: Config, store: JobRepository, deps: Deps, job: Jo
     book = job.payload["book"]
     log.info("[worker] job %d: deleting %s", job.id, book)
     try:
+        state = await deps.new_index_state(store)
         async with deps.open_engine() as engine:
-            result = await delete_document(cfg, engine, book)
+            result = await delete_document(cfg, engine, state, book)
             result["query_cache_rows_cleared"] = await engine.clear_query_cache()
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
@@ -95,6 +96,7 @@ async def _run_repo_job(
             deps,
             url,
             job.payload.get("ref"),
+            state=await deps.new_index_state(store),
             graph=graph,
             notes=notes,
             decider=decider,
@@ -159,7 +161,13 @@ async def _run_conflicts_job(
         if repo is None:
             raise EnigramError(f"{url} ({ref or 'default branch'}) is not indexed")
         report = await detect_doc_conflicts(
-            cfg, graph, conflicts, decider, deps.code_embedder(), repo
+            cfg,
+            graph,
+            conflicts,
+            decider,
+            deps.code_embedder(),
+            repo,
+            state=await deps.new_index_state(store),
         )
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
@@ -292,7 +300,8 @@ async def _dispatch(
     book = job.payload["book"]
     log.info("[worker] job %d: indexing %s", job.id, book)
     try:
-        run = await run_index(cfg, deps, cfg.books_dir, only=[book])
+        state = await deps.new_index_state(store)
+        run = await run_index(cfg, deps, state, cfg.books_dir, only=[book])
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
         await store.finish(job.id, "failed", error=str(e))

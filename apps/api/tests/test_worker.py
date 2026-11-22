@@ -152,7 +152,7 @@ def fake_index(monkeypatch):
             self.error = None
             self.calls = []
 
-        async def __call__(self, cfg, deps, folder, pages=None, only=None):
+        async def __call__(self, cfg, deps, state, folder, pages=None, only=None):
             self.calls.append((folder, only))
             if self.error:
                 raise self.error
@@ -399,7 +399,7 @@ async def test_delete_job_deletes_the_document_and_clears_cached_answers(
 ):
     calls = []
 
-    async def fake_delete(cfg, engine, book):
+    async def fake_delete(cfg, engine, state, book):
         calls.append((engine, book))
         return {"book": book, "documents_deleted": 2}
 
@@ -415,7 +415,7 @@ async def test_delete_job_deletes_the_document_and_clears_cached_answers(
 
 
 async def test_delete_job_failure_fails_the_job(cfg, store, deps, fake_graph, monkeypatch):
-    async def fake_delete(cfg, engine, book):
+    async def fake_delete(cfg, engine, state, book):
         raise EnigramError("paper-c00001: pipeline busy")
 
     monkeypatch.setattr(worker, "delete_document", fake_delete)
@@ -444,7 +444,17 @@ async def test_repo_job_indexes_the_repository(
     graph = FakeCodeGraph()  # a public repository: no access token stored
 
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
+        cfg,
+        deps,
+        url,
+        ref=None,
+        *,
+        state,
+        graph=None,
+        notes=None,
+        decider=None,
+        token=None,
+        on_stage=None,
     ):
         calls.append((url, ref, graph))
         return result
@@ -462,7 +472,17 @@ async def test_repo_job_indexes_the_repository(
 
 async def test_repo_job_exception_fails_the_job(cfg, store, deps, monkeypatch):
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
+        cfg,
+        deps,
+        url,
+        ref=None,
+        *,
+        state,
+        graph=None,
+        notes=None,
+        decider=None,
+        token=None,
+        on_stage=None,
     ):
         raise EnigramError("git clone failed: repository not found")
 
@@ -598,7 +618,17 @@ async def test_repo_job_survives_a_failed_stage_write(cfg, store, deps, monkeypa
 
 async def test_repo_job_records_trigger_metadata(cfg, store, deps, monkeypatch):
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
+        cfg,
+        deps,
+        url,
+        ref=None,
+        *,
+        state,
+        graph=None,
+        notes=None,
+        decider=None,
+        token=None,
+        on_stage=None,
     ):
         return {"failed": []}
 
@@ -716,7 +746,17 @@ async def test_worker_forwards_the_decider_to_index_repo(cfg, store, deps, monke
     seen = []
 
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
+        cfg,
+        deps,
+        url,
+        ref=None,
+        *,
+        state,
+        graph=None,
+        notes=None,
+        decider=None,
+        token=None,
+        on_stage=None,
     ):
         seen.append(decider)
         return {"failed": []}
@@ -747,7 +787,17 @@ async def test_private_repositories_use_their_token_to_index_and_poll(
     seen = []
 
     async def fake_index_repo(
-        cfg, deps, url, ref=None, *, graph=None, notes=None, decider=None, token=None, on_stage=None
+        cfg,
+        deps,
+        url,
+        ref=None,
+        *,
+        state,
+        graph=None,
+        notes=None,
+        decider=None,
+        token=None,
+        on_stage=None,
     ):
         seen.append(("index", token))
         return {"failed": []}
@@ -774,7 +824,7 @@ async def test_detect_conflicts_job_runs_and_reports(cfg, store, deps, monkeypat
     graph, conflicts, decider = FakeCodeGraph(fixture_graph()), FakeConflicts(), FakeDecider()
     calls = []
 
-    async def fake_detect(cfg, g, c, d, embedder, repo):
+    async def fake_detect(cfg, g, c, d, embedder, repo, *, state):
         calls.append((g, c, d, type(embedder).__name__, repo["id"]))
         return {"conflicts": 1}
 

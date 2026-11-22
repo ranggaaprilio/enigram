@@ -72,7 +72,7 @@ from enigram.application.dashboard import (
 )
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
-from enigram.application.indexing import list_sources, load_manifest
+from enigram.application.indexing import list_sources
 from enigram.application.login import (
     end_session,
     invite,
@@ -500,6 +500,7 @@ def create_app(
             decider=ws.decider,
             code_embedder=ws.code_embedder,
             conflicts=ws.conflicts,
+            index_state=ws.index_state,
             cfg=ws.cfg,
             deps=ws.deps,
         )
@@ -789,7 +790,7 @@ def create_app(
         tmp = books_dir / f".{uuid4().hex}.{name}.upload"
         try:
             sha = await _save_upload(file, tmp)
-            entry = load_manifest(ws.cfg)["books"].get(book, {})
+            entry = (await ws.index_state.load_manifest())["books"].get(book, {})
             if entry.get("sha256") and entry["sha256"] != sha:
                 raise HTTPException(
                     409,
@@ -817,11 +818,11 @@ def create_app(
 
     @app.get("/documents")
     async def list_documents(ws: Viewer) -> list[dict[str, Any]]:
-        return await documents_overview(ws.cfg, ws.store)
+        return await documents_overview(ws.cfg, ws.index_state, ws.store)
 
-    def known_book(ws: Workspace, book: str) -> bool:
+    async def known_book(ws: Workspace, book: str) -> bool:
         """In the manifest, or uploaded and not yet indexed."""
-        if book in load_manifest(ws.cfg)["books"]:
+        if book in (await ws.index_state.load_manifest())["books"]:
             return True
         return ws.cfg.books_dir.exists() and any(
             book_name(p) == book for p in list_sources(ws.cfg.books_dir)
@@ -829,7 +830,7 @@ def create_app(
 
     @app.delete("/documents/{book}", status_code=202)
     async def delete_document_route(ws: Maintainer, request: Request, book: str) -> Any:
-        if not known_book(ws, book):
+        if not await known_book(ws, book):
             raise HTTPException(404, f"No document {book!r}")
         store = ws.store
         if any(j.payload.get("book") == book for j in await store.active_jobs()):
@@ -923,7 +924,7 @@ def create_app(
         """What a note can be about, by what people know: features (route), symbols, graph
         entities and documents matching `q` (the note form's one search box)."""
         repos = await ws.code_graph.list_repos()
-        return await find_targets(ws.cfg, ws.code_graph, ws.store, repos, q)
+        return await find_targets(ws.cfg, ws.code_graph, ws.store, ws.index_state, repos, q)
 
     @app.get("/repos/{repo_id}/tree")
     async def repo_tree(ws: Viewer, repo_id: int) -> dict[str, Any]:
@@ -1115,7 +1116,13 @@ def create_app(
         the budget, questions, answer routes and origins, knowledge, review coverage and what
         needs attention. Tokens per key only for an admin."""
         found = await dashboard(
-            ws.cfg, await ws.deps.new_stats(ws.store), ws.code_graph, ws.store, _role(request), days
+            ws.cfg,
+            await ws.deps.new_stats(ws.store),
+            ws.code_graph,
+            ws.store,
+            ws.index_state,
+            _role(request),
+            days,
         )
         return jsonable_encoder(found)
 
@@ -1143,7 +1150,7 @@ def create_app(
         """Every repository with its indexed commit and its date, the last index, the status
         against the remote (from the worker's poll), how it is kept up to date and its size."""
         stats = await ws.deps.new_stats(ws.store)
-        return jsonable_encoder(await repo_rows(ws.cfg, ws.code_graph, stats))
+        return jsonable_encoder(await repo_rows(ws.cfg, ws.code_graph, stats, ws.index_state))
 
     @app.get("/stats/repos/{repo_id}")
     async def stats_repo(ws: Viewer, repo_id: int) -> dict[str, Any]:
@@ -1151,7 +1158,9 @@ def create_app(
         last run did to the notes on it."""
         repo = await _repo_or_404(ws, repo_id)
         stats = await ws.deps.new_stats(ws.store)
-        return jsonable_encoder(await repo_detail(ws.cfg, ws.code_graph, stats, repo))
+        return jsonable_encoder(
+            await repo_detail(ws.cfg, ws.code_graph, stats, ws.index_state, repo)
+        )
 
     @app.get("/review")
     async def review_inbox(ws: Viewer) -> list[dict[str, Any]]:

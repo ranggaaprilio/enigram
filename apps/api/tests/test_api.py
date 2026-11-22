@@ -15,13 +15,13 @@ from code_fakes import (
     choice,
 )
 from fastapi.testclient import TestClient
+from manifest_files import file_state, save_manifest
 from test_query import FakeRag
 from test_server import FakeMemoryStore
 from test_worker import FakeJobStore
 
 from enigram.adapters.driven import lightrag_engine
 from enigram.adapters.driving import http_api as api
-from enigram.application import indexing as index
 from enigram.application.code_agent import AGENT_MODE
 from enigram.bootstrap import build_deps
 from enigram.config import Config
@@ -77,7 +77,11 @@ def _deps(cfg, store, built):
     async def new_chat(store):
         return FakeChatStore()
 
+    async def new_index_state(store):
+        return file_state(cfg)  # the manifest file the tests write with save_manifest
+
     deps.new_stats, deps.new_chat = new_stats, new_chat
+    deps.new_index_state = new_index_state
     return deps
 
 
@@ -148,7 +152,7 @@ def test_upload_rejects_unsupported_files(env, pg_cfg, name):
 def test_upload_of_indexed_unchanged_file_is_a_no_op(env, pg_cfg):
     client, store, _, _ = env
     sha = hashlib.sha256(PDF).hexdigest()
-    index.save_manifest(pg_cfg, {"books": {"Paper-One": {"status": "indexed", "sha256": sha}}})
+    save_manifest(pg_cfg, {"books": {"Paper-One": {"status": "indexed", "sha256": sha}}})
 
     response = _upload(client, "Paper One.pdf")
 
@@ -162,7 +166,7 @@ def test_upload_of_changed_indexed_file_is_rejected(env, pg_cfg):
     pg_cfg.books_dir.mkdir(parents=True)
     (pg_cfg.books_dir / "Paper One.pdf").write_bytes(b"old")
     old_sha = hashlib.sha256(b"old").hexdigest()
-    index.save_manifest(pg_cfg, {"books": {"Paper-One": {"status": "indexed", "sha256": old_sha}}})
+    save_manifest(pg_cfg, {"books": {"Paper-One": {"status": "indexed", "sha256": old_sha}}})
 
     response = _upload(client, "Paper One.pdf")
 
@@ -215,7 +219,7 @@ def test_uploads_of_one_name_use_separate_hidden_temp_files(env, monkeypatch):
 
 def test_documents_lists_manifest_books_and_queued_uploads(env, pg_cfg):
     client, _, _, _ = env
-    index.save_manifest(
+    save_manifest(
         pg_cfg,
         {"books": {"old-paper": {"status": "indexed", "title": "Old Paper", "chunks": 4}}},
     )
@@ -679,7 +683,7 @@ def test_graph_edit_records_the_key_name_and_needs_a_key(keyed_env):
 
 def test_delete_document_queues_a_job_and_lists_it_as_deleting(env, pg_cfg):
     client, store, _, _ = env
-    index.save_manifest(pg_cfg, {"books": {"paper": {"status": "indexed", "chunks": 2}}})
+    save_manifest(pg_cfg, {"books": {"paper": {"status": "indexed", "chunks": 2}}})
 
     response = client.delete("/documents/paper")
 
@@ -719,7 +723,7 @@ def test_delete_document_with_an_active_job_is_409(env, pg_cfg):
 
 def test_delete_document_records_the_key_name_and_needs_a_key(keyed_env, pg_cfg):
     client, store, _ = keyed_env
-    index.save_manifest(pg_cfg, {"books": {"paper": {"status": "indexed"}}})
+    save_manifest(pg_cfg, {"books": {"paper": {"status": "indexed"}}})
 
     assert client.delete("/documents/paper").status_code == 401
     client.delete("/documents/paper", headers=_bearer(WEB_KEY))
@@ -782,7 +786,7 @@ def test_index_repo_records_the_key_name(keyed_env):
 def test_documents_show_their_repository(env, pg_cfg):
     client, _, _, _ = env
     entry = {"status": "indexed", "repo": "https://github.com/org/handbook"}
-    index.save_manifest(pg_cfg, {"books": {"org-handbook--README": entry}})
+    save_manifest(pg_cfg, {"books": {"org-handbook--README": entry}})
 
     [row] = client.get("/documents").json()
 

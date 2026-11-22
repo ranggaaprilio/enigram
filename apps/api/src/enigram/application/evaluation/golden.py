@@ -13,8 +13,8 @@ from typing import Any
 import yaml
 
 from enigram.application.code_index import JS_SUFFIXES, MINIFIED_JS
-from enigram.application.files import read_chunks_jsonl
-from enigram.application.indexing import load_manifest
+from enigram.application.indexing import opened_index_state
+from enigram.application.ports import Deps, IndexState
 from enigram.application.repo_sync import check_ref, check_repo_url, clone
 from enigram.config import Config
 from enigram.domain.chunk import Chunk
@@ -195,14 +195,23 @@ def load_golden_set(path: Path) -> GoldenSet:
     return GoldenSet(repo, questions)
 
 
-def load_indexed_chunks(cfg: Config) -> list[Chunk]:
-    books = [b for b, e in load_manifest(cfg)["books"].items() if e.get("status") == "indexed"]
+async def load_indexed_chunks(state: IndexState) -> list[Chunk]:
+    manifest = await state.load_manifest()
+    books = [b for b, e in manifest["books"].items() if e.get("status") == "indexed"]
     if not books:
         raise EnigramError("No indexed documents. Run `enigram index` first.")
     chunks: list[Chunk] = []
     for book in books:
-        chunks += read_chunks_jsonl(cfg.parsed_dir / f"{book}.chunks.jsonl")
+        chunks += await state.read_chunks(book)
     return chunks
+
+
+async def golden_chunks(cfg: Config, deps: Deps, path: Path) -> list[Chunk] | None:
+    """The indexed chunks a document set's evidence resolves against; None for a code set."""
+    if load_golden_set(path).repo is not None:
+        return None
+    async with opened_index_state(cfg, deps) as state:
+        return await load_indexed_chunks(state)
 
 
 def resolve_evidence(
@@ -407,19 +416,26 @@ def category_problems(q: GoldenQuestion) -> list[str]:
 
 
 def check_golden(
-    cfg: Config, path: Path, *, symbols: list[CodeSymbol] | None = None
+    cfg: Config,
+    path: Path,
+    *,
+    symbols: list[CodeSymbol] | None = None,
+    chunks: list[Chunk] | None = None,
 ) -> tuple[GoldenSet, dict[str, list[str]]]:
     """The set with resolved evidence and problems per question id (empty dict = valid).
 
-    A document set is checked against the index; a code set against its pinned repository,
-    so it needs no index, or, with `symbols`, against the code graph of that repository."""
+    A document set is checked against the indexed `chunks` (golden_chunks); a code set against
+    its pinned repository, so it needs no index, or, with `symbols`, against the code graph of
+    that repository."""
     golden = load_golden_set(path)
     if golden.repo is None:
-        chunks = load_indexed_chunks(cfg)
-        normalized = [normalize(c.text) for c in chunks]
+        if chunks is None:
+            raise EnigramError("A document golden set is checked against the indexed chunks")
+        indexed = chunks
+        normalized = [normalize(c.text) for c in indexed]
 
         def resolve(q: GoldenQuestion) -> tuple[GoldenQuestion, list[str]]:
-            return resolve_evidence(q, chunks, normalized)
+            return resolve_evidence(q, indexed, normalized)
     else:
         files = read_code_files(checkout_pinned(cfg, golden.repo))
         by_name: dict[str, list[CodeSymbol]] | None = None

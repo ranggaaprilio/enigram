@@ -184,7 +184,7 @@ async def run_retrieval_eval(
     allow_verdict: bool = False,
     answers_path: Path | None = None,
 ) -> dict[str, Any]:
-    golden = load_golden_checked(cfg, golden_path)
+    golden = await load_golden_checked(cfg, deps, golden_path)
     questions = select_questions(golden.questions, split=split, allow_verdict=allow_verdict)
     head = {
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),

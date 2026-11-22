@@ -29,6 +29,7 @@ from enigram.application.ports import (
     ConflictRepository,
     DecisionProvider,
     Deps,
+    IndexState,
     JobRepository,
     KnowledgeEngine,
     MemoryRepository,
@@ -61,6 +62,7 @@ class AppContext:
     decider: DecisionProvider | None = None  # the abstain guard and the route; None skips them
     code_embedder: CodeEmbedder | None = None  # search_code's semantic channel; None = full text
     conflicts: ConflictRepository | None = None  # docs-vs-code results; needs postgres
+    index_state: IndexState | None = None  # the document manifest; None = opened on use
     cfg: Config | None = None  # this workspace's; None = the server's
     deps: Deps | None = None
     # Over HTTP: the adapters of another workspace, and the names of all. None on stdio, which
@@ -271,7 +273,8 @@ def create_server(
         async with deps.open_engine() as engine:
             decider = deps.decider()
             if cfg.storage != "postgres":
-                yield AppContext(engine=engine, decider=decider)
+                state = await deps.new_index_state(None)
+                yield AppContext(engine=engine, decider=decider, index_state=state)
                 return
             store = await deps.open_store()  # only for the code graph: stdio logs no queries
             try:
@@ -283,6 +286,7 @@ def create_server(
                     decider=decider,
                     code_embedder=deps.code_embedder(),
                     conflicts=await deps.new_conflicts(store),  # after the code graph (FK)
+                    index_state=await deps.new_index_state(store),
                 )
             finally:
                 await store.close()
@@ -431,7 +435,8 @@ def create_server(
         """List the documents in the knowledge base with their indexing status (indexed,
         queued, running, failed). Use it to see what can be asked about."""
         app = await _open(ctx, workspace, "viewer")
-        docs = await documents_overview(app.cfg, app.store)
+        state = app.index_state or await (app.deps or deps).new_index_state(app.store)
+        docs = await documents_overview(app.cfg, state, app.store)
         return [DocumentInfo(d["book"], d["title"], d["status"], d["pages"]) for d in docs]
 
     def memory_of(app: AppContext) -> MemoryRepository:

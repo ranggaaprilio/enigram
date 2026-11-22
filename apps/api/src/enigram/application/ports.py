@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from enigram.domain.annotation import Annotation, AnnotationEvent, SymbolReview
     from enigram.domain.answer import QueryResult
     from enigram.domain.chat import ChatMessage, ChatSession, CustomAgent
-    from enigram.domain.chunk import ParsedBook
+    from enigram.domain.chunk import Chunk, ParsedBook
     from enigram.domain.code import CodeEdge, CodeEntrypoint, CodeFile, CodeSymbol, FlowSummary
     from enigram.domain.decision import Decisions, Question
     from enigram.domain.job import Job
@@ -376,6 +376,31 @@ class DocumentParser(Protocol):
     def close(self) -> None:
         """Release models before the long LLM phase."""
         ...
+
+
+class IndexState(Protocol):
+    """One workspace's manifest (which documents are indexed, and the settings the index was
+    built with) and each document's parsed chunks. Postgres for the API and worker, files for
+    STORAGE_BACKEND=file (plans/stateless.md, S1 and S3). Where it lives, for messages:
+    Config.manifest_location."""
+
+    async def load_manifest(self) -> dict[str, Any]:
+        """{"books": {book: entry}, <index settings>}; {"books": {}} when nothing is indexed."""
+        ...
+
+    async def save_manifest(self, manifest: dict[str, Any]) -> None:
+        """Replaces the whole manifest: a book missing from `manifest["books"]` is removed."""
+        ...
+
+    async def read_chunks(self, book: str) -> list["Chunk"]:
+        """In document order; [] when the book has none."""
+        ...
+
+    async def write_chunks(self, book: str, chunks: list["Chunk"]) -> None:
+        """Replaces the book's chunks."""
+        ...
+
+    async def delete_chunks(self, book: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -854,6 +879,9 @@ class Deps:
     new_stats: Callable[[JobRepository], Awaitable[DashboardStats]]
     # new_chat(store): chat sessions and messages, sharing the store's pool like new_memory.
     new_chat: Callable[[JobRepository], Awaitable[ChatRepository]]
+    # new_index_state(store): the manifest and chunks; Postgres needs the store (its pool),
+    # STORAGE_BACKEND=file takes None.
+    new_index_state: Callable[[JobRepository | None], Awaitable[IndexState]]
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)

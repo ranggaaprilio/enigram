@@ -6,6 +6,7 @@ import dataclasses
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 from enigram.config import Config
 from enigram.domain.errors import EnigramError
@@ -306,11 +307,22 @@ async def _preflight(cfg: Config) -> None:
         pass
 
 
+async def _graph_and_manifest(cfg: Config, deps: Any) -> tuple[Any, dict[str, Any]]:
+    """For `enigram report`: the entity graph and the manifest it reports on."""
+    from enigram.application.indexing import opened_index_state
+
+    async with opened_index_state(cfg, deps) as state:
+        manifest = await state.load_manifest()
+    return await deps.load_graph(), manifest
+
+
 async def _index(cfg: Config, args: argparse.Namespace) -> int:
-    from enigram.application.indexing import run_index
+    from enigram.application.indexing import opened_index_state, run_index
     from enigram.bootstrap import build_deps
 
-    run = await run_index(cfg, build_deps(cfg), args.folder, pages=args.pages, only=args.only)
+    deps = build_deps(cfg)
+    async with opened_index_state(cfg, deps) as state:
+        run = await run_index(cfg, deps, state, args.folder, pages=args.pages, only=args.only)
     for book in run.up_to_date:
         print(f"{book}: up to date (skipped)")
     for book, entry in run.books.items():
@@ -420,7 +432,14 @@ async def _repo(cfg: Config, args: argparse.Namespace) -> int:
         graph = await deps.new_code_graph(store)
         notes = await deps.new_annotations(store)
         result = await index_repo(
-            cfg, deps, args.url, args.ref, graph=graph, limit=args.limit, notes=notes
+            cfg,
+            deps,
+            args.url,
+            args.ref,
+            state=await deps.new_index_state(store),
+            graph=graph,
+            limit=args.limit,
+            notes=notes,
         )
     finally:
         await store.close()
@@ -494,7 +513,14 @@ async def _conflicts_detect(cfg: Config, args: argparse.Namespace) -> int:
             where = f" ({args.ref})" if args.ref else ""
             raise EnigramError(f"{args.url}{where} is not indexed; run `enigram repo` first")
         report = await detect_doc_conflicts(
-            cfg, graph, conflicts, deps.decider(), deps.code_embedder(), repo, only=args.entity
+            cfg,
+            graph,
+            conflicts,
+            deps.decider(),
+            deps.code_embedder(),
+            repo,
+            state=await deps.new_index_state(store),
+            only=args.entity,
         )
     finally:
         await store.close()
@@ -618,9 +644,11 @@ def _golden_check(cfg: Config, path: Path, graph: bool = False) -> int:
         TARGET_UNANSWERABLE_CODE,
         UNANSWERABLE,
         check_golden,
+        golden_chunks,
         load_golden_set,
     )
     from enigram.application.files import file_sha256
+    from enigram.bootstrap import build_deps
 
     symbols = None
     if graph:
@@ -628,7 +656,8 @@ def _golden_check(cfg: Config, path: Path, graph: bool = False) -> int:
         if repo is None:
             raise EnigramError("--graph checks a code golden set (one with `repo:`)")
         symbols = asyncio.run(_graph_symbols(cfg, repo.url, repo.ref, repo.pinned_sha))
-    golden_set, problems = check_golden(cfg, path, symbols=symbols)
+    chunks = asyncio.run(golden_chunks(cfg, build_deps(cfg), path))
+    golden_set, problems = check_golden(cfg, path, symbols=symbols, chunks=chunks)
     questions = golden_set.questions
     width = 14 if golden_set.repo is None else 20
     for q in questions:
@@ -895,8 +924,8 @@ def main(argv: list[str] | None = None) -> int:
         from enigram.application.report import build_report
         from enigram.bootstrap import build_deps
 
-        graph = asyncio.run(build_deps(cfg).load_graph())
-        print(f"report: {build_report(cfg, graph, review_file=args.review)}")
+        graph, manifest = asyncio.run(_graph_and_manifest(cfg, build_deps(cfg)))
+        print(f"report: {build_report(cfg, graph, manifest, review_file=args.review)}")
         return 0
     except EnigramError as e:
         print(f"error: {e}", file=sys.stderr)

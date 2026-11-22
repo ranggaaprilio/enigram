@@ -16,6 +16,7 @@ from enigram.application.ports import (
     ConflictRepository,
     DecisionProvider,
     Deps,
+    IndexState,
     JobRepository,
     KnowledgeEngine,
     MemoryRepository,
@@ -42,6 +43,7 @@ class Workspace:
     decider: DecisionProvider
     code_embedder: CodeEmbedder  # search_code's semantic channel on /query and MCP
     chat: ChatRepository  # chat sessions and messages (plan item 8)
+    index_state: IndexState  # the document manifest and chunks the worker writes
     engine: KnowledgeEngine | None = None  # the home one opens at start, others on first use
 
 
@@ -115,6 +117,7 @@ async def _build(cfg: Config, deps: Deps, store: JobRepository) -> Workspace:
     conflicts = await deps.new_conflicts(store)
     notes = await deps.new_annotations(store)
     chat = await deps.new_chat(store)
+    index_state = await deps.new_index_state(store)
     return Workspace(
         cfg,
         deps,
@@ -126,4 +129,5 @@ async def _build(cfg: Config, deps: Deps, store: JobRepository) -> Workspace:
         deps.decider(),
         deps.code_embedder(),
         chat,
+        index_state,
     )

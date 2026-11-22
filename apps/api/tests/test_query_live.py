@@ -6,6 +6,7 @@ import dataclasses
 
 import pytest
 
+from enigram.adapters.driven.file_index_state import FileIndexState
 from enigram.adapters.driven.lightrag_engine import open_engine
 from enigram.application import indexing as index
 from enigram.application.querying import answer_question
@@ -24,7 +25,7 @@ def live_cfg(tmp_path) -> Config:
 @pytest.mark.live
 @pytest.mark.docling
 async def test_query_answers_two_hop_question_with_sources(live_cfg, book_pdf):
-    await index.run_index(live_cfg, build_deps(live_cfg), book_pdf.parent)
+    await index.run_index(live_cfg, build_deps(live_cfg), FileIndexState(live_cfg), book_pdf.parent)
 
     # Storm Archive (Chapter 2) → Lighthouse Protocol → designed by Mira Okafor (Chapter 1).
     async with open_engine(live_cfg) as engine:

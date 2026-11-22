@@ -13,13 +13,13 @@ from typing import Any
 from enigram.application.code_embeddings import rank_search, symbol_text
 from enigram.application.conflicts import conflict_state
 from enigram.application.decisions import clip, decide, question
-from enigram.application.indexing import load_manifest
 from enigram.application.ports import (
     AnnotationRepository,
     CodeEmbedder,
     CodeGraphRepository,
     ConflictRepository,
     DecisionProvider,
+    IndexState,
 )
 from enigram.config import Config
 from enigram.domain.annotation import Annotation
@@ -107,6 +107,7 @@ async def detect_doc_conflicts(
     embedder: CodeEmbedder | None,
     repo: dict[str, Any],
     *,
+    state: IndexState,
     only: list[str] | None = None,
     trace: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -122,7 +123,7 @@ async def detect_doc_conflicts(
     trace = trace if trace is not None else []
     start = time.perf_counter()
     url, ref, repo_id = repo["url"], repo["ref"], repo["id"]
-    books = repo_books(load_manifest(cfg)["books"], url, ref)
+    books = repo_books((await state.load_manifest())["books"], url, ref)
     if not books:
         raise EnigramError(f"No documents indexed from {url}@{ref or 'default branch'}")
     entities = await conflicts.entities(books)

@@ -3,15 +3,17 @@
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
-from enigram.application.indexing import list_sources, load_manifest
+from enigram.application.indexing import list_sources
 from enigram.config import Config
 from enigram.domain.chunk import book_name
 
 if TYPE_CHECKING:
-    from enigram.application.ports import JobRepository
+    from enigram.application.ports import IndexState, JobRepository
 
 
-async def documents_overview(cfg: Config, store: "JobRepository | None") -> list[dict[str, Any]]:
+async def documents_overview(
+    cfg: Config, state: "IndexState", store: "JobRepository | None"
+) -> list[dict[str, Any]]:
     """Indexed and queued documents; without a store (stdio MCP) only what the manifest says."""
     files = (
         {book_name(p): p.name for p in list_sources(cfg.books_dir)}
@@ -21,7 +23,7 @@ async def documents_overview(cfg: Config, store: "JobRepository | None") -> list
     # Only document jobs carry a book; a repository sync (index_repo) shows on its repository.
     active = await store.active_jobs() if store else []
     jobs = {book: j for j in active if (book := j.payload.get("book"))}
-    books = load_manifest(cfg)["books"]
+    books = (await state.load_manifest())["books"]
     docs = []
     for book in sorted(set(books) | set(jobs)):
         entry, job = books.get(book, {}), jobs.get(book)
