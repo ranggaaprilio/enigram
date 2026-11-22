@@ -108,8 +108,10 @@ of its body) and every summary is embedded with `CODE_EMBED_MODEL` (default `voy
 The agent's `search_code` lists the symbols the question names exactly (`getWebsiteStats`,
 `AuthService.login`) first, then the nearest vector hits, so a question that shares no words with
 the code still finds it. Full-text hits are not mixed in: on the umami retrieval set they pushed
-right vector hits out of the top 6 (plans/retrieval-accuracy.md, R1). With no vectors, or when
-the embedding call fails, it searches full text only. Changing `CODE_EMBED_DIM` needs
+right vector hits out of the top 6 (plans/retrieval-accuracy.md, R1). The top 20 are then
+reranked by `CODE_RERANK_MODEL` (default `rerank-2.5`, one Voyage call of about 4.5k tokens per
+search; `off` turns it off), and the first 6 are shown. When the rerank call fails, the vector
+order stays. With no vectors, or when the embedding call fails, it searches full text only. Changing `CODE_EMBED_DIM` needs
 `DROP TABLE code_embeddings` and a re-index (the API refuses to start otherwise).
 
 ### How the code agent answers

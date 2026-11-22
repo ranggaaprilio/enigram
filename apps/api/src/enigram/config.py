@@ -36,6 +36,9 @@ EMBED_PROVIDERS = ("voyage", "openai-compatible")
 DEFAULT_EMBED_MODEL = "voyage-4-lite"
 # Code text (flow summaries, symbols) for the semantic part of search_code.
 DEFAULT_CODE_EMBED_MODEL = "voyage-code-4"
+# search_code reranks its candidates with this Voyage model (plans/retrieval-accuracy.md, R2a);
+# CODE_RERANK_MODEL=off turns it off. openai-compatible embeddings have no reranker.
+DEFAULT_CODE_RERANK_MODEL = "rerank-2.5"
 # The Docling chunker's tokenizer, recorded in the manifest by guard_chunk_settings.
 CHUNK_TOKENIZER = "tiktoken:cl100k_base"
 
@@ -62,6 +65,15 @@ def _required(name: str) -> str:
     if not value:
         raise EnigramError(f"{name} is not set. Copy .env.example to .env and fill it in.")
     return value
+
+
+def _code_rerank_model(embed_provider: str) -> str:
+    """CODE_RERANK_MODEL, DEFAULT_CODE_RERANK_MODEL on Voyage when unset, "" when off or not on
+    Voyage (the reranker is a Voyage endpoint)."""
+    raw = os.environ.get("CODE_RERANK_MODEL", "").strip()
+    if embed_provider != "voyage" or raw.lower() == "off":
+        return ""
+    return raw or DEFAULT_CODE_RERANK_MODEL
 
 
 def _int(name: str, default: int) -> int:
@@ -175,6 +187,7 @@ class Config:
     embed_max_tokens: int
     code_embed_model: str
     code_embed_dim: int
+    code_rerank_model: str  # "" = no reranking
     embed_provider: str
     embed_base_url: str  # "" for voyage
     embed_api_key: str = field(repr=False)  # "" for voyage
@@ -365,6 +378,7 @@ class Config:
             code_embed_model=os.environ.get("CODE_EMBED_MODEL", "").strip()
             or DEFAULT_CODE_EMBED_MODEL,
             code_embed_dim=_int("CODE_EMBED_DIM", 1024),
+            code_rerank_model=_code_rerank_model(embed_provider),
             embed_provider=embed_provider,
             embed_base_url=embed_base_url,
             embed_api_key=embed_api_key,

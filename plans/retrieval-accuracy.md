@@ -1,7 +1,7 @@
 # Akurasi retrieval dan graph
 
 Rencana dibuat 2026-11-22 dari riset best practice 2024-2026 dan peta kode saat ini.
-R0 dan R1 dibangun 2026-11-22; angka ada di bagian Hasil. Fase lain
+R0, R1 dan R2a dibangun 2026-11-22; angka ada di bagian Hasil. Fase lain
 belum.
 
 ## Masalah
@@ -113,7 +113,25 @@ Risiko: kata persis yang bukan nama simbol (teks pesan error, env `UPPER_SNAKE`)
 dibantu full-text di `search_code`; agent masih punya `grep`. Full-text dengan BM25 yang layak
 (R5, atau pg_search) bisa diuji lagi sebagai kanal hybrid nanti.
 
-### R2: reranker untuk dokumen
+### R2a: reranker untuk `search_code` (dibangun 2026-11-22, gate tidak lulus)
+
+Fase baru, dikerjakan sebelum R2 karena bisa diukur di umami tanpa korpus dokumen.
+
+- 20 kandidat teratas dari ranking R1 di-rerank oleh `CODE_RERANK_MODEL` (default `rerank-2.5`,
+  `off` mematikannya; tidak ada di provider embedding OpenAI-compatible). Sesudah rerank,
+  `search_code` menampilkan 6 teratas.
+- Query diberi instruksi ("Find the TypeScript function, route handler or constant whose code
+  answers this question about the codebase: "). Dokumen per simbol berisi nama, jenis dan file,
+  ringkasannya, serta signature, tanpa body.
+- Kalau panggilan rerank gagal, urutan R1 dipakai.
+- `doc_conflicts` tidak ikut. `AGENT_VERSION` 3.11.
+
+**Gate tidak lulus**: recall@6 naik 1,9 poin, tetapi MRR@20 turun 3,4 poin. Varian ini juga
+percobaan keempat di 43 soal yang sama, jadi bisa overfit. Pemilik memutuskan tetap
+memakainya (2026-11-22). Biaya per `search_code`: satu panggilan Voyage (sekitar 4,5k token; 9k dengan
+dokumen penuh) dan latensi p50 sekitar 0,45 detik.
+
+### R2: reranker untuk dokumen (ditunda, K6)
 
 - Isi `rerank_model_func` LightRAG dengan Voyage `rerank-2.5` (kunci Voyage sudah ada),
   lalu `enable_rerank=True`.
@@ -182,7 +200,8 @@ dikerjakan setelah gate itu lulus.
 |---|---|---|
 | R0 | perintah `golden retrieval`, metrik dari trace agent, re-index Kestrel, baseline tercatat | angka baseline tertulis di rencana ini |
 | R1 | ranking `search_code`: nama persis + vektor | recall@6 dan MRR@20 umami (43 soal) naik: LULUS 0,674→0,779, 0,494→0,772 |
-| R2 | reranker dokumen | `context_recall`/`context_precision` dokumen naik, latensi p50 dicatat |
+| R2a | reranker `search_code` | recall@6 dan MRR@20 umami naik: TIDAK LULUS (0,779→0,798, 0,772→0,738); dipakai atas keputusan pemilik |
+| R2 | reranker dokumen | `context_recall`/`context_precision` dokumen naik, latensi p50 dicatat (ditunda, K6) |
 | R3+R4 | `input_type` + contextual retrieval, satu re-index | metrik dokumen naik dibanding R2, biaya re-index dicatat |
 | R5 | full-text + RRF dokumen | hanya kalau R2-R4 belum cukup |
 | R6 | entity resolution | hanya kalau `mix` > `naive` di R0 |
@@ -254,6 +273,22 @@ Satu PR per baris, tidak di-stack. Setiap PR mencatat run id eval di bagian "Has
 - CRAG: https://arxiv.org/abs/2401.15884
 
 ## Hasil
+
+### R2a (2026-11-22, umami 43 soal, 20 kandidat dari R1)
+
+| Varian | recall@6 | MRR@20 | Membaik | Memburuk |
+|---|---|---|---|---|
+| R1 tanpa rerank | 0,779 | **0,772** | - | - |
+| rerank-2.5, dokumen penuh (dengan body) | 0,775 | 0,761 | 6 | 4 |
+| rerank-2.5, nama persis tetap di atas | 0,775 | 0,744 | 6 | 4 |
+| rerank-2.5 + instruksi | 0,775 | 0,767 | 6 | 4 |
+| rerank-2.5, dokumen ringkas | 0,748 | 0,684 | 4 | 4 |
+| **rerank-2.5 + instruksi + dokumen ringkas (dibangun)** | **0,798** | 0,738 | 6 (u25, u30, u31, u32, u37, u38) | 2 (u17, u34) |
+| rerank-2.5-lite, dokumen penuh | 0,717 | 0,656 | 5 | 7 |
+
+- recall@20 tetap 0,868 (kandidatnya sama).
+- Implementasi mereproduksi varian yang dibangun: `data/reports/retrieval-20261122-133006.md`.
+- Eksperimen memakai sekitar 1,94 juta token rerank Voyage.
 
 ### R1 (2026-11-22, umami 43 soal)
 

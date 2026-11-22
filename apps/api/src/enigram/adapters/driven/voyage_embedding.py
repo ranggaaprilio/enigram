@@ -98,6 +98,18 @@ class VoyageCodeEmbedder:
             raise EnigramError(f"Voyage returned another dim than CODE_EMBED_DIM={self.dim}")
         return vectors
 
+    @property
+    def rerank_model(self) -> str:
+        return self.cfg.code_rerank_model
+
+    async def rerank(self, query: str, documents: list[str]) -> list[int]:
+        try:
+            result = await self.client.rerank(query, documents, model=self.rerank_model)
+        except Exception as e:  # noqa: BLE001 - voyageai raises its own classes; name the provider
+            raise EnigramError(f"Voyage rerank failed ({self.rerank_model}): {e}") from e
+        record_usage(int(getattr(result, "total_tokens", 0) or 0), 0)  # BudgetExceeded propagates
+        return [r.index for r in result.results]
+
 
 class VoyageRagasEmbedding(BaseRagasEmbedding):
     """Ragas' embedding interface on Voyage, for AnswerRelevancy and AnswerCorrectness."""

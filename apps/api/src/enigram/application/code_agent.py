@@ -69,12 +69,12 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.10"  # bump when tool output, the prompt or the guard changes: busts the cache;
+AGENT_VERSION = "3.11"  # bump when tool output, the prompt or the guard changes: busts the cache;
 # 3.3: search_code fuses vector hits; 3.5: the loop runs on Pydantic AI; 3.6: citations that
 # point at nothing are removed, tags are never the model's, short sentences are tagged;
 # 3.7: sentence_relation has a `partly` answer and threshold 0.5; 3.8: the prompts name
 # JavaScript repos too (CODE_JAVASCRIPT); 3.9: absence claims not judged; 3.10: search_code
-# ranks exact names, then the vectors (no full-text fusion)
+# ranks exact names, then the vectors (no full-text fusion); 3.11: then CODE_RERANK_MODEL reranks
 AGENT_MAX_REPOS = 3
 # Lines read around a cited range when verifying its sentence: a claim about behaviour often
 # needs the code around the cited lines (plans/answer-verification.md, V2; tune on the dev split).
@@ -497,7 +497,7 @@ class CodeAgentTools:
             vector = await self._query_vector(query)
             model = self.embedder.model if self.embedder is not None else ""
             ranked, near = await search_ranking(
-                self.graph, r["id"], query, SEARCH_MAX_HITS, vector, model
+                self.graph, r["id"], query, SEARCH_MAX_HITS, vector, model, self.embedder
             )
             self.semantic_hits += near
             symbols = await self.graph.symbols_by_id(r["id"], [i for i, _ in ranked])

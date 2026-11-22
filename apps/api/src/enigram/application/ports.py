@@ -459,6 +459,15 @@ class CodeEmbedder(Protocol):
         """One vector per text; input_type "document" (index) or "query" (search)."""
         ...
 
+    @property
+    def rerank_model(self) -> str:
+        """The reranker search_code uses (CODE_RERANK_MODEL); "" = none."""
+        ...
+
+    async def rerank(self, query: str, documents: list[str]) -> list[int]:
+        """Indices of `documents`, most relevant first; EnigramError when the call fails."""
+        ...
+
 
 @dataclass(frozen=True)
 class ParsedGraph:
