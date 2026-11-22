@@ -321,7 +321,7 @@ export default function Graph() {
         <Empty
           action={
             <Button asChild variant="secondary" size="sm">
-              <WsLink to="/documents">Upload documents</WsLink>
+              <WsLink to="/pipeline">Upload documents</WsLink>
             </Button>
           }
         >

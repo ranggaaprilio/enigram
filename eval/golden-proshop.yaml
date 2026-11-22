@@ -1,0 +1,86 @@
+# JavaScript mini check for plans/javascript-support.md J5 (D6, D12: proshop only, owner
+# 2026-11-19). Check: uv run enigram golden check --file eval/golden-proshop.yaml
+#
+# Five questions on the Express backend of a plain JavaScript (ESM) repository without a
+# tsconfig.json, indexed with CODE_JAVASCRIPT=on. Every answer key holds at repo.pinned_sha;
+# values from the environment are named by their variable. The questions avoid the limits the
+# plan already states (middleware wiring, top-level code such as mongoose `pre` hooks).
+# Pass: at least 4 of 5 answers correct with a citation in the evidence file.
+#
+# Drafted by Claude from the code at the pinned commit on 2026-11-19; NOT yet reviewed by the
+# owner (labels are a draft until then).
+version: 2
+repo:
+  url: https://github.com/bradtraversy/proshop_mern
+  ref: master
+  pinned_sha: "1d20b5b09e796e2f00779306c390360e9e573276"
+questions:
+  - id: "js01"
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    question: "What happens when a user tries to review a product they have already reviewed?"
+    answer: >
+      The request is rejected with 400 and the message "Product already reviewed": the handler
+      looks for a review by the same user on the product first. Otherwise the review (name,
+      numeric rating, comment, user) is added, numReviews and the average rating are recomputed,
+      and it answers 201 {message: "Review added"}; an unknown product gives 404 "Product not
+      found".
+    evidence:
+      - symbol: createProductReview
+        file: backend/controllers/productController.js
+
+  - id: "js02"
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    question: "How does the product list endpoint paginate and search?"
+    answer: >
+      Ten products per page; the page comes from the pageNumber query parameter (default 1).
+      An optional keyword query parameter filters by product name with a case-insensitive
+      regular expression. The response is {products, page, pages}, where pages is the matching
+      count divided by 10, rounded up.
+    evidence:
+      - symbol: getProducts
+        file: backend/controllers/productController.js
+
+  - id: "js03"
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    question: "What does a successful login return, and how long is the token valid?"
+    answer: >
+      The user's _id, name, email, isAdmin and a token. The token is a JWT holding the user id,
+      signed with JWT_SECRET and valid for 30 days. A wrong email or password gives 401 "Invalid
+      email or password".
+    evidence:
+      - symbol: authUser
+        file: backend/controllers/userController.js
+      - symbol: generateToken
+        file: backend/utils/generateToken.js
+
+  - id: "js04"
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    question: "What happens when someone places an order with an empty list of items?"
+    answer: >
+      400 with the message "No order items". Otherwise an order is saved with the items, the
+      shipping address, payment method and prices from the request and the logged-in user, and
+      the created order is returned with 201.
+    evidence:
+      - symbol: addOrderItems
+        file: backend/controllers/orderController.js
+
+  - id: "js05"
+    category: behavior
+    split: dev
+    expected_route: graph_flow
+    question: "Which files does the image upload accept, and where are they stored?"
+    answer: >
+      Only jpg, jpeg and png: both the file extension and the MIME type must match, otherwise it
+      fails with "Images only!". Files are written to the uploads/ folder as
+      <fieldname>-<timestamp><extension>, and the response is the stored path.
+    evidence:
+      - symbol: checkFileType
+        file: backend/routes/uploadRoutes.js

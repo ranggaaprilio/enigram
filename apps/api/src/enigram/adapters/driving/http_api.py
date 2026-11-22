@@ -1309,6 +1309,11 @@ def create_app(
         except EnigramError as e:
             raise _raise_http(e) from e
 
+    @app.get("/jobs")
+    async def list_active_jobs(ws: Viewer) -> list[dict[str, Any]]:
+        """The queued and running jobs, oldest first, for the Pipeline page after a reload."""
+        return [asdict(job) for job in await ws.store.active_jobs()]
+
     @app.get("/jobs/{job_id}")
     async def get_job(ws: Viewer, job_id: int) -> dict[str, Any]:
         job = await ws.store.get_job(job_id)

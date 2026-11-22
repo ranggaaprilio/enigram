@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS symbol_reviews (
 -- for the re-check because a re-index deletes old summaries.
 ALTER TABLE annotations ADD COLUMN IF NOT EXISTS summary_kind TEXT;
 ALTER TABLE annotations ADD COLUMN IF NOT EXISTS summary_text TEXT;
+-- Why the decider marked a note as conflicting, for the reviewer (null when not conflicting).
+ALTER TABLE annotations ADD COLUMN IF NOT EXISTS conflict_reason TEXT;
 """
 
 # Annotation field -> column; `by` is a SQL keyword.
@@ -106,6 +108,7 @@ _COLUMNS = {
     "note_type": "note_type",
     "summary_kind": "summary_kind",
     "summary_text": "summary_text",
+    "conflict_reason": "conflict_reason",
 }
 
 
@@ -145,6 +148,7 @@ def _annotation(row: asyncpg.Record) -> Annotation:
         note_type=row["note_type"],
         summary_kind=row["summary_kind"],
         summary_text=row["summary_text"],
+        conflict_reason=row["conflict_reason"],
     )
 
 

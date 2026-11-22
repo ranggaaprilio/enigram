@@ -62,9 +62,9 @@ function renderAs(role: Role, routes: Record<string, Reply> = {}, id = '4') {
   render(
     asRole(
       role,
-      <MemoryRouter initialEntries={[`/documents/repos/${id}`]}>
+      <MemoryRouter initialEntries={[`/pipeline/repos/${id}`]}>
         <Routes>
-          <Route path="/documents/repos/:id" element={<RepoDetail />} />
+          <Route path="/pipeline/repos/:id" element={<RepoDetail />} />
         </Routes>
       </MemoryRouter>,
     ),
@@ -118,9 +118,9 @@ describe('Repository detail', () => {
     expect(await screen.findByText('Repository 99 not found.')).toBeInTheDocument()
   })
 
-  it('links back to Documents', async () => {
+  it('links back to Pipeline', async () => {
     renderAs('viewer')
     expect(await screen.findByRole('heading', { name: 'org-white-board' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Documents' })).toHaveAttribute('href', '/documents')
+    expect(screen.getByRole('link', { name: 'Pipeline' })).toHaveAttribute('href', '/pipeline')
   })
 })

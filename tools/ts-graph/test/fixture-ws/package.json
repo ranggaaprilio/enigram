@@ -1,0 +1,1 @@
+{ "name": "ts-graph-fixture-ws", "private": true, "workspaces": ["packages/*"] }

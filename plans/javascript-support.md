@@ -319,11 +319,11 @@ Satu PR per fase dari `main`, tidak bertumpuk. J0 tidak mengubah kode produk.
 | Fase | Isi | Verifikasi (tanpa LLM kecuali J5) |
 |---|---|---|
 | J0 Survei | **Selesai 2026-11-19.** Fungsi sidecar yang ada dijalankan pada 9 repo publik di SHA yang dipatok | Tabel di bagian Hasil. Target angka sudah diisi; pemetaan workspace dan tebakan folder masuk J2; perbaikan Next dicoret; D9 punya angka |
-| J1 Project | Project JS virtual dengan aturan kepemilikan (file yang sudah milik project TS tetap di sana), `jsconfig.json`, aturan skip termasuk `fixtures/` dan file besar, graph kosong tanpa error, `config`/`language`/`files_skipped` di report | `npm test`: fixture `fixture-js` (dua `package.json`, JSX di `.js`, file config, `.min.js`, file test, satu file dengan sintaks Flow) dan `fixture-mixed` (root `package.json` tanpa tsconfig, satu paket TS, `scripts/x.js`): keluaran project TS identik dengan sebelum perubahan. Fixture TS lama lulus. Fixture `fixture-tsjs` (tsconfig tanpa `allowJs` di samping `lib/*.js`, bentuk axios): file JS masuk project JS. Pada tiap repo ukur: jumlah file cocok dengan dianalisis + dilewati; axios memberi project root dengan 92 file; keluaran webpack tidak berubah |
+| J1 Project | Project JS virtual dengan aturan kepemilikan (file yang sudah milik project TS tetap di sana), `jsconfig.json`, aturan skip termasuk `fixtures/` dan file besar, graph kosong tanpa error, `config`/`language`/`files_skipped` di report | `npm test`: fixture `fixture-js` (dua `package.json`, JSX di `.js`, file config, `.min.js`, file test, satu file dengan sintaks Flow) dan `fixture-mixed` (root `package.json` tanpa tsconfig, satu paket TS, `scripts/x.js`): keluaran project TS identik dengan sebelum perubahan. Fixture TS lama lulus. Fixture `fixture-tsjs` (tsconfig tanpa `allowJs` di samping `lib/*.js`, bentuk axios): file JS masuk project JS. Pada tiap repo ukur: jumlah file cocok dengan dianalisis + dilewati; axios memberi project root dengan 86 file (survei menghitung 92 karena belum melewati `tests/`); keluaran webpack tidak berubah kecuali panggilan ke file JS yang kini ikut dianalisis |
 | J2 Modul | Aturan penugasan fungsi, `exported` (ESM dan CJS), edge untuk `module.exports = { }`, edge `imports` dari `require`, pemetaan workspace, tebakan folder untuk alias, `imports_resolved_share`, pemeriksaan `owningSymbol` | `npm test`: `fixture-js` (ESM, `export { a, b }`) dan `fixture-cjs` (`exports.x`, `module.exports = { }`, `prototype`, `require`). Fixture workspace (dua paket yang saling import dengan nama paket). Pada repo ukur: angka target di tabel Ukuran berhasil; `affected_files` diuji pada proshop (ESM) dan node-express-boilerplate (CJS) |
 | J3 Entry point | Chain `route()`, Express CJS | `npm test` pada fixture ESM dan CJS. Daftar route proshop dan node-express-boilerplate ditulis di test dan ditemukan |
-| J4 API | Flag `CODE_JAVASCRIPT`, `is_js_repo`, ekstensi JS di `repo_limits` dan `git_blob_shas` (termasuk untuk jalur TS, D10), repo JS tanpa Postgres dilewati dengan pesan, pesan untuk graph kosong, teks error dan docs (termasuk tabel cakupan) | pytest: deteksi (TS saja, JS saja, campuran, Markdown + `package.json` tanpa JS, flag mati), `git_blob_shas` dengan `.js`, repo JS tanpa graph backend tidak error |
-| J5 Ukur | Index tiap repo ukur dengan LLM, mini check, prompt + `AGENT_VERSION`, perluas `read_ts_files` ke JS, jalankan ulang golden TS split `dev` | Angka per repo di bagian Hasil. Golden TS `dev` tidak turun dari 10/10 |
+| J4 API | **Selesai 2026-11-19** (D10 tidak di belakang flag, disetujui owner). Flag `CODE_JAVASCRIPT`, `is_js_repo`, ekstensi JS di `repo_limits` dan `git_blob_shas` (termasuk untuk jalur TS, D10), repo JS tanpa Postgres dilewati dengan pesan, pesan untuk graph kosong, teks error dan docs (termasuk tabel cakupan) | pytest: deteksi (TS saja, JS saja, campuran, Markdown + `package.json` tanpa JS, flag mati), `git_blob_shas` dengan `.js`, repo JS tanpa graph backend tidak error |
+| J5 Ukur | **Bagian tanpa LLM selesai 2026-11-19:** prompt menyebut JavaScript, `AGENT_VERSION` 3.8, `read_ts_files` menjadi `read_code_files` (golden TS tetap lulus semua), mini check proshop di `eval/golden-proshop.yaml` (draft Claude, belum dicek owner; D12 owner: proshop saja). Temuan: `export default x` untuk const memberi `exported: false` (`generateToken`). Index dengan LLM menunggu persetujuan owner. Isi awal: Index tiap repo ukur dengan LLM, mini check, prompt + `AGENT_VERSION`, perluas `read_ts_files` ke JS, jalankan ulang golden TS split `dev` | Angka per repo di bagian Hasil. Golden TS `dev` tidak turun dari 10/10 |
 
 ## Kumpulan repo ukur (J0)
 
@@ -378,6 +378,7 @@ daripada repo contoh, karena itulah yang nanti benar-benar di-index (D3).
 | `examples/` dan `docs/` ikut ter-index di repo library | Entry point dan flow dari contoh, bukan dari kode utama (express: 43 dari 50 file yang dianalisis ada di `examples/`, hanya 6 di `lib/`) | Tidak dilewati di v1; terlihat di `report.projects` dan daftar entry point. Ditinjau lagi setelah J5 |
 | Tebakan folder me-resolve import ke file yang salah | Edge salah | Hanya untuk import yang bukan dependency di `package.json` mana pun dan yang file tujuannya ada |
 | Perbaikan limit (D10) menolak repo yang sekarang ter-index | Sync yang tadinya jalan menjadi gagal | Keputusan owner; error menyebut env dan limit bisa dinaikkan |
+| Compiler TypeScript memuat file di luar repo lewat symlink (jalur TS dan JS) atau `paths`/`baseUrl` | Di jalur TS yang sudah ada, `include` tsconfig mengikuti folder symlink, sehingga file di luar repo **ter-index sebagai symbol, lengkap dengan isinya** (ditemukan 2026-11-19). Di jalur JS, flag `resolved` bisa dipakai untuk mengetes apakah sebuah file di luar repo ada | **Diperbaiki (S1, 2026-11-19):** semua project memakai file system pembungkus (`lib/fsguard.mjs`) yang menolak path yang `realpath`-nya di luar repo. Keluaran repo tanpa symlink keluar tidak berubah (webpack, axios); waktu webpack 32,2 → 32,9 detik |
 
 ## Keputusan owner
 
@@ -502,6 +503,50 @@ webpack 38,8 detik dan 1,35 GB, sebagian besar untuk membaca 25 ribu file.
 9. Repo Vue: 131 file `.vue` tidak terbaca, dan flow-nya akan sangat tidak lengkap. Statusnya
    tetap "tidak didukung, dihitung".
 
-### J1–J5
+### J1 dan J2 (2026-11-19, sidecar saja, branch `feat/js-projects`)
+
+Semua di belakang `--javascript` di sidecar. Tanpa opsi itu, keluaran sama dengan sebelumnya
+kecuali dua perbaikan TS yang disetujui: nama di `export { }` menjadi `exported`, dan
+`owningSymbol` tidak lagi mendaratkan panggilan di symbol pertama sebuah file. Dicek pada
+webpack (identik) dan axios (1 symbol berubah `exported`).
+
+Aturan CommonJS juga berlaku untuk file `.js` di project TS ber-`allowJs` saat opsi menyala. Di
+webpack itu menambah sekitar 600 symbol dan 5.500 edge.
+
+| Repo | Import kode ter-resolve | Edge `imports` | Entry point | Sebelum J1 |
+|---|---|---|---|---|
+| proshop_mern | 129/129 | 262 | 21 (4 Express, 17 generic) | tidak ter-index |
+| node-express-boilerplate | 75/75 | 123 | 4 generic | tidak ter-index |
+| express | 54/57 | 144 | 0 | tidak ter-index |
+| axios (project JS) | 188/191 | 241 | 4 generic | hanya 13 file `.ts` |
+| repo Next | 19/19 | 47 | 11 Next | tidak ter-index |
+| coreui | 129/132 | 341 | 42 generic | tidak ter-index |
+| vue-element-admin | 56/120 | 159 | 25 generic | tidak ter-index |
+| create-react-app | 64/81; antar paket workspace 28/30 | 279 | 19 generic | tidak ter-index |
+| webpack | 227/332 | 4.628 | 96 generic | 1.022 file, 9 entry point |
+
+Sisa yang diketahui:
+
+- express masih 0 entry point: `exports = module.exports = createApplication` (penugasan
+  berantai) dan `app.init = function` pada objek biasa belum dianggap diekspor.
+- vue-element-admin: alias `@/x` yang menunjuk `index.vue` dihitung tidak ter-resolve.
+- create-react-app: 2 import ke paket yang `main`-nya menunjuk hasil build (`lib/`), yang tidak
+  ada di repo.
+- Batas: paling banyak 1.000 nama paket untuk pemetaan workspace (review keamanan).
+
+### J3 (2026-11-19, sidecar saja)
+
+Chain `router.route(path).get(...)` berlaku selalu, juga untuk Express TS (keputusan owner). Bentuk
+CommonJS (require, `module.exports = router`, mount lewat `forEach` atas array `{ path, route }`,
+handler lewat barrel dan objek `module.exports`) hanya dengan `--javascript`.
+
+| Repo | Route Express | Target |
+|---|---|---|
+| proshop_mern | 23 dari 25, semua handler ke fungsi controller yang benar | 23 (2 di dalam `if/else` di luar cakupan) |
+| node-express-boilerplate (CJS) | 13 dari 13, dengan prefix `/v1/auth` dan `/v1/users` | 13 (`GET /v1/docs` memakai handler paket) |
+
+Tanpa `--javascript`, webpack dan axios sama dengan sebelum J3.
+
+### J4–J5
 
 Belum ada.

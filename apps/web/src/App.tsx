@@ -20,7 +20,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/s
 import Agents from './pages/Agents'
 import Chat from './pages/Chat'
 import Dashboard from './pages/Dashboard'
-import Documents from './pages/Documents'
+import Pipeline from './pages/Pipeline'
 import RepoDetail from './pages/RepoDetail'
 import Graph from './pages/Graph'
 import Knowledge from './pages/Knowledge'
@@ -42,7 +42,7 @@ function Moved({ to, tab }: { to: string; tab?: string }) {
 }
 
 function RepoMoved() {
-  return <Moved to={`documents/repos/${useParams().id}`} />
+  return <Moved to={`pipeline/repos/${useParams().id}`} />
 }
 
 // The item a page shows, for the breadcrumb: a query, a symbol, a note.
@@ -56,8 +56,8 @@ function itemOf(segment: string, pathname: string, search: string): string | nul
     const id = pathname.split('/')[4]
     return id ? `Query ${id}` : null
   }
-  if (segment === 'documents') {
-    const [, , , , kind, id] = pathname.split('/') // /w/<ws>/documents/repos/<id>
+  if (segment === 'pipeline') {
+    const [, , , , kind, id] = pathname.split('/') // /w/<ws>/pipeline/repos/<id>
     return kind === 'repos' && id ? `Repository ${id}` : null
   }
   if (segment === 'knowledge') {
@@ -209,8 +209,11 @@ function WorkspaceShell({ home }: { home: string }) {
               // Keyed: a switch remounts every page, so none keeps the old workspace's data.
               <Routes key={workspace}>
                 <Route index element={<Navigate to="dashboard" replace />} />
-                <Route path="documents" element={<Documents />} />
-                <Route path="documents/repos/:id" element={<RepoDetail />} />
+                <Route path="pipeline" element={<Pipeline />} />
+                <Route path="pipeline/repos/:id" element={<RepoDetail />} />
+                {/* Before 2026-11-22 the Pipeline page was Documents. */}
+                <Route path="documents" element={<Moved to="pipeline" />} />
+                <Route path="documents/repos/:id" element={<RepoMoved />} />
                 {/* The Ask page became the Auto agent of Chat (2026-11-08). */}
                 <Route path="ask" element={<Moved to="chat" />} />
                 <Route path="chat/:id?" element={<Chat />} />

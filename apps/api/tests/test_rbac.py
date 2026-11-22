@@ -37,6 +37,7 @@ MATRIX = [
     ("GET", "/conflicts", None, "viewer"),
     ("GET", "/annotations", None, "viewer"),
     ("GET", "/annotations/{note}", None, "viewer"),
+    ("GET", "/jobs", None, "viewer"),
     ("GET", "/jobs/1", None, "viewer"),
     ("POST", "/query", {"question": "What does find do?", "scope": "code"}, "viewer"),
     ("GET", "/queries", None, "viewer"),

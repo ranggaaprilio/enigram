@@ -350,8 +350,8 @@ def create_server(
     ) -> AgentAnswer:
         """Answer a question from the indexed documents (GraphRAG: knowledge graph + vector
         search), citing sources as [n] (`sources` maps each n to title, section and pages), or
-        from the indexed TypeScript repositories (an agent that reads the code graph and the
-        source), citing `path:start-end@sha` inline. By default (scope="auto") a router picks
+        from the indexed TypeScript/JavaScript repositories (an agent that reads the code graph and
+        the source), citing `path:start-end@sha` inline. By default (scope="auto") a router picks
         the source, or answers from both under two headings when unsure; pass scope="docs" or
         "code" to force one. Ask one specific question per call."""
         app = await _open(ctx, workspace, "viewer")

@@ -131,11 +131,11 @@ async def _detect_conflict(
     repo_id: int | None,
     symbol: CodeSymbol | None,
     text: str,
-) -> tuple[bool | None, float | None]:
-    """The decider's verdict on a symbol note that is being verified; (None, None) when there is
-    nothing to decide with."""
+) -> tuple[bool | None, float | None, str | None]:
+    """The decider's verdict on a symbol note that is being verified, with its reason on a
+    conflict; (None, None, None) when there is nothing to decide with."""
     if decider is None or graph is None or repo_id is None or symbol is None:
-        return None, None
+        return None, None, None
     return await check_conflict(decider, graph, repo_id, symbol, text)
 
 
@@ -229,11 +229,11 @@ async def create_annotation(
     }
     if new.memory_id is not None:
         fields["memory_id"] = new.memory_id
-    p = None
+    p = why = None
     if not new.proposed and at_least(role, "maintainer"):
         fields |= _verify_fields(actor, verify_by)
         if new.target_kind == "symbol":
-            conflict, p = await _detect_conflict(decider, graph, new.repo_id, symbol, text)
+            conflict, p, why = await _detect_conflict(decider, graph, new.repo_id, symbol, text)
             if conflict is not None:
                 fields["conflict"] = conflict
     else:
@@ -242,7 +242,10 @@ async def create_annotation(
     log.info("[notes] %s created %d on %s (%s)", actor, note.id, note.target_kind, note.status)
     if fields.get("conflict"):
         note = await notes.update(
-            note.id, {"conflict": True, "p": p}, DECIDER_ACTOR, "conflict_detected"
+            note.id,
+            {"conflict": True, "conflict_reason": why, "p": p},
+            DECIDER_ACTOR,
+            "conflict_detected",
         )
     return note
 
@@ -412,6 +415,8 @@ async def change_annotation(
         updates["owner"] = owner
     if "conflict" in changes:
         updates["conflict"] = bool(changes["conflict"])
+        if not updates["conflict"]:
+            updates["conflict_reason"] = None
     if "by" in changes:
         updates["by"] = str(changes["by"]).strip()
     action = next(
@@ -441,13 +446,19 @@ async def change_annotation(
             if graph and changed.repo_id
             else {}
         )
-        conflict, p = await _detect_conflict(
+        conflict, p, why = await _detect_conflict(
             decider, graph, changed.repo_id, found.get(changed.target_ref), changed.text
         )
-        if conflict is not None and conflict != changed.conflict:
+        # A note that still conflicts after an edit gets the reason for its new text.
+        if conflict is not None and (
+            conflict != changed.conflict or (conflict and why and why != changed.conflict_reason)
+        ):
             event = "conflict_detected" if conflict else "conflict_cleared"
             changed = await notes.update(
-                annotation_id, {"conflict": conflict, "p": p}, DECIDER_ACTOR, event
+                annotation_id,
+                {"conflict": conflict, "conflict_reason": why, "p": p},
+                DECIDER_ACTOR,
+                event,
             )
             log.info("[notes] %s %s %d (p=%.2f)", DECIDER_ACTOR, event, annotation_id, p or 0.0)
     return changed

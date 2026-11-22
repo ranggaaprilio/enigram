@@ -1,5 +1,6 @@
-"""The TypeScript code graph: symbols, edges, entry points, flow summaries and `file:line@sha`
-citations. Rows come from a parser (tools/ts-graph) as JSON; this module validates them.
+"""The TypeScript/JavaScript code graph: symbols, edges, entry points, flow summaries and
+`file:line@sha` citations. Rows come from a parser (tools/ts-graph) as JSON; this module validates
+them.
 
 `body_hash` is computed by the parser on the raw declaration text; bodies are redacted
 (domain/secrets.py) before storage, so a stored body can differ from the text that was hashed.

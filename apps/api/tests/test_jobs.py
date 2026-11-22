@@ -70,6 +70,17 @@ async def test_finish_and_requeue(store):
     assert [(j.id, j.status) for j in await store.active_jobs()] == [(running.id, "queued")]
 
 
+async def test_set_progress_round_trip(store):
+    job = await store.enqueue("index_repo", {"url": "https://github.com/org/h"})
+    assert job.progress is None
+    progress = {"stage": "scan", "detail": {"stages": ["clone", "scan"]}, "at": "2026-11-22T00:00Z"}
+
+    await store.set_progress(job.id, progress)
+
+    assert (await store.get_job(job.id)).progress == progress
+    assert (await store.active_jobs())[0].progress == progress
+
+
 async def test_workspaces_do_not_see_each_other(store, pool):
     job = await store.enqueue("index", {"book": "a"})
     other = PostgresJobStore(pool, f"{store.workspace}_other")

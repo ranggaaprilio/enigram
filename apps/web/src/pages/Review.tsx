@@ -299,6 +299,16 @@ function InboxItem({
         {formatTime(note.created_at)}
         {note.question && ` · Question: ${note.question}`}
       </p>
+      {reason === 'conflict' && note.conflict_reason && (
+        <div className="mt-2 rounded-md border border-destructive/30 px-3 py-2">
+          <p className="m-0 mb-0.5 text-[13px] font-semibold text-muted-foreground">
+            Why it conflicts
+          </p>
+          <div className="markdown text-[13px]">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.conflict_reason}</ReactMarkdown>
+          </div>
+        </div>
+      )}
       {context}
       {mayDecide && (actions.length > 0 || relink) && (
         <div className="mt-3 flex flex-wrap items-center gap-2">

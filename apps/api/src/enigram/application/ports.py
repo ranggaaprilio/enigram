@@ -93,6 +93,10 @@ class JobRepository(Protocol):
         error: str | None = None,
     ) -> None: ...
 
+    async def set_progress(self, job_id: int, progress: dict[str, Any]) -> None:
+        """A running job's current stage, read by the Pipeline page."""
+        ...
+
     async def requeue_running(self) -> int:
         """Jobs a stopped worker left running; only safe while holding worker_lock."""
         ...
@@ -434,6 +438,11 @@ class DecisionProvider(Protocol):
     async def decide(self, state: Any, questions: dict[str, "Question"]) -> "Decisions":
         """Every question answered over the same state, with the provider, model, input tokens
         and seconds of the call."""
+        ...
+
+    async def explain(self, prompt: str) -> str:
+        """Free text for a person (why a decision came out as it did), from the judge model;
+        EnigramError when this provider cannot write it."""
         ...
 
 

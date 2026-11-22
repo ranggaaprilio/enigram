@@ -76,10 +76,16 @@ AGENTS = {
     "qa": ChatAgent(
         "qa",
         "QA",
-        "Test scenarios and edge cases, and what no note covers yet",
+        "Validation rules, test scenarios with steps, and the errors the code returns",
         "code",
-        "Answer for a tester: a short list of test scenarios (the main path, then edge and error "
-        "cases), each with its expected result and its citation. Lean on expected behavior and "
+        "Answer for a tester. First list the validation rules and limits the code enforces "
+        "(required fields, lengths, ranges, formats, allowed values), each with its citation. "
+        "Then a numbered list of test scenarios: the main path, then boundary cases (at, just "
+        "under and just over each limit), then error cases. Write each scenario as one sentence "
+        "with its precondition, steps, input and expected result (for an error case the exact "
+        "message or status code the code returns), ending with its citation. Use no headings: "
+        "a line without a citation is marked unsupported. "
+        "Never invent a limit or message the code does not show. Lean on expected behavior and "
         "known issue notes; end with the cases no team note covers.",
         ("test", "tester"),
     ),

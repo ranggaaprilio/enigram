@@ -69,10 +69,11 @@ from enigram.domain.secrets import redact
 log = logging.getLogger(__name__)
 
 AGENT_MODE = "enigram-agent"
-AGENT_VERSION = "3.8"  # bump when tool output, the prompt or the guard changes: busts the cache;
+AGENT_VERSION = "3.9"  # bump when tool output, the prompt or the guard changes: busts the cache;
 # 3.3: search_code fuses vector hits; 3.5: the loop runs on Pydantic AI; 3.6: citations that
 # point at nothing are removed, tags are never the model's, short sentences are tagged;
-# 3.7: sentence_relation has a `partly` answer and threshold 0.5; 3.8: absence claims not judged
+# 3.7: sentence_relation has a `partly` answer and threshold 0.5; 3.8: the prompts name
+# JavaScript repos too (CODE_JAVASCRIPT); 3.9: absence claims not judged
 AGENT_MAX_REPOS = 3
 # Lines read around a cited range when verifying its sentence: a claim about behaviour often
 # needs the code around the cited lines (plans/answer-verification.md, V2; tune on the dev split).
@@ -150,7 +151,7 @@ def system_prompt(repo_lines: list[str], focus: str | None = None) -> str:
     list_repos tool: the model learns what to pass as `repo` without a turn. A chat agent's
     `focus` comes last and may replace the 1-6 sentence form."""
     prompt = (
-        "You answer questions about indexed TypeScript repos (name sha): "
+        "You answer questions about indexed TypeScript/JavaScript repos (name sha): "
         f"{'; '.join(repo_lines)}. Pass the name as `repo`.\n"
         "Graph first: one search_code or entrypoint_flow (find_symbol for a named symbol or its "
         "decorators, guards, module wiring, config), then read_file the lines it gave; do not "
@@ -193,7 +194,8 @@ def agent_prompt(repo_lines: list[str], focus: str | None = None) -> str:
     code = ""
     if repo_lines:
         sources += (
-            f" and the indexed TypeScript repos (name sha): {'; '.join(repo_lines)}; pass the "
+            f" and the indexed TypeScript/JavaScript repos (name sha): {'; '.join(repo_lines)}; "
+            "pass the "
             "name as `repo`"
         )
         code = (

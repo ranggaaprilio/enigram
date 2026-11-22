@@ -50,11 +50,11 @@ Accuracy against a coding agent with repository access is being evaluated (see
 
 | | Supported | Not yet |
 |---|---|---|
-| Code | TypeScript projects with a `tsconfig.json`. Monorepos too: every project is merged into one graph | Other languages. A repository without a `tsconfig.json` gets its Markdown indexed, not its code |
+| Code | TypeScript projects with a `tsconfig.json`. Monorepos too: every project is merged into one graph | Other languages. A repository without a `tsconfig.json` gets its Markdown indexed, not its code, unless `CODE_JAVASCRIPT=on` (experimental, see [Repositories](guides/repositories.md#javascript-experimental)) |
 | Entry points | **NestJS** (routes, `@Cron`, events, jobs, `bootstrap`), **Next.js** App Router (pages, route handlers, middleware, server actions), **Express** (routes with their mount paths) | Other frameworks: flows start from the exported functions nothing in the repository calls, so summaries and flows are coarser |
 | Documents | Markdown and PDF | Other formats |
 | Models | DeepSeek (chat) and Voyage AI (embeddings) by default; any OpenAI-compatible endpoint (see [Model providers](getting-started/model-providers.md)) | Native Anthropic or Gemini SDKs |
-| Size | Up to 2,000 TypeScript files and 50,000 lines per repository by default (`CODE_MAX_FILES`, `CODE_MAX_LOC`) | Larger repositories without raising them |
+| Size | Up to 2,000 TypeScript and JavaScript files and 50,000 lines per repository by default (`CODE_MAX_FILES`, `CODE_MAX_LOC`) | Larger repositories without raising them |
 
 Details: [Index a Git repository](guides/repositories.md).
 

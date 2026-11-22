@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from enigram.application.code_index import JS_SUFFIXES, MINIFIED_JS
 from enigram.application.files import read_chunks_jsonl
 from enigram.application.indexing import load_manifest
 from enigram.application.repo_sync import check_ref, check_repo_url, clone
@@ -259,14 +260,15 @@ def checkout_pinned(cfg: Config, repo: GoldenRepo) -> Path:
     return dest
 
 
-def read_ts_files(root: Path) -> dict[str, str]:
-    """Repository-relative path -> text of every *.ts file outside node_modules and build
-    output; declaration files (*.d.ts) are left out."""
+def read_code_files(root: Path) -> dict[str, str]:
+    """Repository-relative path -> text of every *.ts and JavaScript file outside node_modules
+    and build output; declaration files (*.d.ts) and minified bundles are left out."""
     files: dict[str, str] = {}
     for folder, dirs, names in os.walk(root):
         dirs[:] = sorted(d for d in dirs if d not in _TS_SKIP_DIRS)
         for name in sorted(names):
-            if name.endswith(".ts") and not name.endswith(".d.ts"):
+            ts = name.endswith(".ts") and not name.endswith(".d.ts")
+            if ts or (name.endswith(JS_SUFFIXES) and not MINIFIED_JS.search(name)):
                 path = Path(folder) / name
                 rel = path.relative_to(root).as_posix()
                 files[rel] = path.read_text(encoding="utf-8", errors="replace")
@@ -419,7 +421,7 @@ def check_golden(
         def resolve(q: GoldenQuestion) -> tuple[GoldenQuestion, list[str]]:
             return resolve_evidence(q, chunks, normalized)
     else:
-        files = read_ts_files(checkout_pinned(cfg, golden.repo))
+        files = read_code_files(checkout_pinned(cfg, golden.repo))
         by_name: dict[str, list[CodeSymbol]] | None = None
         if symbols is not None:
             by_name = {}

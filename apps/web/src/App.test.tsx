@@ -32,6 +32,8 @@ const ROUTES: Record<string, Reply> = {
   'GET /api/health': { body: { status: 'ok', workspace: 'default' } },
   'GET /api/workspaces': { body: WORKSPACES },
   'GET /api/documents': { body: [] },
+  'GET /api/jobs': { body: [] },
+  'GET /api/stats/repos': { body: [] },
   'GET /api/repos': { body: [] },
 }
 
@@ -60,6 +62,18 @@ describe('App workspaces', () => {
     await waitFor(() => expect(where()).toBe('/w/default/code?repo=1&symbol=x'))
   })
 
+  it('sends the old Documents link to Pipeline', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/documents')
+    await waitFor(() => expect(where()).toBe('/w/ws-a/pipeline'))
+  })
+
+  it('sends an old repository link to its page under Pipeline', async () => {
+    mockFetch(ROUTES)
+    renderAt('/w/ws-a/documents/repos/4')
+    await waitFor(() => expect(where()).toBe('/w/ws-a/pipeline/repos/4'))
+  })
+
   it('redirects an old trace link', async () => {
     mockFetch(ROUTES)
     renderAt('/trace/12')
@@ -78,7 +92,7 @@ describe('App workspaces', () => {
 
   it("sends the URL's workspace and keeps it in links and the title", async () => {
     const fetch = mockFetch(ROUTES)
-    renderAt('/w/ws-a/documents')
+    renderAt('/w/ws-a/pipeline')
     await waitFor(() => expect(headersOf(fetch, '/api/documents')).toContain('ws-a'))
     expect(headersOf(fetch, '/api/documents').every((h) => h === 'ws-a')).toBe(true)
     expect(screen.getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
@@ -119,7 +133,7 @@ describe('App workspaces', () => {
     await userEvent.clear(input)
     await userEvent.type(input, 'whiteboard')
     await userEvent.click(screen.getByRole('button', { name: 'Create' }))
-    await waitFor(() => expect(where()).toBe('/w/whiteboard/documents'))
+    await waitFor(() => expect(where()).toBe('/w/whiteboard/pipeline'))
     const post = fetch.mock.calls.find(([, init]) => init?.method === 'POST')
     expect(JSON.parse(post?.[1]?.body as string)).toEqual({ name: 'whiteboard' })
     expect(screen.getByLabelText('Workspace')).toHaveValue('whiteboard')
@@ -131,17 +145,17 @@ describe('App workspaces', () => {
       ...ROUTES,
       'POST /api/workspaces': { status: 409, body: { detail: "Workspace 'ws-a' already exists" } },
     })
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     await userEvent.click(await screen.findByRole('button', { name: 'New workspace' }))
     await userEvent.type(screen.getByLabelText('Workspace name'), 'ws-a')
     await userEvent.click(screen.getByRole('button', { name: 'Create' }))
     expect(await screen.findByText("Workspace 'ws-a' already exists")).toBeInTheDocument()
-    expect(where()).toBe('/w/default/documents')
+    expect(where()).toBe('/w/default/pipeline')
   })
 
   it('names an unknown workspace and sends no page request', async () => {
     const fetch = mockFetch(ROUTES)
-    renderAt('/w/nope/documents')
+    renderAt('/w/nope/pipeline')
     expect(await screen.findByText(/No workspace “nope”/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open default' })).toHaveAttribute(
       'href',
@@ -152,14 +166,14 @@ describe('App workspaces', () => {
 
   it('sends no header for a name off the rule', async () => {
     const fetch = mockFetch(ROUTES)
-    renderAt('/w/a%20b/documents')
+    renderAt('/w/a%20b/pipeline')
     expect(await screen.findByText(/No workspace/)).toBeInTheDocument()
     expect(headersOf(fetch, '/api/workspaces')).toEqual([null])
   })
 
   it('shows the API as unreachable and still renders the page', async () => {
     const fetch = mockFetch({ ...ROUTES, 'GET /api/workspaces': { status: 500, body: null } })
-    renderAt('/w/ws-a/documents')
+    renderAt('/w/ws-a/pipeline')
     expect(await screen.findByText('API unreachable')).toBeInTheDocument()
     await waitFor(() => expect(headersOf(fetch, '/api/documents')).toContain('ws-a'))
   })
@@ -168,7 +182,7 @@ describe('App workspaces', () => {
 describe('App frame', () => {
   it('shows the enigram mark next to the name', async () => {
     mockFetch(ROUTES)
-    renderAt('/w/ws-a/documents')
+    renderAt('/w/ws-a/pipeline')
     const app = await screen.findByRole('region', { name: 'App and workspace' })
     expect(app).toHaveTextContent('enigram')
     expect(app.querySelector('svg[data-slot="logo"]')).not.toBeNull()
@@ -184,7 +198,7 @@ describe('App frame', () => {
       ['Dashboard', '/w/ws-a/dashboard'],
       ['Chat', '/w/ws-a/chat'],
       ['Trace', '/w/ws-a/trace'],
-      ['Documents', '/w/ws-a/documents'],
+      ['Pipeline', '/w/ws-a/pipeline'],
       ['Knowledge', '/w/ws-a/knowledge'],
       ['Graph', '/w/ws-a/graph'],
       ['Memory', '/w/ws-a/memory'],
@@ -210,7 +224,7 @@ describe('App frame', () => {
         },
       },
     })
-    renderAt('/w/ws-a/documents')
+    renderAt('/w/ws-a/pipeline')
     const menu = await screen.findByRole('button', { name: 'Account and theme' })
     await waitFor(() => expect(menu).toHaveTextContent('contributor · ws-a'))
     expect(menu).toHaveTextContent('qa-team')
@@ -228,7 +242,7 @@ describe('App frame', () => {
 
   it('names the open access mode when the API has no keys', async () => {
     mockFetch({ ...ROUTES, 'GET /api/me': { body: { principal: null, roles: {} } } })
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     const menu = await screen.findByRole('button', { name: 'Account and theme' })
     await waitFor(() => expect(menu).toHaveTextContent('admin · default'))
     expect(menu).toHaveTextContent('Local')
@@ -236,7 +250,7 @@ describe('App frame', () => {
 
   it('remembers a collapsed sidebar', async () => {
     mockFetch(ROUTES)
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     const bar = await screen.findByRole('banner')
     await userEvent.click(within(bar).getByRole('button', { name: 'Toggle Sidebar' }))
     expect(localStorage.getItem('enigram-sidebar')).toBe('closed')
@@ -256,7 +270,7 @@ describe('App by role', () => {
 
   it('hides Members and New workspace from a viewer', async () => {
     mockFetch(as('viewer'))
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Account and theme' })).toHaveTextContent(
         'viewer · default',
@@ -268,14 +282,14 @@ describe('App by role', () => {
 
   it('shows an admin Members, and an owner New workspace', async () => {
     mockFetch(as('admin'))
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     expect(await screen.findByRole('link', { name: 'Members' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
   })
 
   it('shows an owner New workspace', async () => {
     mockFetch(as('viewer', true))
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     expect(await screen.findByRole('button', { name: 'New workspace' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Members' })).toBeInTheDocument()
   })
@@ -302,18 +316,18 @@ describe('Sign-in (R4)', () => {
 
   it('shows why the last sign-in failed and drops it from the way back', async () => {
     mockFetch({ ...signedOut, 'GET /api/auth/config': { body: { login: true } } })
-    renderAt('/w/default/documents?login_error=eve%40other.com+may+not+sign+in')
+    renderAt('/w/default/pipeline?login_error=eve%40other.com+may+not+sign+in')
     expect(await screen.findByText('eve@other.com may not sign in')).toBeInTheDocument()
     // The link waits for /auth/config.
     expect(await screen.findByRole('link', { name: 'Sign in' })).toHaveAttribute(
       'href',
-      `/api/auth/login?next=${encodeURIComponent('/w/default/documents')}`,
+      `/api/auth/login?next=${encodeURIComponent('/w/default/pipeline')}`,
     )
   })
 
   it('names the shared key when the API has no sign-in', async () => {
     mockFetch({ ...signedOut, 'GET /api/auth/config': { body: { login: false } } })
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     expect(await screen.findByText(/refused the web UI's key/)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Sign in' })).toBeNull()
   })
@@ -337,7 +351,7 @@ describe('Sign-in (R4)', () => {
     })
     const assign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign })
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     const menu = await screen.findByRole('button', { name: 'Account and theme' })
     await waitFor(() => expect(menu).toHaveTextContent('Ann Lee'))
 
@@ -394,7 +408,7 @@ describe('Page patterns (U2)', () => {
         body: { name: 'whiteboard', created_at: '2026-11-07T00:00:00Z' },
       },
     })
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     await userEvent.click(await screen.findByRole('button', { name: 'New workspace' }))
     await userEvent.type(screen.getByLabelText('Workspace name'), 'whiteboard')
     await userEvent.click(screen.getByRole('button', { name: 'Create' }))
@@ -426,7 +440,7 @@ describe('Knowledge and Review (A2)', () => {
       },
       'GET /api/review': { body: [{}, {}, {}] },
     })
-    renderAt('/w/default/documents')
+    renderAt('/w/default/pipeline')
     expect(await screen.findByLabelText('3 waiting')).toHaveTextContent('3')
   })
 })
@@ -434,7 +448,7 @@ describe('Knowledge and Review (A2)', () => {
 describe('Command palette (U3)', () => {
   it('opens with Ctrl+K and goes to a page from the keyboard', async () => {
     mockFetch(ROUTES)
-    renderAt('/w/ws-a/documents')
+    renderAt('/w/ws-a/pipeline')
     await screen.findByRole('navigation', { name: 'Pages' })
     await userEvent.keyboard('{Control>}k{/Control}')
     const input = await screen.findByPlaceholderText(/A page, a workspace/)
@@ -472,7 +486,7 @@ describe('Command palette (U3)', () => {
         ],
       },
     })
-    renderAt('/w/ws-a/documents')
+    renderAt('/w/ws-a/pipeline')
     await userEvent.click(await screen.findByRole('button', { name: /Search and go to/ }))
     await userEvent.type(screen.getByPlaceholderText(/A page, a workspace/), 'logout')
     await userEvent.click(await screen.findByRole('option', { name: /POST \/auth\/logout/ }))
@@ -485,7 +499,7 @@ describe('Command palette (U3)', () => {
 describe('Keyboard (U4)', () => {
   it('starts with a link past the sidebar to the page', async () => {
     mockFetch(ROUTES)
-    renderAt('/w/ws-a/documents')
+    renderAt('/w/ws-a/pipeline')
     await screen.findByRole('navigation', { name: 'Pages' })
     await userEvent.tab()
     const skip = screen.getByRole('link', { name: 'Skip to content' })
@@ -496,7 +510,7 @@ describe('Keyboard (U4)', () => {
 
   it('gives focus back to Search when the palette closes', async () => {
     mockFetch(ROUTES)
-    renderAt('/w/ws-a/documents')
+    renderAt('/w/ws-a/pipeline')
     const search = await screen.findByRole('button', { name: /Search and go to/ })
     await userEvent.click(search)
     await screen.findByPlaceholderText(/A page, a workspace/)
