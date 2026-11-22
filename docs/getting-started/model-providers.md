@@ -14,6 +14,7 @@ judges) and an **embedding model** (documents, memories, code search). The defau
 | Judge (`enigram eval --judge`) | DeepSeek | `deepseek-v4-pro` (`JUDGE_MODEL`) | `DEEPSEEK_API_KEY` |
 | Document embeddings | Voyage AI | `voyage-4-lite` (`EMBED_MODEL`, `EMBED_DIM` 1024) | `VOYAGE_API_KEY` |
 | Code embeddings | Voyage AI | `voyage-code-4` (`CODE_EMBED_MODEL`, `CODE_EMBED_DIM` 1024) | `VOYAGE_API_KEY` |
+| Code search reranking | Voyage AI | `rerank-2.5` (`CODE_RERANK_MODEL`, `off` turns it off; none with an OpenAI-compatible endpoint) | `VOYAGE_API_KEY` |
 
 ## Any OpenAI-compatible endpoint
 

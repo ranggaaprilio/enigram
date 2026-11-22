@@ -850,6 +850,7 @@ class FakeEmbedder:
     slots), so texts that share words are close; records every call."""
 
     model, dim = "fake-code-1", FAKE_DIM
+    rerank_model = ""  # no reranking unless a test sets one and a `rerank`
 
     def __init__(self, error: str | None = None):
         self.calls: list[tuple[list[str], str]] = []

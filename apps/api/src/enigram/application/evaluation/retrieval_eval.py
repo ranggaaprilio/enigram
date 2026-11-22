@@ -62,8 +62,10 @@ async def search_rows(
         vector = None
         if embedder is not None:
             vector = (await embedder.embed([q.question], "query"))[0]
-        agent, _ = await search_ranking(graph, repo_id, q.question, SEARCH_MAX_HITS, vector, model)
-        wide, _ = await search_ranking(graph, repo_id, q.question, WIDE_K, vector, model)
+        agent, _ = await search_ranking(
+            graph, repo_id, q.question, SEARCH_MAX_HITS, vector, model, embedder
+        )
+        wide, _ = await search_ranking(graph, repo_id, q.question, WIDE_K, vector, model, embedder)
         recall, _ = score([i for i, _ in agent], groups, SEARCH_MAX_HITS)
         recall_wide, rr = score([i for i, _ in wide], groups, WIDE_K)
         rows.append(

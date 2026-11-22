@@ -125,6 +125,11 @@ class OpenAICodeEmbedder:
             )
         return vectors
 
+    rerank_model = ""  # no reranker on an OpenAI-compatible endpoint
+
+    async def rerank(self, query: str, documents: list[str]) -> list[int]:
+        raise EnigramError("EMBED_PROVIDER=openai-compatible has no reranker")
+
 
 class OpenAIRagasEmbedding(BaseRagasEmbedding):
     """Ragas' embedding interface on EMBED_MODEL, for AnswerRelevancy and AnswerCorrectness."""

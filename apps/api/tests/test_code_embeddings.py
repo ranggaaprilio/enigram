@@ -126,6 +126,69 @@ async def test_search_ranking_pins_exact_names_then_follows_the_vectors():
     assert [s for _, s in ranked] == [1.0, 0.5, 1 / 3] and hits == len(near)
 
 
+class _Reranker(FakeEmbedder):
+    rerank_model = "fake-rerank"
+
+    def __init__(self, error=None):
+        super().__init__()
+        self.reranked: list[tuple[str, list[str]]] = []
+        self.rerank_error = error
+
+    async def rerank(self, query, documents):
+        self.reranked.append((query, list(documents)))
+        if self.rerank_error:
+            raise EnigramError(self.rerank_error)
+        return list(reversed(range(len(documents))))  # the last candidate first
+
+
+async def test_search_ranking_reranks_the_candidates_with_the_instruction():
+    graph, embedder = _graph(), _Reranker()
+    await embed_repo(embedder, graph, 1)
+    query = "How does the service find a user?"
+    vector = (await embedder.embed([query], "query"))[0]
+    plain, _ = await search_ranking(graph, 1, query, 20, vector, embedder.model)
+
+    ranked, _ = await search_ranking(graph, 1, query, 2, vector, embedder.model, embedder)
+
+    ((sent, docs),) = embedder.reranked
+    assert sent.endswith(query) and sent.startswith("Find the TypeScript function")
+    assert len(docs) == len(plain)  # the whole pool, not only the top 2
+    assert docs[[i for i, _ in plain].index(SERVICE)].splitlines()[:2] == [
+        "AppService.find (method) src/app.service.ts",
+        "Finds a user.",  # its summary, then its signature; no body
+    ]
+    assert [i for i, _ in ranked] == [i for i, _ in plain][::-1][:2]
+
+
+async def test_search_ranking_keeps_its_order_when_the_rerank_fails():
+    graph, embedder = _graph(), _Reranker(error="Voyage rerank failed: down")
+    await embed_repo(embedder, graph, 1)
+    query = "How does the service find a user?"
+    vector = (await embedder.embed([query], "query"))[0]
+    plain, _ = await search_ranking(graph, 1, query, 3, vector, embedder.model)
+
+    ranked, _ = await search_ranking(graph, 1, query, 3, vector, embedder.model, embedder)
+
+    assert ranked == plain
+
+
+async def test_voyage_code_embedder_reranks_and_meters(cfg):
+    class Client:
+        async def rerank(self, query, documents, model):
+            self.call = (query, documents, model)
+            return SimpleNamespace(
+                results=[SimpleNamespace(index=1), SimpleNamespace(index=0)], total_tokens=9
+            )
+
+    client = Client()
+    embedder = VoyageCodeEmbedder(dataclasses.replace(cfg, code_rerank_model="rerank-2.5"), client)
+
+    with metered(None, "t") as meter:
+        order = await embedder.rerank("q", ["a", "b"])
+
+    assert order == [1, 0] and meter.total == 9 and client.call == ("q", ["a", "b"], "rerank-2.5")
+
+
 async def test_search_ranking_without_a_vector_is_the_full_text_ranking():
     graph = _graph()
     query = "Finds a user"

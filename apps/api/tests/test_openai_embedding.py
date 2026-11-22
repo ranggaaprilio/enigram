@@ -86,6 +86,18 @@ def test_config_openai_compatible_needs_no_voyage_key(compat_cfg):
     assert (cfg.embed_api_key, cfg.voyage_api_key, cfg.embed_max_tokens) == ("unused", "", 8191)
 
 
+def test_config_has_no_reranker_on_an_openai_compatible_endpoint(compat_cfg):
+    assert compat_cfg.code_rerank_model == ""
+
+
+def test_config_code_rerank_model(cfg, clean_env, monkeypatch):
+    assert cfg.code_rerank_model == "rerank-2.5"  # Voyage: on by default
+    monkeypatch.setenv("CODE_RERANK_MODEL", "rerank-2.5-lite")
+    assert Config.from_env(clean_env).code_rerank_model == "rerank-2.5-lite"
+    monkeypatch.setenv("CODE_RERANK_MODEL", "off")
+    assert Config.from_env(clean_env).code_rerank_model == ""
+
+
 def test_config_embed_key_is_hidden(embed_env, monkeypatch):
     monkeypatch.setenv("EMBED_API_KEY", "sk-embed-not-real")
     cfg = Config.from_env(embed_env)
