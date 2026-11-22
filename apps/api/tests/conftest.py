@@ -49,6 +49,7 @@ CONFIG_ENV = (
     "DECISION_PROVIDER",
     "VERIFY_ANSWERS",
     "VERIFY_BADGES",
+    "BLOB_URL",
     "TYPESAFE_API_KEY",
     "JEV_MODEL",
     "JEV_BASE_URL",
@@ -73,6 +74,7 @@ def pytest_collection_modifyitems(config, items):
             None if os.environ.get("ENIGRAM_TEST_PG_DSN") else "ENIGRAM_TEST_PG_DSN not set"
         ),
         "live_jev": None if os.environ.get("TYPESAFE_API_KEY") else "TYPESAFE_API_KEY not set",
+        "s3": None if os.environ.get("ENIGRAM_TEST_S3_URL") else "ENIGRAM_TEST_S3_URL not set",
     }
     for item in items:
         for marker, reason in skips.items():

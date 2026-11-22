@@ -403,6 +403,28 @@ class IndexState(Protocol):
     async def delete_chunks(self, book: str) -> None: ...
 
 
+class BlobStore(Protocol):
+    """One workspace's source files (uploads and Markdown synced from repositories), by file
+    name: the books folder in DATA_DIR, or an S3-compatible bucket with BLOB_URL
+    (plans/stateless.md, S2). The worker copies a file to local disk before parsing it."""
+
+    async def names(self) -> list[str]:
+        """Every stored file name, sorted."""
+        ...
+
+    async def put(self, name: str, src: Path) -> None:
+        """Stores a copy of `src` as `name`, replacing what was there."""
+        ...
+
+    async def get_to(self, name: str, dest: Path) -> None:
+        """Writes `name` to `dest`; raises NotFound when it is not stored."""
+        ...
+
+    async def delete(self, name: str) -> None:
+        """Nothing happens when it is not stored."""
+        ...
+
+
 @dataclass(frozen=True)
 class ToolCall:
     id: str
@@ -882,6 +904,7 @@ class Deps:
     # new_index_state(store): the manifest and chunks; Postgres needs the store (its pool),
     # STORAGE_BACKEND=file takes None.
     new_index_state: Callable[[JobRepository | None], Awaitable[IndexState]]
+    new_blob_store: Callable[[], BlobStore]  # the source files (BLOB_URL, or the books folder)
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)

@@ -102,7 +102,7 @@ async def find_targets(
     ]
     documents = [
         _row("document", "document", d["book"], d["title"] or d["book"], d["book"])
-        for d in await documents_overview(cfg, state, store)
+        for d in await documents_overview(state, store)
         if needle in d["book"].lower() or needle in (d["title"] or "").lower()
     ][:PER_GROUP]
     return features + symbols + entities + documents

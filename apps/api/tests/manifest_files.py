@@ -1,9 +1,11 @@
-"""The manifest as FileIndexState keeps it, read and written synchronously by tests."""
+"""The manifest as FileIndexState keeps it, read and written synchronously by tests, and the
+source files as LocalBlobStore keeps them."""
 
 import json
 from typing import Any
 
 from enigram.adapters.driven.file_index_state import FileIndexState
+from enigram.adapters.driven.local_blob_store import LocalBlobStore
 from enigram.application.files import atomic_write_text
 from enigram.config import Config
 
@@ -20,3 +22,7 @@ def save_manifest(cfg: Config, manifest: dict[str, Any]) -> None:
 
 def file_state(cfg: Config) -> FileIndexState:
     return FileIndexState(cfg)
+
+
+def blobs(cfg: Config) -> LocalBlobStore:
+    return LocalBlobStore(cfg.books_dir)

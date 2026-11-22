@@ -436,7 +436,7 @@ def create_server(
         queued, running, failed). Use it to see what can be asked about."""
         app = await _open(ctx, workspace, "viewer")
         state = app.index_state or await (app.deps or deps).new_index_state(app.store)
-        docs = await documents_overview(app.cfg, state, app.store)
+        docs = await documents_overview(state, app.store)
         return [DocumentInfo(d["book"], d["title"], d["status"], d["pages"]) for d in docs]
 
     def memory_of(app: AppContext) -> MemoryRepository:

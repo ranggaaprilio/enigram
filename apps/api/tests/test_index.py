@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from manifest_files import file_state, load_manifest, save_manifest
+from manifest_files import blobs, file_state, load_manifest, save_manifest
 
 from enigram.adapters.driven import lightrag_engine
 from enigram.adapters.driven.lightrag_engine import LightRagEngine
@@ -326,7 +326,9 @@ async def test_delete_document_removes_index_entries_files_and_manifest_entry(cf
     kept = _book_files(cfg, "paper-c1", suffix=".md")  # a name that extends "paper"
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"])
 
-    result = await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), "paper")
+    result = await index.delete_document(
+        cfg, LightRagEngine(rag), file_state(cfg), blobs(cfg), "paper"
+    )
 
     assert rag.deleted == ["paper-c00000", "paper-c00001"]
     assert result == {
@@ -353,7 +355,9 @@ async def test_delete_document_resumes_after_an_interrupted_run(cfg):
     _book_files(cfg, "paper")
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"], {"paper-c00000": "not_found"})
 
-    result = await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), "paper")
+    result = await index.delete_document(
+        cfg, LightRagEngine(rag), file_state(cfg), blobs(cfg), "paper"
+    )
 
     assert (result["documents_deleted"], result["already_gone"]) == (1, 1)
     assert "paper" not in load_manifest(cfg)["books"]
@@ -364,7 +368,7 @@ async def test_delete_document_failure_keeps_files_and_marks_deleting(cfg):
     rag = FakeDeleteRag(["paper-c00000", "paper-c00001"], {"paper-c00001": "not_allowed"})
 
     with pytest.raises(EnigramError, match="paper-c00001: paper-c00001 not_allowed"):
-        await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), "paper")
+        await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), blobs(cfg), "paper")
 
     assert all(p.exists() for p in paths)
     assert load_manifest(cfg)["books"]["paper"]["status"] == "deleting"
@@ -373,13 +377,15 @@ async def test_delete_document_failure_keeps_files_and_marks_deleting(cfg):
 async def test_delete_document_unknown_book(cfg):
     with pytest.raises(EnigramError, match="No document 'ghost'"):
         await index.delete_document(
-            cfg, LightRagEngine(FakeDeleteRag([])), file_state(cfg), "ghost"
+            cfg, LightRagEngine(FakeDeleteRag([])), file_state(cfg), blobs(cfg), "ghost"
         )
 
 
 async def test_delete_document_without_manifest_entry_still_deletes_its_ids(cfg):
     rag = FakeDeleteRag(["orphan-c00000"])
 
-    result = await index.delete_document(cfg, LightRagEngine(rag), file_state(cfg), "orphan")
+    result = await index.delete_document(
+        cfg, LightRagEngine(rag), file_state(cfg), blobs(cfg), "orphan"
+    )
 
     assert (rag.deleted, result["files_deleted"]) == (["orphan-c00000"], [])

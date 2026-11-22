@@ -54,8 +54,10 @@ see [Command line](../guides/cli.md).
 The manifest (which documents are indexed, and the settings they were indexed with) and the parsed
 chunks follow the backend: with `postgres` they are the tables `enigram_index_settings`,
 `enigram_documents` and `enigram_chunks`, so the API does not read them from the worker's disk; with
-`file` they are `data/index_manifest.json` and `data/parsed/<doc>.chunks.jsonl`. Uploaded files,
-the Docling parse cache and reports stay in `DATA_DIR`. The service (API, worker, code graph,
+`file` they are `data/index_manifest.json` and `data/parsed/<doc>.chunks.jsonl`. Uploaded files
+stay in `data/books` unless `BLOB_URL` puts them in a bucket (see
+[Source files](../self-hosting/deployment.md#source-files)); the Docling parse cache and reports
+stay in `DATA_DIR`. The service (API, worker, code graph,
 notes) needs `postgres`.
 
 On the first start with `postgres`, the API or worker copies an existing

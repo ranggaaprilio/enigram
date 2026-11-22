@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from enigram.adapters.driven.local_blob_store import LocalBlobStore
 from enigram.adapters.driving import worker
 from enigram.adapters.driving.workspaces import Workspaces
 from enigram.application.indexing import IndexRun
@@ -153,7 +154,8 @@ def fake_index(monkeypatch):
             self.calls = []
 
         async def __call__(self, cfg, deps, state, folder, pages=None, only=None):
-            self.calls.append((folder, only))
+            # The worker passes a temporary copy of the workspace's source files.
+            self.calls.append((sorted(p.read_text() for p in folder.iterdir()), only))
             if self.error:
                 raise self.error
             return self.run
@@ -163,8 +165,16 @@ def fake_index(monkeypatch):
     return fake
 
 
+def _upload(cfg, *books):
+    """Source files as the API stores them (LocalBlobStore), each holding its workspace/book."""
+    cfg.books_dir.mkdir(parents=True, exist_ok=True)
+    for book in books:
+        (cfg.books_dir / f"{book}.pdf").write_text(f"{cfg.workspace}/{book}")
+
+
 async def test_process_next_indexes_the_book_and_records_its_entry(cfg, store, deps, fake_index):
     fake_index.run = IndexRun(books={"p": {"status": "indexed", "chunks": 3}})
+    _upload(cfg, "p")
     await store.enqueue("index", {"book": "p", "file": "p.pdf"})
 
     job = await worker.process_next(cfg, store, deps)
@@ -173,11 +183,22 @@ async def test_process_next_indexes_the_book_and_records_its_entry(cfg, store, d
     assert done.status == "done"
     assert done.result["chunks"] == 3
     assert done.finished_at is not None
-    assert fake_index.calls == [(cfg.books_dir, ["p"])]
+    assert fake_index.calls == [(["default/p"], ["p"])]
+
+
+async def test_process_next_without_the_uploaded_file_fails_the_job(cfg, store, deps, fake_index):
+    job = await store.enqueue("index", {"book": "p", "file": "p.pdf"})
+
+    await worker.process_next(cfg, store, deps)
+
+    failed = await store.get_job(job.id)
+    assert (failed.status, failed.error) == ("failed", "No uploaded file for document 'p'")
+    assert fake_index.calls == []
 
 
 async def test_process_next_up_to_date_book_is_done(cfg, store, deps, fake_index):
     fake_index.run = IndexRun(up_to_date=["p"])
+    _upload(cfg, "p")
     job = await store.enqueue("index", {"book": "p"})
 
     await worker.process_next(cfg, store, deps)
@@ -188,6 +209,7 @@ async def test_process_next_up_to_date_book_is_done(cfg, store, deps, fake_index
 async def test_process_next_failed_entry_fails_the_job(cfg, store, deps, fake_index):
     error = "insert: 2 documents not processed"
     fake_index.run = IndexRun(books={"p": {"status": "failed", "error": error}})
+    _upload(cfg, "p")
     job = await store.enqueue("index", {"book": "p"})
 
     await worker.process_next(cfg, store, deps)
@@ -198,6 +220,7 @@ async def test_process_next_failed_entry_fails_the_job(cfg, store, deps, fake_in
 
 async def test_process_next_keeps_guard_error_and_continues(cfg, store, deps, fake_index):
     fake_index.error = EnigramError("Chunk settings changed {...}")
+    _upload(cfg, "p", "q")
     first = await store.enqueue("index", {"book": "p"})
     second = await store.enqueue("index", {"book": "q"})
 
@@ -280,10 +303,15 @@ def _fake_adapters(deps):
 
 
 def _workspaces(cfg, deps, store, *names):
-    """A worker registry over `store` with `names` registered; every workspace gets `deps`."""
+    """A worker registry over `store` with `names` registered; every workspace gets `deps`, with
+    its own source files."""
     for name in names:
         store.workspaces[name] = datetime.now(UTC)
-    return Workspaces(cfg, _fake_adapters(deps), lambda c: deps, store, AsyncExitStack())
+
+    def deps_for(c):
+        return replace(deps, new_blob_store=lambda: LocalBlobStore(c.books_dir))
+
+    return Workspaces(cfg, _fake_adapters(deps), deps_for, store, AsyncExitStack())
 
 
 async def test_process_any_runs_jobs_fifo_across_workspaces_with_their_adapters(
@@ -294,6 +322,8 @@ async def test_process_any_runs_jobs_fifo_across_workspaces_with_their_adapters(
     a = await store.enqueue("index", {"book": "a"})
     b = await other.enqueue("index", {"book": "b"})
     c = await store.enqueue("index", {"book": "c"})
+    _upload(cfg, "a", "c")
+    _upload(cfg.for_workspace("ws-a"), "b")
 
     ran = [await worker.process_any(workspaces) for _ in range(4)]
 
@@ -305,9 +335,9 @@ async def test_process_any_runs_jobs_fifo_across_workspaces_with_their_adapters(
         "done",
     ]
     assert fake_index.calls == [
-        (cfg.books_dir, ["a"]),
-        (cfg.for_workspace("ws-a").books_dir, ["b"]),
-        (cfg.books_dir, ["c"]),
+        (["default/a"], ["a"]),
+        (["ws-a/b"], ["b"]),
+        (["default/c"], ["c"]),
     ]
 
 
@@ -327,13 +357,14 @@ async def test_daily_budget_stops_only_its_workspace(cfg, store, deps, fake_inde
     await other.add_tokens("query", None, 50)
     spent = await other.enqueue("index", {"book": "a"})
     fresh = await store.enqueue("index", {"book": "b"})
+    _upload(cfg, "b")
 
     await worker.process_any(workspaces)
     await worker.process_any(workspaces)
 
     assert (await other.get_job(spent.id)).status == "budget_exceeded"
     assert (await store.get_job(fresh.id)).status == "done"
-    assert fake_index.calls == [(cfg.books_dir, ["b"])]
+    assert fake_index.calls == [(["default/b"], ["b"])]
 
 
 @pytest.fixture
@@ -399,7 +430,7 @@ async def test_delete_job_deletes_the_document_and_clears_cached_answers(
 ):
     calls = []
 
-    async def fake_delete(cfg, engine, state, book):
+    async def fake_delete(cfg, engine, state, blobs, book):
         calls.append((engine, book))
         return {"book": book, "documents_deleted": 2}
 
@@ -415,7 +446,7 @@ async def test_delete_job_deletes_the_document_and_clears_cached_answers(
 
 
 async def test_delete_job_failure_fails_the_job(cfg, store, deps, fake_graph, monkeypatch):
-    async def fake_delete(cfg, engine, state, book):
+    async def fake_delete(cfg, engine, state, blobs, book):
         raise EnigramError("paper-c00001: pipeline busy")
 
     monkeypatch.setattr(worker, "delete_document", fake_delete)
@@ -705,6 +736,7 @@ async def test_job_over_its_token_cap_stops_as_budget_exceeded(cfg, store, deps,
     monkeypatch.setattr(worker, "run_index", spending_index)
     cfg = replace(cfg, max_tokens_per_job=1500)
     job = await store.enqueue("index", {"book": "p", "api_key": "web"})
+    _upload(cfg, "p")
 
     await worker.process_next(cfg, store, deps)
 
@@ -734,6 +766,7 @@ async def test_job_under_the_caps_records_its_tokens(cfg, store, deps, monkeypat
         return IndexRun(books={"p": {"status": "indexed"}})
 
     monkeypatch.setattr(worker, "run_index", spending_index)
+    _upload(cfg, "p")
     job = await store.enqueue("index", {"book": "p"})
 
     await worker.process_next(cfg, store, deps)

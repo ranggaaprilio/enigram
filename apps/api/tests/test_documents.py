@@ -29,6 +29,6 @@ async def test_a_repository_sync_is_not_listed_as_a_document(cfg):
         ]
     )
 
-    docs = await documents_overview(cfg, file_state(cfg), jobs)
+    docs = await documents_overview(file_state(cfg), jobs)
 
     assert [(d["book"], d["status"]) for d in docs] == [("notes", "running"), ("paper", "indexed")]

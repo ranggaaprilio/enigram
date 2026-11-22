@@ -15,8 +15,9 @@ description: The Docker Compose services, workspaces, and the token caps that bo
 | `worker` | Runs index jobs one at a time, for every workspace | |
 | `web` | The web UI (nginx), proxying `/api/*` to the API | http://localhost:3000 (`WEB_BIND`) |
 
-Uploads land in `data/books/`; the worker indexes them with the same pipeline as `enigram index`,
-and every query is stored with its retrieval trace.
+Uploads land in `data/books/`, or in a bucket with `BLOB_URL` (see [Source files](#source-files));
+the worker indexes them with the same pipeline as `enigram index`, and every query is stored with
+its retrieval trace.
 
 - The service needs `STORAGE_BACKEND=postgres`: the job queue lives there, and only Postgres lets
   the API see what the worker indexed.
@@ -72,6 +73,23 @@ Two things are shared:
 - **Memory.** A workspace's LightRAG engine opens in the API on its first document question and
   stays open. With Postgres storage one small workspace measured about 25 MiB (473 MiB API with
   one engine, 498 MiB with two); a workspace with a large graph costs more.
+
+## Source files
+
+Uploaded documents and the Markdown synced from repositories are kept by file name:
+
+- By default in `data/books/` (`data/workspaces/<name>/books/` for other workspaces).
+- With `BLOB_URL=s3://bucket/prefix`, in an S3-compatible bucket under
+  `<prefix>/<workspace>/books/<file>`. The API then keeps no uploads on its disk (only a temporary
+  copy during the request), and the worker copies each file to a temporary folder to parse it. Credentials come from the standard AWS variables
+  (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, or an instance role);
+  `AWS_ENDPOINT_URL` points at MinIO or another S3-compatible store. Compose passes them from
+  `.env`.
+
+Setting `BLOB_URL` does not move existing files. Copy them first, for example
+`aws s3 sync data/books s3://bucket/prefix/default/books/` (and each
+`data/workspaces/<name>/books/`). A document whose file was not copied stays indexed and can be
+deleted, but the document list shows no file name for it.
 
 ## Token caps
 

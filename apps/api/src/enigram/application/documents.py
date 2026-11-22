@@ -1,25 +1,23 @@
 """The document list: what the manifest says, overridden by queued or running jobs."""
 
 from dataclasses import asdict
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from enigram.application.indexing import list_sources
-from enigram.config import Config
+from enigram.application.indexing import source_names
 from enigram.domain.chunk import book_name
 
 if TYPE_CHECKING:
-    from enigram.application.ports import IndexState, JobRepository
+    from enigram.application.ports import BlobStore, IndexState, JobRepository
 
 
 async def documents_overview(
-    cfg: Config, state: "IndexState", store: "JobRepository | None"
+    state: "IndexState", store: "JobRepository | None", blobs: "BlobStore | None" = None
 ) -> list[dict[str, Any]]:
-    """Indexed and queued documents; without a store (stdio MCP) only what the manifest says."""
-    files = (
-        {book_name(p): p.name for p in list_sources(cfg.books_dir)}
-        if cfg.books_dir.exists()
-        else {}
-    )
+    """Indexed and queued documents; without a store (stdio MCP) only what the manifest says.
+    `file` (the source's name) only with `blobs`: listing a bucket is a request of its own."""
+    names = source_names(await blobs.names()) if blobs else []
+    files = {book_name(Path(n)): n for n in names}
     # Only document jobs carry a book; a repository sync (index_repo) shows on its repository.
     active = await store.active_jobs() if store else []
     jobs = {book: j for j in active if (book := j.payload.get("book"))}

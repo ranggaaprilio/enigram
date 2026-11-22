@@ -12,7 +12,12 @@ from enigram.adapters.driving.workspaces import Workspaces
 from enigram.application.budget import daily_exhausted
 from enigram.application.doc_conflicts import detect_doc_conflicts
 from enigram.application.graph_edits import GRAPH_JOB_KINDS, apply_graph_job
-from enigram.application.indexing import delete_document, run_index
+from enigram.application.indexing import (
+    delete_document,
+    run_index,
+    source_names,
+    staged_sources,
+)
 from enigram.application.ports import (
     AnnotationRepository,
     CodeGraphRepository,
@@ -58,7 +63,7 @@ async def _run_delete_job(cfg: Config, store: JobRepository, deps: Deps, job: Jo
     try:
         state = await deps.new_index_state(store)
         async with deps.open_engine() as engine:
-            result = await delete_document(cfg, engine, state, book)
+            result = await delete_document(cfg, engine, state, deps.new_blob_store(), book)
             result["query_cache_rows_cleared"] = await engine.clear_query_cache()
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
@@ -301,7 +306,13 @@ async def _dispatch(
     log.info("[worker] job %d: indexing %s", job.id, book)
     try:
         state = await deps.new_index_state(store)
-        run = await run_index(cfg, deps, state, cfg.books_dir, only=[book])
+        blobs = deps.new_blob_store()
+        names = source_names(await blobs.names(), book)
+        if not names:
+            raise EnigramError(f"No uploaded file for document {book!r}")
+        # The parser reads local files: the source is copied from the store for this job.
+        async with staged_sources(blobs, names) as folder:
+            run = await run_index(cfg, deps, state, folder, only=[book])
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
         await store.finish(job.id, "failed", error=str(e))

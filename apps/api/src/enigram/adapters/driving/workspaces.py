@@ -10,6 +10,7 @@ from typing import Any
 
 from enigram.application.ports import (
     AnnotationRepository,
+    BlobStore,
     ChatRepository,
     CodeEmbedder,
     CodeGraphRepository,
@@ -44,6 +45,7 @@ class Workspace:
     code_embedder: CodeEmbedder  # search_code's semantic channel on /query and MCP
     chat: ChatRepository  # chat sessions and messages (plan item 8)
     index_state: IndexState  # the document manifest and chunks the worker writes
+    blobs: BlobStore  # uploaded and synced source files (BLOB_URL, or the books folder)
     engine: KnowledgeEngine | None = None  # the home one opens at start, others on first use
 
 
@@ -130,4 +132,5 @@ async def _build(cfg: Config, deps: Deps, store: JobRepository) -> Workspace:
         deps.code_embedder(),
         chat,
         index_state,
+        deps.new_blob_store(),
     )

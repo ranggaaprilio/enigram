@@ -15,6 +15,7 @@ from enigram.adapters.driven.lightrag_engine import (
     open_engine,
 )
 from enigram.adapters.driven.llm_decider import LlmDecider
+from enigram.adapters.driven.local_blob_store import LocalBlobStore
 from enigram.adapters.driven.openai_llm import OpenAIChatModel, check_providers
 from enigram.adapters.driven.postgres_annotations import PostgresAnnotations
 from enigram.adapters.driven.postgres_chat import PostgresChat
@@ -30,6 +31,7 @@ from enigram.adapters.driven.ts_graph_sidecar import TsGraphSidecar
 from enigram.application.decisions import FallbackDecider
 from enigram.application.ports import (
     AnnotationRepository,
+    BlobStore,
     ChatRepository,
     CodeGraphRepository,
     ConflictRepository,
@@ -117,6 +119,16 @@ async def _new_index_state(cfg: Config, store: JobRepository | None) -> IndexSta
     return state
 
 
+def _new_blob_store(cfg: Config) -> BlobStore:
+    """The workspace's source files: BLOB_URL's bucket, or the books folder (plans/stateless.md,
+    S2)."""
+    if cfg.blob_url:
+        from enigram.adapters.driven.s3_blob_store import S3BlobStore
+
+        return S3BlobStore(cfg.blob_url, cfg.workspace)
+    return LocalBlobStore(cfg.books_dir)
+
+
 def _decider(cfg: Config) -> DecisionProvider:
     """Jev first when DECISION_PROVIDER=jev, the judge model as the automatic fallback."""
     fallback = LlmDecider(OpenAIChatModel(cfg.judge), cfg.judge_model)
@@ -150,6 +162,7 @@ def build_deps(cfg: Config) -> Deps:
         new_stats=partial(_new_stats, cfg),
         new_chat=partial(_new_chat, cfg),
         new_index_state=partial(_new_index_state, cfg),
+        new_blob_store=partial(_new_blob_store, cfg),
         judge=partial(OpenAIChatModel, cfg.judge),
         answer_scorer=partial(RagasScorer, cfg),
         decider=partial(_decider, cfg),
