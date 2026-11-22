@@ -45,7 +45,8 @@ from enigram.application.ports import (
     KnowledgeEngine,
 )
 from enigram.application.pydantic_loop import run_agent_loop
-from enigram.application.repo_store import GitTools, store_path
+from enigram.application.repo_auth import token_for
+from enigram.application.repo_store import GitTools, prepare_store, store_path
 from enigram.application.repo_sync import check_repo_url
 from enigram.application.verification import PURPOSE as VERIFY_PURPOSE
 from enigram.application.verification import verify_answer
@@ -80,6 +81,9 @@ AGENT_MAX_REPOS = 3
 # needs the code around the cited lines (plans/answer-verification.md, V2; tune on the dev split).
 CODE_CONTEXT_LINES = 20
 _NUMBERED_LINE = re.compile(r"\d+: ")
+# One clone or fetch per store at a time in this process: two questions about one repository
+# must not write into the same folder (plans/stateless.md, S4).
+_STORE_LOCKS: dict[Path, asyncio.Lock] = {}
 CITATION_MAX_FILES = 30  # files whose citations one answer gets checked: each is a git read
 GRAPH_MAX_HITS = 10  # find_symbol candidates
 SEARCH_MAX_HITS = 6
@@ -306,6 +310,7 @@ class CodeAgentTools:
         self.scope: set[int] = {selected["id"]} if selected else set()
         self.touched: set[int] = set()
         self.gits: dict[int, Any] = {}
+        self.ready: set[int] = set()  # repos whose store was checked for this question
         # (repo id, file) -> its line count at the indexed commit (None: no such file), for
         # checking the answer's code citations.
         self.line_counts: dict[tuple[int, str], int | None] = {}
@@ -388,6 +393,46 @@ class CodeAgentTools:
                 return None
             git = self.gits[repo["id"]] = self.open_git(root, repo["indexed_sha"])
         return git
+
+    async def ensure_git(self, repo: dict[str, Any]) -> Any | None:
+        """_git after making sure this process's store holds the indexed commit, once per
+        question: an API without the worker's disk clones on first use, and fetches when the
+        worker indexed a newer commit (plans/stateless.md, S4). A failure leaves what is there."""
+        if repo["id"] not in self.ready:
+            self.ready.add(repo["id"])
+            name = self.names[repo["id"]]
+            root = store_path(self.cfg, repo["url"], repo["ref"])
+            async with _STORE_LOCKS.setdefault(root, asyncio.Lock()):
+                try:
+                    token = await token_for(self.cfg, self.graph, repo["url"])
+                except EnigramError as e:  # REPO_CREDENTIALS_KEY missing or changed
+                    log.warning("[agent] %s: no access token for reading: %s", name, e)
+                    token = None
+                start = time.perf_counter()
+                try:
+                    action = await asyncio.to_thread(
+                        prepare_store,
+                        self.cfg,
+                        repo["url"],
+                        repo["ref"],
+                        repo["indexed_sha"],
+                        token,
+                    )
+                except EnigramError as e:
+                    log.warning("[agent] %s: store not ready: %s", name, e)
+                    action = None
+                if action:
+                    secs = time.perf_counter() - start
+                    log.info("[agent] %s: %s for reading took %.1f s", name, action, secs)
+        return self._git(repo)
+
+    async def prepare_cited(self, text: str) -> None:
+        """The stores of the repositories an answer cites, before its citations are checked in a
+        thread: the agent may cite lines the graph showed without reading the file."""
+        shas = {c.sha for c in parse_code_citations(text)}
+        for r in self.repos:
+            if any(r["indexed_sha"].startswith(sha) for sha in shas):
+                await self.ensure_git(r)
 
     def citation_problem(self, c: CodeCitation) -> str | None:
         """Why a code citation points at nothing: a commit that is not an indexed one, a file
@@ -630,7 +675,7 @@ class CodeAgentTools:
             return repo
         if refused := self._allow(repo):
             return refused
-        git = self._git(repo)
+        git = await self.ensure_git(repo)
         if git is None:
             return f"repository store missing; re-run enigram repo {repo['url']}"
         self.touched.add(repo["id"])
@@ -857,6 +902,7 @@ async def answer_with_agent(
         summary=summary,
     )
     # Before the sources are made: a citation that points at nothing must not become one.
+    await tools.prepare_cited(loop.reply.text)
     text, invalid = await asyncio.to_thread(
         check_citations,
         loop.reply.text,

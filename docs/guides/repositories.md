@@ -133,7 +133,7 @@ uv run enigram query --scope code "Can an unconfirmed user log in?"
 `data/reports/repo-index-<ts>.json`; `--limit N` summarises only the first N entry points and
 embeds only the summarised symbols. It also keeps a bare partial clone of the repository in
 `REPO_STORE` (default `DATA_DIR/repos`; blobs are fetched on first read), which the code agent
-reads from.
+reads from. An API whose `REPO_STORE` is empty clones the repository on its first code question.
 
 ## Re-indexing on every commit
 
