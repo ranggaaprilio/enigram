@@ -667,17 +667,145 @@ describe('Code', () => {
     expect(screen.getByText(/No steps/)).toBeInTheDocument()
   })
 
-  it('keeps the code collapsed until it is opened', async () => {
+  it('keeps the code in its own tab until it is opened', async () => {
     mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: view } })
 
     renderAt(AT_SYMBOL)
 
-    // jsdom loads no Tailwind, so check the state the `data-[state=closed]:hidden` class keys on.
-    const code = await screen.findByText(/return this\.service\.find/)
-    const region = code.closest('[data-slot="collapsible-content"]')
-    expect(region).toHaveAttribute('data-state', 'closed')
-    await userEvent.click(screen.getByRole('button', { name: 'Code (4 lines)' }))
-    expect(region).toHaveAttribute('data-state', 'open')
+    expect(await screen.findByRole('tab', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    expect(screen.queryByText(/return this\.service\.find/)).toBeNull()
+    await userEvent.click(screen.getByRole('tab', { name: 'Code (4 lines)' }))
+    expect(screen.getByText(/return this\.service\.find/)).toBeInTheDocument()
+  })
+
+  describe('notes tab', () => {
+    const PATCH = 'PATCH /api/annotations/3'
+    const AT_NOTES = `${AT_SYMBOL}&panel=notes`
+
+    it('renders a note as markdown and shows how many wait for a re-check', async () => {
+      const flagged = note(5, { status: 'needs_verification', reason: 'hash' })
+      mockFetch({
+        ...BASE,
+        [`GET ${SYMBOL_URL}`]: {
+          body: { ...view, notes: [note(3, { text: 'Only **admins** may:\n\n- read' }), flagged] },
+        },
+      })
+
+      renderAt(AT_NOTES)
+
+      expect(await screen.findByRole('tab', { name: /Notes \(2\)/ })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(screen.getByText('1 to re-check')).toBeInTheDocument()
+      const card = screen.getByRole('article', { name: 'Note 3' })
+      expect(within(card).getByText('admins').tagName).toBe('STRONG')
+      expect(within(card).getByRole('listitem')).toHaveTextContent('read')
+    })
+
+    it('opens the form on the Notes tab from "Add context" under the summary', async () => {
+      mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: view } })
+
+      renderAt(AT_SYMBOL)
+      await userEvent.click(await screen.findByRole('button', { name: 'Add context' }))
+
+      expect(screen.getByRole('tab', { name: /Notes/ })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByRole('form', { name: 'Add context' })).toBeInTheDocument()
+    })
+
+    it('edits a note in place with the markdown editor', async () => {
+      const fetch = mockFetch({
+        ...BASE,
+        [`GET ${SYMBOL_URL}`]: { body: view },
+        [PATCH]: { body: note(3, { text: 'Revokes **both** tokens.' }) },
+      })
+
+      renderAt(AT_NOTES)
+      await userEvent.click(await screen.findByRole('button', { name: 'Actions for note 3' }))
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }))
+      const box = screen.getByDisplayValue('Logout also revokes the refresh token.')
+      await userEvent.clear(box)
+      await userEvent.type(box, 'Revokes both tokens.')
+      // Select "both" and make it bold from the toolbar.
+      ;(box as HTMLTextAreaElement).setSelectionRange(8, 12)
+      await userEvent.click(screen.getByRole('button', { name: 'Bold' }))
+      expect(box).toHaveValue('Revokes **both** tokens.')
+      await userEvent.click(screen.getByRole('button', { name: 'Preview' }))
+      expect(screen.getByLabelText('Preview')).toHaveTextContent('Revokes both tokens.')
+      await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+      await waitFor(() =>
+        expect(bodyOf(fetch, PATCH)).toEqual({ text: 'Revokes **both** tokens.' }),
+      )
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull())
+    })
+
+    it('tells a contributor that an edit goes back to review, and hides it from others', async () => {
+      mockFetch({
+        ...BASE,
+        [`GET ${SYMBOL_URL}`]: { body: { ...view, notes: [note(3), note(4, { author: 'bob' })] } },
+      })
+      render(
+        asRole(
+          'contributor',
+          <MemoryRouter initialEntries={[AT_NOTES]}>
+            <Routes>
+              <Route path="/code" element={<Code />} />
+            </Routes>
+          </MemoryRouter>,
+          'web',
+        ),
+      )
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Actions for note 4' }))
+      expect(screen.queryByRole('menuitem', { name: 'Edit' })).toBeNull()
+      expect(screen.queryByRole('menuitem', { name: 'Delete' })).toBeNull()
+      await userEvent.keyboard('{Escape}')
+      await userEvent.click(screen.getByRole('button', { name: 'Actions for note 3' }))
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }))
+      expect(screen.getByText('Saving sends it back to a maintainer for review.')).toBeVisible()
+    })
+
+    it('deletes a note after a confirmation', async () => {
+      const fetch = mockFetch({
+        ...BASE,
+        [`GET ${SYMBOL_URL}`]: { body: view },
+        'DELETE /api/annotations/3': { body: null },
+      })
+
+      renderAt(AT_NOTES)
+      await userEvent.click(await screen.findByRole('button', { name: 'Actions for note 3' }))
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }))
+      const dialog = screen.getByRole('dialog', { name: 'Delete this note?' })
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Delete note' }))
+
+      await waitFor(() =>
+        expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true),
+      )
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    })
+
+    it('copies a link that opens the note, and outlines a linked note', async () => {
+      mockFetch({ ...BASE, [`GET ${SYMBOL_URL}`]: { body: view } })
+      const user = userEvent.setup()
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText')
+
+      renderAt(`${AT_SYMBOL}&note=3`)
+      expect(await screen.findByRole('tab', { name: /Notes/ })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(screen.getByRole('article', { name: 'Note 3' }).className).toContain('ring')
+      await user.click(screen.getByRole('button', { name: 'Actions for note 3' }))
+      await user.click(await screen.findByRole('menuitem', { name: 'Copy link' }))
+
+      await waitFor(() => expect(writeText).toHaveBeenCalled())
+      expect(writeText.mock.calls[0][0]).toMatch(/[?&]note=3(&|$)/)
+      expect(writeText.mock.calls[0][0]).toMatch(/[?&]repo=1(&|$)/)
+    })
   })
 
   it('says when the symbol is gone', async () => {

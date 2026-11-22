@@ -9,15 +9,16 @@ import remarkGfm from 'remark-gfm'
 import { Check, ChevronRight, Plus, X } from 'lucide-react'
 import {
   ApiError,
+  deleteAnnotation,
   getSymbol,
   getTree,
   listFeatures,
   listRepos,
   messageOf,
-  NOTE_TYPES,
   patchAnnotation,
   reviewSymbol,
   unreviewSymbol,
+  type AnnotationPatch,
   type Feature,
   type FeatureList,
   type RepoRow,
@@ -28,12 +29,11 @@ import Empty from '@/components/Empty'
 import Loading from '@/components/Loading'
 import ErrorAlert from '@/components/ErrorAlert'
 import AddNoteForm, { type NoteMode } from '@/components/AddNoteForm'
+import NoteCard from '@/components/NoteCard'
 import PageHeader from '@/components/PageHeader'
-import RecheckNote from '@/components/RecheckNote'
-import StatusBadge from '@/components/StatusBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
@@ -42,7 +42,7 @@ import { formatTime } from '../format'
 
 const muted = 'text-[13px] text-muted-foreground'
 // The left list scrolls inside its card, under its filter and count; on wide screens the
-// column sticks below the header like the notes panel (toggle + gap = the extra 3.5rem).
+// column sticks below the header (toggle + gap = the extra 3.5rem).
 // The filter and count keep their height; only the list (listScroll, flex-1) gives way.
 const listCard =
   'flex max-h-[60vh] flex-col rounded-md bg-card p-3 lg:max-h-[calc(100vh-9.8rem)] [&>input]:shrink-0 [&>p]:shrink-0'
@@ -60,9 +60,10 @@ function readName(): string {
 }
 
 // A repository browsed by its entry points (features) or, for developers, by its files and their
-// symbols: the selected symbol's summary, steps, callers and code in the middle, with "looks
-// right" / "not right" / "add context" under the summary; its notes and the guided note form on
-// the right. Repository, mode, symbol and filter live in the URL, so a view can be linked.
+// symbols: the selected symbol on the right, in tabs. Overview has its summary, steps and callers,
+// with "looks right" / "not right" / "add context" under the summary; Notes its notes and the
+// guided note form; Code its source. Repository, mode, symbol, filter, tab and a linked note live
+// in the URL, so a view can be linked.
 // `embedded`: inside the Knowledge page, which has the header (plan item 5, A2).
 export default function Code({ embedded = false }: { embedded?: boolean }) {
   const [params, setParams] = useSearchParams()
@@ -92,7 +93,46 @@ export default function Code({ embedded = false }: { embedded?: boolean }) {
     if (key === 'repo') next.delete('symbol')
     // The two filters match different things: a new repository or mode starts unfiltered.
     if (key === 'repo' || key === 'view') next.delete('q')
+    // A linked note belongs to the symbol it was linked on.
+    if (key === 'repo' || key === 'symbol') next.delete('note')
     setParams(next, { replace })
+  }
+
+  // The symbol's tab: Overview by default, Notes when a note is linked (?note=), else ?panel=.
+  const noteId = Number(params.get('note')) || null
+  const asked_panel = params.get('panel')
+  const panel: Panel = noteId
+    ? 'notes'
+    : asked_panel === 'notes' || asked_panel === 'code'
+      ? asked_panel
+      : 'overview'
+
+  function setPanel(value: Panel) {
+    const next = new URLSearchParams(params)
+    if (value === 'overview') next.delete('panel')
+    else next.set('panel', value)
+    next.delete('note')
+    setParams(next, { replace: true })
+  }
+
+  // "Not right" / "Add context" under the summary open the form on the Notes tab.
+  function openForm(value: NoteMode) {
+    setMode(value)
+    if (panel !== 'notes') setPanel('notes')
+  }
+
+  function copyLink(id: number) {
+    const next = new URLSearchParams(params)
+    next.set('note', String(id))
+    next.delete('panel')
+    if (repoId) next.set('repo', String(repoId))
+    const url = `${window.location.origin}${window.location.pathname}?${next}`
+    // The clipboard needs a secure context (https or localhost).
+    if (!navigator.clipboard) return void toast.error('Could not copy the link')
+    navigator.clipboard.writeText(url).then(
+      () => toast.success('Link copied'),
+      () => toast.error('Could not copy the link'),
+    )
   }
 
   useEffect(() => {
@@ -177,15 +217,19 @@ export default function Code({ embedded = false }: { embedded?: boolean }) {
     }
   }
 
-  async function act(call: () => Promise<unknown>, done: string) {
+  // Resolves true once the call went through, so a note card can close its editor or dialog; a
+  // failed reload afterwards is shown but does not undo that.
+  async function act(call: () => Promise<unknown>, done: string): Promise<boolean> {
     try {
       await call()
-      setError(null)
-      toast.success(done)
-      await reload()
     } catch (e) {
       setError(messageOf(e))
+      return false
     }
+    setError(null)
+    toast.success(done)
+    await reload().catch((e) => setError(messageOf(e)))
+    return true
   }
 
   const header = embedded ? null : (
@@ -200,8 +244,7 @@ export default function Code({ embedded = false }: { embedded?: boolean }) {
       <section>
         {header}
         <Empty>
-          No repository indexed yet. Index one on the <WsLink to="/pipeline">Pipeline</WsLink>{' '}
-          page.
+          No repository indexed yet. Index one on the <WsLink to="/pipeline">Pipeline</WsLink> page.
         </Empty>
       </section>
     )
@@ -242,7 +285,7 @@ export default function Code({ embedded = false }: { embedded?: boolean }) {
         )}
       </div>
       {error && <ErrorAlert>{error}</ErrorAlert>}
-      <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
+      <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-2 lg:sticky lg:top-20">
           <div role="group" aria-label="Browse by" className="flex gap-1 rounded-md bg-card p-1">
             {(
@@ -289,86 +332,58 @@ export default function Code({ embedded = false }: { embedded?: boolean }) {
         ) : !view ? (
           <Loading rows={6} />
         ) : (
-          <>
-            <SymbolPanel
-              view={view}
-              onPick={(id) => setParam('symbol', id)}
-              onMode={setMode}
-              onReview={() =>
-                repoId && act(() => reviewSymbol(repoId, view.symbol.id, by), 'Marked as right')
-              }
-              onUndo={() =>
-                repoId && act(() => unreviewSymbol(repoId, view.symbol.id), 'Review removed')
-              }
-            />
-            {/* Sticky on wide screens: the form opened from under a long summary stays in view. */}
-            <div className="rounded-md bg-card px-5 py-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
-              <h3 className="mb-2 text-sm font-semibold">Notes ({view.notes.length})</h3>
-              {view.notes.length === 0 ? (
-                <p className={muted}>No notes on this symbol yet.</p>
-              ) : (
-                <ul className="mb-2 flex flex-col gap-3">
-                  {view.notes.map((n) => (
-                    <li key={n.id} className="text-sm">
-                      <Badge variant="secondary" className="mr-1.5 rounded-[4px]">
-                        {NOTE_TYPES[n.note_type]}
-                      </Badge>
-                      {n.text}
-                      <div className={cn('mt-1 flex flex-wrap items-center gap-1.5', muted)}>
-                        <StatusBadge status={n.status} />
-                        {n.conflict && (
-                          <Badge variant="outline" className="border-destructive text-destructive">
-                            Conflicts with code
-                          </Badge>
-                        )}
-                        {n.by && <span>by {n.by}</span>}
-                        <span>{formatTime(n.created_at)}</span>
-                      </div>
-                      {n.status === 'needs_verification' && (
-                        <RecheckNote
-                          note={n}
-                          summary={view.summary}
-                          onAct={(body) =>
-                            act(() => patchAnnotation(n.id, body), patchMessage(body))
-                          }
-                        />
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {mode && repoId ? (
-                <AddNoteForm
-                  key={view.symbol.id}
-                  title={mode === 'mismatch' ? 'Not right' : 'Add context'}
-                  target={{
-                    kind: 'symbol',
-                    target_kind: 'symbol',
-                    target_ref: view.symbol.id,
-                    repo: repoId,
-                    repo_name: null,
-                    label: view.symbol.qualified_name,
-                    detail: view.location,
-                    summary: null, // the summary is right above the form
-                  }}
-                  fixedTarget
-                  mode={mode}
-                  by={by}
-                  onSaved={async () => {
-                    setMode(null)
-                    setError(null)
-                    await reload()
-                  }}
-                  onCancel={() => setMode(null)}
-                  onError={setError}
-                />
-              ) : (
-                <p className={cn('mt-3', muted)}>
-                  To add a note, use Not right or Add context under the summary.
-                </p>
-              )}
-            </div>
-          </>
+          <SymbolPanel
+            view={view}
+            panel={panel}
+            onPanel={setPanel}
+            onPick={(id) => setParam('symbol', id)}
+            onMode={openForm}
+            onReview={() =>
+              repoId && act(() => reviewSymbol(repoId, view.symbol.id, by), 'Marked as right')
+            }
+            onUndo={() =>
+              repoId && act(() => unreviewSymbol(repoId, view.symbol.id), 'Review removed')
+            }
+            notes={
+              <NotesTab
+                view={view}
+                noteId={noteId}
+                onAdd={() => setMode('context')}
+                form={
+                  mode &&
+                  repoId && (
+                    <AddNoteForm
+                      key={view.symbol.id}
+                      title={mode === 'mismatch' ? 'Not right' : 'Add context'}
+                      target={{
+                        kind: 'symbol',
+                        target_kind: 'symbol',
+                        target_ref: view.symbol.id,
+                        repo: repoId,
+                        repo_name: null,
+                        label: view.symbol.qualified_name,
+                        detail: view.location,
+                        summary: null, // the summary is one tab away, in the header's symbol
+                      }}
+                      fixedTarget
+                      mode={mode}
+                      by={by}
+                      onSaved={async () => {
+                        setMode(null)
+                        setError(null)
+                        await reload()
+                      }}
+                      onCancel={() => setMode(null)}
+                      onError={setError}
+                    />
+                  )
+                }
+                onPatch={(id, body) => act(() => patchAnnotation(id, body), patchMessage(body))}
+                onDelete={(id) => act(() => deleteAnnotation(id), 'Note deleted')}
+                onCopyLink={copyLink}
+              />
+            }
+          />
         )}
       </div>
     </section>
@@ -659,22 +674,31 @@ function Files(props: {
   )
 }
 
+type Panel = 'overview' | 'notes' | 'code'
+
 function SymbolPanel({
   view,
+  panel,
+  onPanel,
   onPick,
   onMode,
   onReview,
   onUndo,
+  notes,
 }: {
   view: SymbolView
+  panel: Panel
+  onPanel: (panel: Panel) => void
   onPick: (symbolId: string) => void
   onMode: (mode: NoteMode) => void
   onReview: () => void
   onUndo: () => void
+  notes: ReactNode // the Notes tab
 }) {
   const summary = view.summary.flow ?? view.summary.symbol
   const review = view.review
   const body = view.symbol.body
+  const flagged = view.notes.filter((n) => n.status === 'needs_verification').length
   // plans/rbac.md: contributors review and write notes; a ✓ is undone by whoever set it or a
   // maintainer.
   const access = useAccess()
@@ -682,8 +706,8 @@ function SymbolPanel({
   const mayUndo =
     access.can('maintainer') || (contributor && review !== null && review.actor === access.name)
   return (
-    <div className="min-w-0">
-      <div className="rounded-md bg-card px-5 py-4">
+    <div className="min-w-0 rounded-md bg-card">
+      <div className="px-5 pt-4">
         <h2 className="mt-0 mb-2 [overflow-wrap:anywhere]">{view.symbol.qualified_name}</h2>
         <div className="flex flex-wrap items-center gap-1.5">
           {view.entrypoints.map((e) => (
@@ -693,141 +717,216 @@ function SymbolPanel({
           ))}
           <span className={cn('[overflow-wrap:anywhere]', muted)}>{view.location}</span>
         </div>
-        <h3 className={heading}>Summary</h3>
-        {summary ? (
-          <div className="markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
-          </div>
-        ) : (
-          <p className={muted}>No summary yet.</p>
-        )}
-        {contributor && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {summary && !review?.current && (
-              <Button type="button" size="sm" variant="secondary" onClick={onReview}>
-                <Check /> Looks right
-              </Button>
-            )}
-            {summary && (
-              <Button
-                type="button"
-                size="sm"
-                variant="soft-destructive"
-                onClick={() => onMode('mismatch')}
-              >
-                <X /> Not right
-              </Button>
-            )}
-            <Button type="button" size="sm" variant="secondary" onClick={() => onMode('context')}>
-              <Plus /> Add context
-            </Button>
-          </div>
-        )}
-        {review && (
-          <p className={cn('mt-2', muted)}>
-            Reviewed by {review.by || review.actor} · {formatTime(review.at)}
-            {!review.current && ' — the summary changed since'}
-            {mayUndo && (
-              <>
-                {' · '}
-                <Button
-                  type="button"
-                  variant="link"
-                  className="h-auto p-0 text-[13px] text-link"
-                  onClick={onUndo}
-                >
-                  {review.current ? 'Undo' : 'Remove'}
-                </Button>
-              </>
-            )}
-          </p>
-        )}
-        <h3 className={heading}>Steps ({view.steps.length})</h3>
-        {view.steps.length === 0 ? (
-          <p className={muted}>No steps: this symbol calls nothing else in the repository.</p>
-        ) : (
-          <ol className="flex flex-col gap-2">
-            {view.steps.map((s) => (
-              <li key={s.id}>
-                <Button
-                  type="button"
-                  variant="link"
-                  className="h-auto p-0 text-link"
-                  onClick={() => onPick(s.id)}
-                >
-                  {s.qualified_name}
-                </Button>{' '}
-                <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
-                  {s.notes} {s.notes === 1 ? 'note' : 'notes'}
-                </Badge>
-                {s.summary ? (
-                  <div className={cn('markdown', muted)}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{s.summary}</ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className={muted}>No summary.</div>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
-        <h3 className={heading}>Called by ({view.callers.length})</h3>
-        {view.callers.length === 0 ? (
-          <p className={muted}>
-            Nothing in the repository calls it
-            {view.entrypoints.length > 0 ? ': it is an entry point.' : '.'}
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {view.callers.map((c) => (
-              <li key={c.id}>
-                <Button
-                  type="button"
-                  variant="link"
-                  className="h-auto p-0 text-link"
-                  onClick={() => onPick(c.id)}
-                >
-                  {c.qualified_name}
-                </Button>{' '}
-                <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
-                  {c.notes} {c.notes === 1 ? 'note' : 'notes'}
-                </Badge>{' '}
-                <span className={cn('[overflow-wrap:anywhere]', muted)}>
-                  {c.file}:{c.line_start}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
-      <Section title="Code" count={body.split('\n').length}>
-        <pre className="rounded-md bg-background px-4 py-3 text-[13px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
-          {body}
-        </pre>
-      </Section>
+      <Tabs value={panel} onValueChange={(value) => onPanel(value as Panel)} className="mt-3">
+        <TabsList aria-label="Symbol" className="px-3">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="notes">
+            <span>Notes ({view.notes.length})</span>
+            {flagged > 0 && (
+              <span
+                className="rounded-[4px] bg-info-bg px-1.5 text-xs text-info"
+                title={`${flagged} to re-check`}
+              >
+                {flagged} to re-check
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="code">Code ({body.split('\n').length} lines)</TabsTrigger>
+        </TabsList>
+        {/* Overview and Notes stay mounted: a draft note survives a look at the summary. */}
+        <TabsContent
+          value="overview"
+          forceMount
+          className="px-5 pt-1 pb-5 data-[state=inactive]:hidden"
+        >
+          <h3 className={heading}>Summary</h3>
+          {summary ? (
+            <div className="markdown">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
+            </div>
+          ) : (
+            <p className={muted}>No summary yet.</p>
+          )}
+          {contributor && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {summary && !review?.current && (
+                <Button type="button" size="sm" variant="secondary" onClick={onReview}>
+                  <Check /> Looks right
+                </Button>
+              )}
+              {summary && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="soft-destructive"
+                  onClick={() => onMode('mismatch')}
+                >
+                  <X /> Not right
+                </Button>
+              )}
+              <Button type="button" size="sm" variant="secondary" onClick={() => onMode('context')}>
+                <Plus /> Add context
+              </Button>
+            </div>
+          )}
+          {review && (
+            <p className={cn('mt-2', muted)}>
+              Reviewed by {review.by || review.actor} · {formatTime(review.at)}
+              {!review.current && ' — the summary changed since'}
+              {mayUndo && (
+                <>
+                  {' · '}
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-[13px] text-link"
+                    onClick={onUndo}
+                  >
+                    {review.current ? 'Undo' : 'Remove'}
+                  </Button>
+                </>
+              )}
+            </p>
+          )}
+          <h3 className={heading}>Steps ({view.steps.length})</h3>
+          {view.steps.length === 0 ? (
+            <p className={muted}>No steps: this symbol calls nothing else in the repository.</p>
+          ) : (
+            <ol className="flex flex-col gap-2">
+              {view.steps.map((s) => (
+                <li key={s.id}>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-link"
+                    onClick={() => onPick(s.id)}
+                  >
+                    {s.qualified_name}
+                  </Button>{' '}
+                  <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
+                    {s.notes} {s.notes === 1 ? 'note' : 'notes'}
+                  </Badge>
+                  {s.summary ? (
+                    <div className={cn('markdown', muted)}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{s.summary}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <div className={muted}>No summary.</div>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+          <h3 className={heading}>Called by ({view.callers.length})</h3>
+          {view.callers.length === 0 ? (
+            <p className={muted}>
+              Nothing in the repository calls it
+              {view.entrypoints.length > 0 ? ': it is an entry point.' : '.'}
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {view.callers.map((c) => (
+                <li key={c.id}>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-link"
+                    onClick={() => onPick(c.id)}
+                  >
+                    {c.qualified_name}
+                  </Button>{' '}
+                  <Badge variant="outline" className="rounded-[4px] text-muted-foreground">
+                    {c.notes} {c.notes === 1 ? 'note' : 'notes'}
+                  </Badge>{' '}
+                  <span className={cn('[overflow-wrap:anywhere]', muted)}>
+                    {c.file}:{c.line_start}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </TabsContent>
+        <TabsContent
+          value="notes"
+          forceMount
+          className="px-5 pt-4 pb-5 data-[state=inactive]:hidden"
+        >
+          {notes}
+        </TabsContent>
+        {/* PM/QA read the summary, not the code: its tab mounts only when opened. */}
+        <TabsContent value="code" className="p-3">
+          <pre className="rounded-md bg-background px-4 py-3 text-[13px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {body}
+          </pre>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
 
-// As Trace's sections, but closed by default: PM/QA read the summary, not the code.
-function Section({
-  title,
-  count,
-  children,
-}: {
-  title: string
-  count: number
-  children: ReactNode
+// The symbol's notes as cards, newest form on top; a linked note (?note=) is outlined and
+// scrolled to.
+function NotesTab(props: {
+  view: SymbolView
+  noteId: number | null
+  form: ReactNode // the open note form, if any
+  onAdd: () => void
+  onPatch: (id: number, body: AnnotationPatch) => Promise<boolean>
+  onDelete: (id: number) => Promise<boolean>
+  onCopyLink: (id: number) => void
 }) {
+  const { notes, summary } = props.view
+  const contributor = useAccess().can('contributor')
   return (
-    <Collapsible className="group my-3 rounded-md bg-card">
-      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-5 py-4 text-left font-semibold tracking-[-0.3px]">
-        <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
-        {title} ({count} lines)
-      </CollapsibleTrigger>
-      <CollapsibleContent forceMount className="px-2 pb-3 data-[state=closed]:hidden">
-        {children}
-      </CollapsibleContent>
-    </Collapsible>
+    <div className="flex flex-col gap-3">
+      <h3 className="sr-only">Notes</h3>
+      {notes.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className={cn('m-0', muted)}>
+            What the team knows that the code does not say: rules, expected behaviour, known issues.
+          </p>
+          {contributor && !props.form && (
+            <Button type="button" size="sm" variant="secondary" onClick={props.onAdd}>
+              <Plus /> Add note
+            </Button>
+          )}
+        </div>
+      )}
+      {props.form}
+      {notes.length === 0 ? (
+        !props.form && (
+          <div className="flex flex-col items-start gap-3 rounded-md border border-dashed px-5 py-6">
+            <div>
+              <p className="m-0 font-medium">No notes on this symbol yet.</p>
+              <p className={cn('m-0 mt-1', muted)}>
+                Add a business rule, what should happen, a known issue or a tip for developers.
+                Answers cite verified notes.
+              </p>
+            </div>
+            {contributor && (
+              <Button type="button" size="sm" onClick={props.onAdd}>
+                <Plus /> Add note
+              </Button>
+            )}
+          </div>
+        )
+      ) : (
+        <ul className="m-0 flex list-none flex-col gap-3 p-0">
+          {notes.map((n) => (
+            <li key={n.id}>
+              <NoteCard
+                note={n}
+                summary={summary}
+                highlighted={n.id === props.noteId}
+                onPatch={(body) => props.onPatch(n.id, body)}
+                onDelete={() => props.onDelete(n.id)}
+                onCopyLink={() => props.onCopyLink(n.id)}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }

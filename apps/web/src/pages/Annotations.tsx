@@ -24,6 +24,7 @@ import Empty from '@/components/Empty'
 import Loading from '@/components/Loading'
 import ErrorAlert from '@/components/ErrorAlert'
 import AddNoteForm from '@/components/AddNoteForm'
+import Markdown from '@/components/Markdown'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import PageHeader from '@/components/PageHeader'
 import StatusBadge from '@/components/StatusBadge'
@@ -264,10 +265,10 @@ function NoteRow(props: {
           {props.target}
         </TableCell>
         <TableCell className="min-w-72">
-          <Badge variant="secondary" className="mr-1.5 rounded-[4px]">
+          <Badge variant="secondary" className="mb-1 rounded-[4px]">
             {NOTE_TYPES[n.note_type]}
           </Badge>
-          {n.text}
+          <Markdown>{n.text}</Markdown>
           {n.by && <div className={meta}>by {n.by}</div>}
           {n.via === 'mcp' && <div className={meta}>via MCP by {n.author}</div>}
           {n.question && <div className={meta}>Question: {n.question}</div>}

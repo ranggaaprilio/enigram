@@ -20,7 +20,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
-import { Textarea } from '@/components/ui/textarea'
+import MarkdownEditor from '@/components/MarkdownEditor'
 import { cn } from '@/lib/utils'
 
 // "Not right" claims the code should act otherwise; "Add context" (and a note from Annotations)
@@ -346,12 +346,12 @@ export default function AddNoteForm(props: {
         <Label htmlFor="note-text" className={label}>
           {question}
         </Label>
-        <Textarea
+        <MarkdownEditor
           id="note-text"
-          ref={box}
+          textareaRef={box}
           rows={4}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
           onKeyDown={onKeyDown}
         />
       </div>
