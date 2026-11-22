@@ -1,4 +1,5 @@
 import logging
+import tempfile
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,7 +11,7 @@ from typing import Any
 
 from enigram.application import report
 from enigram.application.files import file_sha256
-from enigram.application.ports import Deps, IndexState, KnowledgeEngine
+from enigram.application.ports import BlobStore, Deps, IndexState, KnowledgeEngine
 from enigram.config import CHUNK_TOKENIZER, Config
 from enigram.domain.chunk import PARSER_VERSION, SOURCE_SUFFIXES, Chunk, book_name, citation_path
 from enigram.domain.errors import EnigramError
@@ -132,6 +133,27 @@ def list_sources(folder: Path) -> list[Path]:
     )
 
 
+def source_names(names: list[str], book: str | None = None) -> list[str]:
+    """The PDF and Markdown names among a BlobStore's, optionally only those of `book`."""
+    return [
+        n
+        for n in names
+        if Path(n).suffix.lower() in SOURCE_SUFFIXES
+        and (book is None or book_name(Path(n)) == book)
+    ]
+
+
+@asynccontextmanager
+async def staged_sources(blobs: BlobStore, names: list[str]) -> AsyncIterator[Path]:
+    """A temporary folder holding copies of `names`, for run_index: the parser reads local
+    files, and the store may be a bucket (plans/stateless.md, S2)."""
+    with tempfile.TemporaryDirectory(prefix="enigram-sources-") as tmp:
+        folder = Path(tmp)
+        for name in names:
+            await blobs.get_to(name, folder / name)
+        yield folder
+
+
 def select_books(
     cfg: Config, pdfs: list[Path], manifest: dict[str, Any]
 ) -> tuple[list[Path], list[str]]:
@@ -235,7 +257,7 @@ def count_doc_statuses(docs: list[dict[str, Any] | None]) -> dict[str, int]:
 
 
 async def delete_document(
-    cfg: Config, engine: KnowledgeEngine, state: IndexState, book: str
+    cfg: Config, engine: KnowledgeEngine, state: IndexState, blobs: BlobStore, book: str
 ) -> dict[str, Any]:
     """Delete one book from the index, then its manifest entry, chunks and files. Safe to re-run.
 
@@ -266,15 +288,16 @@ async def delete_document(
             log.info("[delete] %s: %d/%d documents", book, n, len(ids))
 
     await state.delete_chunks(book)
-    # The Docling parse cache, and the uploaded or synced source file.
-    files = list(cfg.parsed_dir.glob(f"{book}.*.docling.json")) if cfg.parsed_dir.exists() else []
-    if cfg.books_dir.exists():
-        files += [p for p in list_sources(cfg.books_dir) if book_name(p) == book]
+    # The Docling parse cache on this disk, then the uploaded or synced source file.
+    cache = list(cfg.parsed_dir.glob(f"{book}.*.docling.json")) if cfg.parsed_dir.exists() else []
     removed = []
-    for path in files:
+    for path in cache:
         if path.exists():
             path.unlink()
             removed.append(path.name)
+    for name in source_names(await blobs.names(), book):
+        await blobs.delete(name)
+        removed.append(name)
 
     manifest = await state.load_manifest()
     manifest["books"].pop(book, None)

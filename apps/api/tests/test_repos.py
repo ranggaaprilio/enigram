@@ -182,9 +182,9 @@ def fake_sync(cfg, deps, monkeypatch):
         fake.opened += 1
         yield SimpleNamespace(clear_query_cache=fake_clear)
 
-    async def fake_delete(cfg, engine, state, book):
+    async def fake_delete(cfg, engine, state, blobs, book):
         fake.deleted.append(book)
-        (cfg.books_dir / f"{book}.md").unlink(missing_ok=True)
+        await blobs.delete(f"{book}.md")
         manifest = load_manifest(cfg)
         manifest["books"].pop(book, None)
         save_manifest(cfg, manifest)

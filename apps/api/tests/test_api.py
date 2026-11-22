@@ -201,7 +201,7 @@ def test_duplicate_upload_while_queued_returns_the_same_job(env):
     assert len(store.jobs) == 1
 
 
-def test_uploads_of_one_name_use_separate_hidden_temp_files(env, monkeypatch):
+def test_uploads_of_one_name_use_separate_temp_files_outside_the_store(env, pg_cfg, monkeypatch):
     client, _, _, _ = env
     paths, save = [], api._save_upload
 
@@ -214,7 +214,9 @@ def test_uploads_of_one_name_use_separate_hidden_temp_files(env, monkeypatch):
     _upload(client, "Paper One.pdf")
 
     assert len(set(paths)) == 2  # concurrent uploads must not truncate each other's file
-    assert all(p.name.startswith(".") for p in paths)  # list_sources skips them
+    # Never half-written in the store: the API lists it, and it may be a bucket.
+    assert not any(p.is_relative_to(pg_cfg.books_dir) for p in paths)
+    assert (pg_cfg.books_dir / "Paper One.pdf").read_bytes() == PDF
 
 
 def test_documents_lists_manifest_books_and_queued_uploads(env, pg_cfg):

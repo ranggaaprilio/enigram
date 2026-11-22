@@ -18,7 +18,7 @@ only, not commit SHAs), then indexes two things:
 
 | What | When | Result |
 |---|---|---|
-| **Markdown files** (`.md`, `.markdown`) | always | Copied to `data/books` as `<repo>--<path>.md` (e.g. `org-handbook--docs--onboarding`) and indexed like uploads. The document list says they come from a repository |
+| **Markdown files** (`.md`, `.markdown`) | always | Copied to the [source files](../self-hosting/deployment.md#source-files) (`data/books`, or the `BLOB_URL` bucket) as `<repo>--<path>.md` (e.g. `org-handbook--docs--onboarding`) and indexed like uploads. The document list says they come from a repository |
 | **Code graph** | the repository has a `tsconfig.json`, or with `CODE_JAVASCRIPT=on` a `package.json`/`jsconfig.json` and JavaScript files (needs `STORAGE_BACKEND=postgres`) | Symbols, calls, entry points, summaries and flows (below) |
 
 ## Limits and rules

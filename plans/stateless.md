@@ -1,6 +1,6 @@
 # API dan worker tanpa disk bersama
 
-Rencana dibuat 2026-11-22 dari peta kode saat ini. S1 dan S3 dibangun 2026-11-22 (lihat
+Rencana dibuat 2026-11-22 dari peta kode saat ini. S1, S2 dan S3 dibangun 2026-11-22 (lihat
 bagiannya); fase lain belum.
 Path kode relatif ke `apps/api/src/enigram/`.
 
@@ -58,7 +58,7 @@ di-deploy di platform tanpa persistent disk yang bisa dipakai bersama.
 | # | Pertanyaan | Pilihan | Saran |
 |---|---|---|---|
 | D1 | Targetnya apa? | (a) beberapa replika API, (b) platform tanpa persistent disk (Cloud Run, ECS Fargate), (c) keduanya | (c). Fase S1-S4 dibutuhkan keduanya; S5 hanya untuk throughput worker |
-| D2 | Di mana file sumber disimpan? | (a) S3-compatible (S3, GCS, MinIO lokal), (b) kolom `bytea` di Postgres | (a). PDF bisa puluhan MB; Postgres tetap kecil dan backup cepat |
+| D2 | Di mana file sumber disimpan? | (a) S3-compatible (S3, GCS, MinIO lokal), (b) kolom `bytea` di Postgres | (a). PDF bisa puluhan MB; Postgres tetap kecil dan backup cepat. **Diputuskan (a)** oleh pemilik saat S2 dikerjakan (2026-11-22) |
 | D3 | Di mana chunk hasil parse disimpan? | (a) tabel Postgres, (b) object storage seperti file sumber | (a). Ukurannya kecil, dan delete atau re-insert tidak perlu unduh file. **Diputuskan (a)** saat S3 dikerjakan (2026-11-22) |
 | D4 | Bagaimana API membaca source kode? | (a) clone lokal di tiap pod API, dibuat saat pertama dipakai, (b) isi file disimpan di Postgres saat index, (c) volume RWX bersama (EFS, Filestore) | (a) dulu. Paling sedikit perubahan, dan `ensure_store` sudah ada. (b) kalau cold start terlalu lambat |
 | D5 | Perlu lebih dari satu worker? | ya / tidak sekarang | Tidak sekarang. Antrean FIFO cukup selama belum diukur lambat |
@@ -102,6 +102,19 @@ UI sama sebelum dan sesudah impor pada data lokal.
 
 **Cek:** test dengan `LocalBlobStore` dan MinIO; upload, index, dan delete dokumen lewat UI
 dengan `BLOB_URL` ke MinIO.
+
+**Dibangun (2026-11-22), berbeda dari rencana di atas:**
+- Port `BlobStore` (`names`, `put`, `get_to`, `delete`); `list(prefix)` diganti `names()`, karena
+  satu store sudah per workspace. `S3BlobStore` memakai boto3 di thread; endpoint MinIO lewat env
+  standar `AWS_ENDPOINT_URL`, bukan variabel baru.
+- Worker menyalin file satu dokumen ke folder sementara, lalu `run_index` jalan di folder itu.
+  Sync repo menulis Markdown ke store, lalu menyalinnya kembali ke folder sementara (clone sudah
+  dihapus saat index jalan).
+- Upload di API ditulis ke folder sementara lokal, lalu `put` ke store.
+- File lama di `data/books` tidak dipindah otomatis saat `BLOB_URL` diisi; docs memberi perintah
+  `aws s3 sync`.
+- Test: `tests/test_blob_store.py`, kontrak pada kedua adapter (S3 dengan marker `s3`,
+  `ENIGRAM_TEST_S3_URL`).
 
 ### S3: Chunk ke Postgres, cache Docling jadi sementara
 

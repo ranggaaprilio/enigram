@@ -93,6 +93,13 @@ def _on_off(name: str) -> bool:
     return value == "on"
 
 
+def _blob_url() -> str:
+    value = os.environ.get("BLOB_URL", "").strip().rstrip("/")
+    if value and not (value.startswith("s3://") and value[len("s3://") :].split("/")[0]):
+        raise EnigramError(f"BLOB_URL must be s3://bucket[/prefix] or empty, got {value!r}")
+    return value
+
+
 def _verify_answers() -> bool:
     return _on_off("VERIFY_ANSWERS")
 
@@ -254,6 +261,10 @@ class Config:
     # CLI, MCP). Empty (default): verdicts stay in the trace. Name an origin only after its
     # measurement passed (plans/answer-verification.md).
     verify_badges: tuple[str, ...] = ()
+    # Where uploaded and repository-synced source files live (plans/stateless.md, S2):
+    # s3://bucket[/prefix] on any S3-compatible store (AWS_* credentials, AWS_ENDPOINT_URL for
+    # MinIO); empty (default): the books folder in DATA_DIR.
+    blob_url: str = ""
 
     @classmethod
     def from_env(cls, dotenv_path: Path | None = None) -> "Config":
@@ -434,6 +445,7 @@ class Config:
             code_javascript=_on_off("CODE_JAVASCRIPT"),
             verify_answers=_verify_answers(),
             verify_badges=_verify_badges(),
+            blob_url=_blob_url(),
         )
 
     @property
@@ -461,7 +473,7 @@ class Config:
 
     @property
     def books_dir(self) -> Path:
-        """Uploaded documents; the worker indexes this folder like `enigram index data/books`."""
+        """Uploaded and synced documents when BLOB_URL is empty (LocalBlobStore)."""
         return self.data_dir / "books"
 
     @property

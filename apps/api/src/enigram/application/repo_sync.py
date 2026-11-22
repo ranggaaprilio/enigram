@@ -1,5 +1,5 @@
 """Index a Git repository (public, or private with an access token: repo_auth): shallow clone;
-its Markdown files are copied into books_dir as <repo>--<path>.md and go through the normal
+its Markdown files are copied into the BlobStore as <repo>--<path>.md and go through the normal
 index pipeline, and a TypeScript repository (a tsconfig.json at the root or in a subfolder, as in
 a monorepo), or with CODE_JAVASCRIPT=on a JavaScript one, also gets a code graph.
 Re-running re-syncs the repository."""
@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 from enigram.application.code_index import SKIP_DIRS, index_code, is_js_repo, is_ts_repo
 from enigram.application.files import file_sha256
-from enigram.application.indexing import delete_document, run_index
+from enigram.application.indexing import delete_document, run_index, staged_sources
 from enigram.application.ports import (
     AnnotationRepository,
     CodeGraphRepository,
@@ -251,6 +251,7 @@ async def index_repo(
     removed: list[str] = []
     changed: list[str] = []
     rel_paths: dict[str, str] = {}
+    blobs = deps.new_blob_store()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         log.info("[repo] cloning %s%s", url, f" ({ref})" if ref else "")
@@ -315,19 +316,20 @@ async def index_repo(
                 # Only on a re-sync: a fresh deployment has no index to open.
                 async with deps.open_engine() as engine:
                     for book in [*removed, *changed]:
-                        await delete_document(cfg, engine, state, book)
+                        await delete_document(cfg, engine, state, blobs, book)
                     await engine.clear_query_cache()
 
-            cfg.books_dir.mkdir(parents=True, exist_ok=True)
             for book, path in files.items():
-                shutil.copyfile(path, cfg.books_dir / f"{book}.md")
+                await blobs.put(f"{book}.md", path)
             root = root.resolve()
             rel_paths = {book: path.relative_to(root).as_posix() for book, path in files.items()}
 
     statuses: dict[str, Any] = {}
     run = None
     if files:
-        run = await run_index(cfg, deps, state, cfg.books_dir, only=sorted(files))
+        # The clone is gone by now: the parser reads the copies from the store.
+        async with staged_sources(blobs, [f"{b}.md" for b in sorted(files)]) as folder:
+            run = await run_index(cfg, deps, state, folder, only=sorted(files))
         # After run_index, which rewrites the entries it indexes.
         manifest = await state.load_manifest()
         for book, rel in rel_paths.items():

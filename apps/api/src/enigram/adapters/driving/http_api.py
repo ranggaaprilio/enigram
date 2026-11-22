@@ -5,9 +5,9 @@ import base64
 import hashlib
 import json
 import logging
-import os
 import re
 import secrets
+import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, replace
@@ -16,7 +16,6 @@ from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
-from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
@@ -72,7 +71,7 @@ from enigram.application.dashboard import (
 )
 from enigram.application.doc_conflicts import conflicts_view
 from enigram.application.documents import documents_overview
-from enigram.application.indexing import list_sources
+from enigram.application.indexing import source_names
 from enigram.application.login import (
     end_session,
     invite,
@@ -776,19 +775,16 @@ def create_app(
         if not name or name.startswith(".") or Path(name).suffix.lower() not in SOURCE_SUFFIXES:
             raise HTTPException(400, f"Expected a PDF or Markdown file, got {name!r}")
         book = book_name(Path(name))
-        books_dir = ws.cfg.books_dir
-        books_dir.mkdir(parents=True, exist_ok=True)
-        clash = next(
-            (p.name for p in list_sources(books_dir) if book_name(p) == book and p.name != name),
-            None,
-        )
+        blobs = ws.blobs
+        clash = next((n for n in source_names(await blobs.names(), book) if n != name), None)
         if clash:
             raise HTTPException(409, f"{clash} and {name} both map to document id {book!r}")
 
         store = ws.store
-        # Unique per request: two uploads of one name must not write into the same file.
-        tmp = books_dir / f".{uuid4().hex}.{name}.upload"
-        try:
+        # A local temporary folder per request: the store may be a bucket (plans/stateless.md, S2),
+        # and two uploads of one name must not write into the same file.
+        with tempfile.TemporaryDirectory(prefix="enigram-upload-") as tmpdir:
+            tmp = Path(tmpdir) / name
             sha = await _save_upload(file, tmp)
             entry = (await ws.index_state.load_manifest())["books"].get(book, {})
             if entry.get("sha256") and entry["sha256"] != sha:
@@ -803,30 +799,31 @@ def create_app(
             active = next(
                 (j for j in await store.active_jobs() if j.payload.get("book") == book), None
             )
-            target = books_dir / name
             if active:
-                if target.exists() and _sha256_file(target) == sha:
+                stored = Path(tmpdir) / f"stored-{name}"
+                try:
+                    await blobs.get_to(name, stored)
+                    same = _sha256_file(stored) == sha
+                except NotFound:
+                    same = False
+                if same:
                     return {"book": book, "status": active.status, "job": asdict(active)}
                 raise HTTPException(409, f"{name} is already queued with different content")
 
-            os.replace(tmp, target)
+            await blobs.put(name, tmp)
             job = await store.enqueue("index", {"book": book, "file": name})
-        finally:
-            tmp.unlink(missing_ok=True)
         log.info("[api] queued job %d for %s", job.id, book)
         return {"book": book, "status": job.status, "job": asdict(job)}
 
     @app.get("/documents")
     async def list_documents(ws: Viewer) -> list[dict[str, Any]]:
-        return await documents_overview(ws.cfg, ws.index_state, ws.store)
+        return await documents_overview(ws.index_state, ws.store, ws.blobs)
 
     async def known_book(ws: Workspace, book: str) -> bool:
         """In the manifest, or uploaded and not yet indexed."""
         if book in (await ws.index_state.load_manifest())["books"]:
             return True
-        return ws.cfg.books_dir.exists() and any(
-            book_name(p) == book for p in list_sources(ws.cfg.books_dir)
-        )
+        return bool(source_names(await ws.blobs.names(), book))
 
     @app.delete("/documents/{book}", status_code=202)
     async def delete_document_route(ws: Maintainer, request: Request, book: str) -> Any:

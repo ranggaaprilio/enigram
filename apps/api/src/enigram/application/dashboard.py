@@ -60,7 +60,7 @@ async def dashboard(
         for r in await graph.list_repos()
     ]
     documents: dict[str, int] = {}
-    for doc in await documents_overview(cfg, state, store):
+    for doc in await documents_overview(state, store):
         status = doc["status"] or "unknown"
         documents[status] = documents.get(status, 0) + 1
 
