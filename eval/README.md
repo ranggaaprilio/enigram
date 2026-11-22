@@ -274,3 +274,25 @@ The report also lists the misses, the choice confidences (the input for the `rou
 `decisions.yaml`), the golden sha256 and the git commit. The verdict lock applies although no
 answer is generated: rules and the threshold are adjusted only while looking at `dev`, and the
 all-splits run happens once, after they are committed.
+
+## Retrieval metrics (plans/retrieval-accuracy.md, R0)
+
+`enigram golden retrieval` runs `search_code`'s ranking (full text + code embeddings, RRF) with
+each question as the query and scores it against the question's evidence symbols. No answer is
+generated; the only calls are query embeddings.
+
+```bash
+uv run enigram golden retrieval --split dev
+uv run enigram golden retrieval --split dev --answers data/eval/answers-enigram-agent-<ts>.json
+```
+
+- **recall@6**: the share of evidence items in the 6 hits the agent gets (`SEARCH_MAX_HITS`).
+- **recall@20, MRR@20**: the same ranking with 20 hits, what a reranker over a wider pool
+  could reach; the reciprocal rank of the first evidence symbol.
+- With `--answers`: the share of evidence items whose lines the agent read (`read_file`) or
+  cited, from that stored run. The agent also finds evidence by `grep` and `find_symbol`, so
+  this can be above search_code's recall.
+
+An evidence item matches by qualified name and file; a search hit on its class or a caller does
+not count, so recall is a lower bound. Reports go to `data/reports/retrieval-<ts>.md` and
+`.json`. The verdict lock applies as for `golden route`.

@@ -30,7 +30,7 @@ from enigram.application.agent_loop import (
     result_from_json,
 )
 from enigram.application.annotations import attach_notes
-from enigram.application.code_embeddings import rank_search
+from enigram.application.code_embeddings import search_ranking
 from enigram.application.code_query import CODE_IS_THE_TRUTH, ROUTE
 from enigram.application.code_summary import TRUNCATED
 from enigram.application.decisions import clip
@@ -493,13 +493,12 @@ class CodeAgentTools:
         self.graph_calls += 1  # only a graph query that ran can open the fallback
         hits: list[tuple[float, str, dict[str, Any], CodeSymbol]] = []
         for r in targets:
-            ranked = await self.graph.search(r["id"], query, SEARCH_MAX_HITS, bodies=True)
             vector = await self._query_vector(query)
-            if vector is not None and self.embedder is not None:
-                model = self.embedder.model
-                near = await self.graph.search_vectors(r["id"], vector, model, SEARCH_MAX_HITS)
-                self.semantic_hits += len(near)
-                ranked = rank_search(ranked, near, SEARCH_MAX_HITS)
+            model = self.embedder.model if self.embedder is not None else ""
+            ranked, near = await search_ranking(
+                self.graph, r["id"], query, SEARCH_MAX_HITS, vector, model
+            )
+            self.semantic_hits += near
             symbols = await self.graph.symbols_by_id(r["id"], [i for i, _ in ranked])
             hits += [(rank, i, r, symbols[i]) for i, rank in ranked if i in symbols]
         hits.sort(key=lambda h: (-h[0], self.names[h[2]["id"]], h[1]))
