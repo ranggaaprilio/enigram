@@ -18,7 +18,9 @@ async def documents_overview(cfg: Config, store: "JobRepository | None") -> list
         if cfg.books_dir.exists()
         else {}
     )
-    jobs = {j.payload.get("book"): j for j in await store.active_jobs()} if store else {}
+    # Only document jobs carry a book; a repository sync (index_repo) shows on its repository.
+    active = await store.active_jobs() if store else []
+    jobs = {book: j for j in active if (book := j.payload.get("book"))}
     books = load_manifest(cfg)["books"]
     docs = []
     for book in sorted(set(books) | set(jobs)):
