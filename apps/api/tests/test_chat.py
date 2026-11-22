@@ -221,3 +221,36 @@ async def test_the_rewrite_reads_the_summary_too_even_without_a_history():
 
     assert rewritten == "Which endpoints does RefreshTokenService expose?"
     assert "Earlier: RefreshTokenService." in model.prompts[0]
+
+
+async def test_an_answer_cancelled_at_shutdown_is_stored_as_failed(cfg):
+    """The API cancels answers still running past SHUTDOWN_GRACE_SECS (plans/stateless.md, S6):
+    the session shows why its question has no answer."""
+    import asyncio
+
+    import pytest
+    from code_fakes import FakeChatStore
+    from test_worker import FakeJobStore
+
+    from enigram.application import chat as chat_app
+
+    chat, store = FakeChatStore(), FakeJobStore()
+    session = await chat.create_session("me", "t", None)
+    started, events = asyncio.Event(), []
+
+    async def answer(agent, text, history, on_tool, summary):
+        started.set()
+        await asyncio.sleep(60)
+
+    async def emit(event, data):
+        events.append(event)
+
+    task = asyncio.create_task(chat_app.ask(cfg, chat, store, session, "q", "me", answer, emit))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    messages = await chat.messages(session.id)
+    assert [(m.role, m.error) for m in messages] == [("user", None), ("agent", chat_app.STOPPED)]
+    assert events == ["question", "answer"]

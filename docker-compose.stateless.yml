@@ -1,0 +1,89 @@
+# The API without a disk shared with the worker (plans/stateless.md, S6), as on a platform
+# without persistent disks: source files in an S3-compatible bucket (a local SeaweedFS here),
+# the worker's files in a cache volume, and the API with no ./data mount and no published port,
+# so it can run as several replicas behind the web service:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.stateless.yml up -d --scale api=2
+#
+# Open the UI on http://localhost:3000. Files already in data/books are not copied to the bucket
+# (docs/self-hosting/deployment.md, "Source files"). In production, point BLOB_URL and the AWS_*
+# variables at a real bucket in .env instead of the s3 service below.
+
+x-s3-env: &s3-env
+  BLOB_URL: ${BLOB_URL:-s3://enigram}
+  AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY:-enigram}
+  AWS_SECRET_ACCESS_KEY: ${LOCAL_S3_SECRET_KEY:-enigram-local-only}
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_ENDPOINT_URL: http://s3:8333
+
+services:
+  # A local S3-compatible store (MinIO's images could not be pulled). Not published: only the
+  # containers reach it. Its credentials come from the environment.
+  s3:
+    image: chrislusf/seaweedfs:4.54
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY:-enigram}
+      AWS_SECRET_ACCESS_KEY: ${LOCAL_S3_SECRET_KEY:-enigram-local-only}
+    volumes:
+      - s3data:/data
+    restart: unless-stopped
+
+  # Creates the bucket once; enigram never creates one (a production bucket is made by its owner).
+  s3-init:
+    image: enigram:local
+    environment: *s3-env
+    entrypoint: ["python", "-c"]
+    command:
+      - |
+        import os, time, boto3
+        bucket = os.environ["BLOB_URL"].removeprefix("s3://").split("/")[0]
+        for attempt in range(30):
+            try:
+                s3 = boto3.client("s3")
+                if bucket not in [b["Name"] for b in s3.list_buckets()["Buckets"]]:
+                    s3.create_bucket(Bucket=bucket)
+                print("bucket ready:", bucket)
+                break
+            except Exception as e:
+                print("waiting for s3:", type(e).__name__)
+                time.sleep(2)
+        else:
+            raise SystemExit("s3 did not come up")
+    depends_on:
+      - s3
+    restart: "no"
+
+  api:
+    environment: *s3-env
+    # No ./data: uploads go to the bucket, everything else the API reads is in Postgres; the
+    # repository clones of the code agent are made in the container on first use (S4).
+    volumes: !override
+      - model-cache:/root/.cache
+    # Several replicas cannot share one host port: reach them through the web service.
+    ports: !reset []
+    # SIGTERM, then SHUTDOWN_GRACE_SECS for open connections and again for running chat
+    # answers (default 30 s each), before Docker kills the container.
+    stop_grace_period: 70s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+
+  worker:
+    environment: *s3-env
+    # A cache, not shared with the API: Docling conversions and repository clones are rebuilt
+    # when it is lost; the manifest, chunks and index are in Postgres.
+    volumes: !override
+      - worker-cache:/app/data
+      - model-cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+
+volumes:
+  s3data:
+  worker-cache:

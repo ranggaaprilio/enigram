@@ -892,8 +892,16 @@ def main(argv: list[str] | None = None) -> int:
 
             from enigram.adapters.driving.http_api import create_app
 
-            # log_config=None keeps _setup_logging instead of uvicorn's own config.
-            uvicorn.run(create_app(cfg), host=args.host, port=args.port, log_config=None)
+            # log_config=None keeps _setup_logging instead of uvicorn's own config. On SIGTERM
+            # open connections (a chat's event stream) get the grace period, then the lifespan
+            # gives running chat answers the same again (finish_chat_turns).
+            uvicorn.run(
+                create_app(cfg),
+                host=args.host,
+                port=args.port,
+                log_config=None,
+                timeout_graceful_shutdown=cfg.shutdown_grace_secs,
+            )
             return 0
         if args.command == "worker":
             from enigram.adapters.driving.worker import run_worker

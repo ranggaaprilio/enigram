@@ -297,6 +297,22 @@ class WorkspaceCreate(BaseModel):
     name: Name  # checked by domain/workspace.py: 422 when not 1-32 of a-z, 0-9, "-"
 
 
+async def finish_chat_turns(turns: set[asyncio.Task[None]], grace_secs: int) -> None:
+    """On shutdown: chat answers still running get `grace_secs` to store themselves, then the rest
+    are cancelled, so a stopping pod never waits past its platform's kill (plans/stateless.md, S6).
+    A cancelled answer is lost; its question is already stored."""
+    if not turns:
+        return
+    running = set(turns)
+    log.info("[api] shutdown: waiting up to %d s for %d chat answers", grace_secs, len(running))
+    _, late = await asyncio.wait(running, timeout=grace_secs)
+    if late:
+        log.warning("[api] shutdown: %d chat answers cancelled after %d s", len(late), grace_secs)
+        for task in late:
+            task.cancel()
+        await asyncio.gather(*late, return_exceptions=True)
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -553,7 +569,7 @@ def create_app(
                 async with mcp.session_manager.run():
                     yield
                 # A chat answer whose client left still stores itself before the pool closes.
-                await asyncio.gather(*app.state.chat_turns, return_exceptions=True)
+                await finish_chat_turns(app.state.chat_turns, cfg.shutdown_grace_secs)
         finally:
             await store.close()
 

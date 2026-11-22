@@ -161,6 +161,32 @@ berurutan.
   dan tanya kode melalui keduanya.
 - Update `docs/` (deployment dan env baru: `BLOB_URL`, `REPO_STORE`, `SHUTDOWN_GRACE_SECS`).
 
+**Dibangun (2026-11-22), berbeda dari rencana di atas:**
+- Compose default tidak berubah. Tanpa `BLOB_URL`, upload tetap di `data/books`, jadi API
+  default tetap butuh `./data`. Bentuk tanpa disk bersama ada di overlay
+  `docker-compose.stateless.yml`: service `s3` (SeaweedFS 4.54, karena image MinIO tidak bisa
+  di-pull), `s3-init` yang membuat bucket, API tanpa `./data` dan tanpa port publik, worker
+  dengan volume `worker-cache`. Ini memenuhi tujuan "`docker compose up` tanpa layanan tambahan
+  secara default".
+- `SHUTDOWN_GRACE_SECS` (default 30): uvicorn `timeout_graceful_shutdown` untuk koneksi yang
+  masih terbuka, lalu `finish_chat_turns` menunggu jawaban chat dengan batas yang sama. Jawaban
+  yang dibatalkan disimpan sebagai gagal (`chat.STOPPED`), jadi pertanyaannya tidak menggantung.
+  Overlay memberi `stop_grace_period: 70s`.
+- Yang sudah aman untuk banyak replika tanpa perubahan: stream chat SSE (satu request), MCP
+  (`stateless_http=True`), login OIDC (state di cookie, sesi di Postgres), nginx web
+  (me-resolve `api` setiap 10 s).
+- S5 tidak dikerjakan (D5 = tidak sekarang).
+
+**Hasil uji akhir** (overlay, `--scale api=2`, image S4+S6, lewat web :3000):
+- 12 request `/api/documents`: 2 ke api-1, 10 ke api-2.
+- Upload `s6-check.md` diterima api-2; worker meng-index dari bucket; daftar dokumen menampilkan
+  nama file dari bucket; API tidak punya folder `books`.
+- Chat (SSE) menjawab dari dokumen itu, dan jawabannya tersimpan.
+- Dua pertanyaan kode umami: masing-masing replika clone sekali (1,3 s dan 1,4 s), sitasi valid.
+- `docker stop` saat jawaban chat pendek berjalan: berhenti setelah jawaban tersimpan (10 s).
+  Saat jawaban panjang: dibatalkan setelah 30 + 30 s, sesi menampilkan error `STOPPED`; stop
+  selesai dalam 61 s, di bawah `stop_grace_period` 70 s.
+
 ## Risiko
 
 - **Migrasi data lama.** S1 dan S3 mengimpor file yang ada. Backup `data/` sebelum menjalankan
