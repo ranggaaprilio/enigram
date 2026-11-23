@@ -1528,7 +1528,9 @@ async def test_shutdown_without_grace_cancels_at_once():
 
 
 def test_shutdown_grace_must_not_be_negative(clean_env, monkeypatch):
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("LLM_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-flash")
     monkeypatch.setenv("VOYAGE_API_KEY", "vo-key-not-real")
     monkeypatch.setenv("SHUTDOWN_GRACE_SECS", "-1")
     with pytest.raises(EnigramError, match="SHUTDOWN_GRACE_SECS must be 0 or more"):

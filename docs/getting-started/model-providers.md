@@ -10,8 +10,8 @@ judges) and an **embedding model** (documents, memories, code search). The defau
 
 | Role | Default provider | Default model | Key |
 |---|---|---|---|
-| Chat | DeepSeek | `deepseek-flash` (`LLM_MODEL`) | `DEEPSEEK_API_KEY` |
-| Judge (`enigram eval --judge`) | DeepSeek | `deepseek-v4-pro` (`JUDGE_MODEL`) | `DEEPSEEK_API_KEY` |
+| Chat | DeepSeek (`LLM_BASE_URL=https://api.deepseek.com`) | `deepseek-flash` (`LLM_MODEL`) | `LLM_API_KEY` |
+| Judge (`enigram eval --judge`) | the chat endpoint (`JUDGE_BASE_URL`) | `deepseek-v4-pro` (`JUDGE_MODEL`) | `LLM_API_KEY` (`JUDGE_API_KEY`) |
 | Document embeddings | Voyage AI | `voyage-4-lite` (`EMBED_MODEL`, `EMBED_DIM` 1024) | `VOYAGE_API_KEY` |
 | Code embeddings | Voyage AI | `voyage-code-4` (`CODE_EMBED_MODEL`, `CODE_EMBED_DIM` 1024) | `VOYAGE_API_KEY` |
 | Code search reranking | Voyage AI | `rerank-2.5` (`CODE_RERANK_MODEL`, `off` turns it off; none with an OpenAI-compatible endpoint) | `VOYAGE_API_KEY` |
@@ -19,11 +19,11 @@ judges) and an **embedding model** (documents, memories, code search). The defau
 ## Any OpenAI-compatible endpoint
 
 Chat and embeddings each take any OpenAI-compatible endpoint (OpenAI, OpenRouter, Ollama, vLLM,
-LM Studio, ...). An existing `.env` needs no change.
+LM Studio, ...). DeepSeek is one of them: the chat settings are always `LLM_BASE_URL`,
+`LLM_API_KEY` and `LLM_MODEL`.
 
 ```bash title=".env"
-# Chat (the judge follows unless JUDGE_PROVIDER / JUDGE_* say otherwise)
-LLM_PROVIDER=openai-compatible
+# Chat (the judge follows unless JUDGE_BASE_URL / JUDGE_API_KEY / JUDGE_MODEL say otherwise)
 LLM_BASE_URL=http://host.docker.internal:11434/v1   # Ollama on the host; or https://api.openai.com/v1
 LLM_API_KEY=                                        # empty for a local server
 LLM_MODEL=qwen3:14b
@@ -52,7 +52,8 @@ starting with `✗` are failures, lines starting with `!` are warnings.
 - **`usage` in responses.** Without it the endpoint's tokens count as 0 and the
   [token caps](../self-hosting/deployment.md#token-caps) do not bound it (`!` warning).
 
-A `/models` list is optional (`!` warning when missing). `THINKING_MODE` only affects DeepSeek.
+A `/models` list is optional (`!` warning when missing). `THINKING_MODE` only affects a DeepSeek
+endpoint (`api.deepseek.com`).
 For an OpenAI-compatible embedding endpoint, `EMBED_MAX_TOKENS` defaults to 8191 and longer texts
 are cut before they are sent.
 
@@ -63,6 +64,19 @@ model has been measured: see [Other chat models](../evaluation/how-it-works.md#o
 A non-Voyage embedding endpoint is unit-tested only.
 
 :::
+
+## Upgrading an older `.env`
+
+Older versions had `DEEPSEEK_API_KEY`, `LLM_PROVIDER` and `JUDGE_PROVIDER`; the app now refuses
+to start while any of them is set. For DeepSeek, replace them with:
+
+```bash title=".env"
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=<the old DEEPSEEK_API_KEY>
+LLM_MODEL=deepseek-flash
+```
+
+An existing index stays valid: it records the provider as `deepseek` either way.
 
 ## Changing models on an existing index
 

@@ -104,7 +104,7 @@ Prerequisites: Docker, a [DeepSeek](https://platform.deepseek.com) API key and a
 
 ```bash
 git clone https://github.com/ranggaaprilio/enigram && cd enigram
-cp .env.example .env    # fill in DEEPSEEK_API_KEY and VOYAGE_API_KEY
+cp .env.example .env    # fill in LLM_API_KEY and VOYAGE_API_KEY
 docker compose up -d --build
 ```
 

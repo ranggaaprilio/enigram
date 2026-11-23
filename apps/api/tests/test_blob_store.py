@@ -75,7 +75,9 @@ def test_bootstrap_picks_the_store_by_blob_url(cfg, monkeypatch):
 
 @pytest.mark.parametrize("value", ["bucket/x", "s3://", "https://bucket"])
 def test_blob_url_must_be_an_s3_url(clean_env, monkeypatch, value):
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("LLM_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-flash")
     monkeypatch.setenv("VOYAGE_API_KEY", "vo-key-not-real")
     monkeypatch.setenv("BLOB_URL", value)
     with pytest.raises(EnigramError, match="BLOB_URL must be"):

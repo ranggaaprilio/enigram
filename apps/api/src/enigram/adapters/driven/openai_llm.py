@@ -1,6 +1,6 @@
-"""The OpenAI-compatible chat endpoint (DeepSeek or LLM_BASE_URL): request settings, the
-callback LightRAG calls, the ChatModel the judges and the code use cases use, and the startup
-check."""
+"""The OpenAI-compatible chat endpoint at LLM_BASE_URL (DeepSeek or any other): request
+settings, the callback LightRAG calls, the ChatModel the judges and the code use cases use, and
+the startup check."""
 
 import json
 import logging
@@ -246,7 +246,7 @@ async def check_providers(cfg: Config) -> ProviderCheck:
         if missing:
             raise ProviderUnavailableError(f"Model(s) {missing} not served. Available: {models}")
     if cfg.llm_provider != "deepseek" and cfg.thinking_mode == "on":
-        warnings.append(f"THINKING_MODE=on has no effect with LLM_PROVIDER={cfg.llm_provider}")
+        warnings.append(f"THINKING_MODE=on has no effect with {cfg.llm_base_url}")
 
     kwargs: dict[str, Any] = {}
     prompt = prepare_request(cfg, "Reply with exactly: OK", kwargs)

@@ -258,7 +258,7 @@ dev questions are rechecked after every change.
 ## Other chat models
 
 Prompts were tuned on DeepSeek. To see what another model gives through
-`LLM_PROVIDER=openai-compatible` (see [Model providers](../getting-started/model-providers.md)),
+another `LLM_BASE_URL` (see [Model providers](../getting-started/model-providers.md)),
 the chat's default answerer (`agent-auto`: the Auto agent's tool loop over code, documents and
 notes) answered the same 61 questions with `glm-5.3-flash` on OpenCode Zen (2026-11-10). This is
 a measurement, not a gate.

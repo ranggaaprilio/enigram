@@ -46,7 +46,7 @@ const FEATURES: {title: string; body: string; to: string}[] = [
 ];
 
 const QUICKSTART = `git clone https://github.com/ranggaaprilio/enigram && cd enigram
-cp .env.example .env    # fill in DEEPSEEK_API_KEY and VOYAGE_API_KEY
+cp .env.example .env    # fill in LLM_API_KEY and VOYAGE_API_KEY
 docker compose up -d --build
 # open http://localhost:3000`;
 

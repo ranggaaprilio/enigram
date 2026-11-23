@@ -1,6 +1,6 @@
 """End-to-end indexing against the real DeepSeek and Voyage APIs.
 
-Skipped unless DEEPSEEK_API_KEY and VOYAGE_API_KEY are set."""
+Skipped unless LLM_API_KEY and VOYAGE_API_KEY are set."""
 
 import dataclasses
 import json

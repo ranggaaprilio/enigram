@@ -23,10 +23,10 @@ def test_secrets_are_reported_as_set_never_by_value(cfg):
     cfg = dataclasses.replace(cfg, jev_api_key="", repo_credentials_key="fernet-not-real")
     rows = _rows(setup_status(cfg))
 
-    assert rows["DEEPSEEK_API_KEY"] == {
+    assert rows["LLM_API_KEY"] == {
         "group": "Models",
-        "label": "DeepSeek API key",
-        "env": "DEEPSEEK_API_KEY",
+        "label": "Chat API key",
+        "env": "LLM_API_KEY",
         "value": None,
         "set": True,
         "secret": True,
@@ -41,7 +41,8 @@ def test_secrets_are_reported_as_set_never_by_value(cfg):
         assert secret not in text
 
 
-def test_openai_compatible_shows_endpoint_and_its_key(cfg):
+def test_any_endpoint_shows_its_url_and_key(cfg):
+    assert _rows(setup_status(cfg))["LLM_BASE_URL"]["value"] == "https://api.deepseek.com"
     compat = dataclasses.replace(
         cfg,
         llm_provider="openai-compatible",
@@ -50,7 +51,6 @@ def test_openai_compatible_shows_endpoint_and_its_key(cfg):
     )
     rows = _rows(setup_status(compat))
 
-    assert "DEEPSEEK_API_KEY" not in rows
     assert rows["LLM_BASE_URL"]["value"] == "http://ollama.test:11434/v1"
     assert rows["LLM_API_KEY"]["set"] is False  # a local server needs no key
     keyed = _rows(setup_status(dataclasses.replace(compat, llm_api_key="sk-not-real")))

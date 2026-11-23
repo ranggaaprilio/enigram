@@ -65,7 +65,7 @@ def test_sidecar_runs_from_its_own_dir_with_a_minimal_env(cfg, tmp_path, monkeyp
         return subprocess.CompletedProcess([], 0, "", "")
 
     monkeypatch.setattr(ts_graph_sidecar.subprocess, "run", fake_run)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_API_KEY", "ds-key-not-real")
     sidecar = TsGraphSidecar(cfg)
     sidecar.dir = tmp_path
     repo = tmp_path / "repo"

@@ -1,6 +1,6 @@
 """Index the synthetic harbor PDF and ask a 2-hop question.
 
-Skipped unless DEEPSEEK_API_KEY and VOYAGE_API_KEY are set."""
+Skipped unless LLM_API_KEY and VOYAGE_API_KEY are set."""
 
 import dataclasses
 
