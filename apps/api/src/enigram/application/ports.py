@@ -404,8 +404,8 @@ class IndexState(Protocol):
 
 class BlobStore(Protocol):
     """One workspace's source files (uploads and Markdown synced from repositories), by file
-    name: the books folder in DATA_DIR, or an S3-compatible bucket with BLOB_URL
-    (plans/stateless.md, S2). The worker copies a file to local disk before parsing it."""
+    name, in the S3-compatible bucket BLOB_URL names (plans/stateless.md, S2 and S7). The worker
+    copies a file to local disk before parsing it."""
 
     async def names(self) -> list[str]:
         """Every stored file name, sorted."""
@@ -902,7 +902,7 @@ class Deps:
     new_chat: Callable[[JobRepository], Awaitable[ChatRepository]]
     # new_index_state(store): the manifest and chunks, over the store's pool.
     new_index_state: Callable[[JobRepository], Awaitable[IndexState]]
-    new_blob_store: Callable[[], BlobStore]  # the source files (BLOB_URL, or the books folder)
+    new_blob_store: Callable[[], BlobStore]  # the source files (BLOB_URL's bucket)
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]
     decider: Callable[[], DecisionProvider]  # the decision layer (Jev, or the DeepSeek judge)

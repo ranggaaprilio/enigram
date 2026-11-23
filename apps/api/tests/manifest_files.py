@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from enigram.adapters.driven.local_blob_store import LocalBlobStore
+from local_blob_store import LocalBlobStore, books_dir
+
 from enigram.application.files import atomic_write_text, read_chunks_jsonl, write_chunks_jsonl
 from enigram.config import Config
 from enigram.domain.chunk import Chunk
@@ -82,4 +83,4 @@ def use_file_state(cfg: Config, deps):
 
 
 def blobs(cfg: Config) -> LocalBlobStore:
-    return LocalBlobStore(cfg.books_dir)
+    return LocalBlobStore(books_dir(cfg))

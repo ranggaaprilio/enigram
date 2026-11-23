@@ -94,6 +94,17 @@ def no_clone_for_reading(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fake_blob_store(monkeypatch):
+    """Every workspace's source files in DATA_DIR/books instead of BLOB_URL's bucket, so unit
+    tests never reach S3. tests/test_blob_store.py checks the real store."""
+    from local_blob_store import LocalBlobStore, books_dir
+
+    from enigram import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_new_blob_store", lambda cfg: LocalBlobStore(books_dir(cfg)))
+
+
+@pytest.fixture(autouse=True)
 def reset_lightrag_shared_storage():
     # LightRAG keeps storage data in process-global state keyed by namespace, so a second
     # LightRAG in the same process sees the first one's documents as already processed.
@@ -112,6 +123,8 @@ def clean_env(monkeypatch):
     monkeypatch.setenv("POSTGRES_USER", "enigram")
     monkeypatch.setenv("POSTGRES_PASSWORD", "pg-password-not-real")
     monkeypatch.setenv("POSTGRES_DATABASE", "enigram")
+    # Source files live in a bucket; unit tests swap it for a folder (fake_blob_store below).
+    monkeypatch.setenv("BLOB_URL", "s3://enigram-test")
     # Point load_dotenv at a missing file so a developer's .env never leaks into unit tests.
     return Path("/nonexistent/.env")
 

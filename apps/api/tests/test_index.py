@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from local_blob_store import books_dir
 from manifest_files import blobs, file_state, load_manifest, save_manifest
 
 from enigram.adapters.driven import lightrag_engine
@@ -251,11 +252,11 @@ class FakeDeleteRag:
 def _book_files(cfg, book, suffix=".pdf"):
     """Manifest entry, parsed chunks, Docling cache and uploaded file of one book."""
     cfg.parsed_dir.mkdir(parents=True, exist_ok=True)
-    cfg.books_dir.mkdir(parents=True, exist_ok=True)
+    books_dir(cfg).mkdir(parents=True, exist_ok=True)
     paths = [
         cfg.parsed_dir / f"{book}.chunks.jsonl",
         cfg.parsed_dir / f"{book}.0123456789ab.docling.json",
-        cfg.books_dir / f"{book}{suffix}",
+        books_dir(cfg) / f"{book}{suffix}",
     ]
     for path in paths:
         path.write_text("x")
