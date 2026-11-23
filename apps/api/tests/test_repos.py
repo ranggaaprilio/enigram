@@ -311,7 +311,7 @@ async def test_index_repo_reports_each_stage(cfg, deps, fake_sync, tree, graph, 
 async def test_index_repo_typescript_needs_postgres(cfg, deps, fake_sync):
     fake_sync.tree = {"tsconfig.json": "{}", "README.md": "# Readme"}
 
-    with pytest.raises(EnigramError, match="STORAGE_BACKEND=postgres"):
+    with pytest.raises(EnigramError, match="Postgres"):
         await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
     assert fake_sync.indexed == []
 
@@ -344,7 +344,7 @@ async def test_index_repo_javascript_without_postgres_still_syncs_markdown(cfg, 
 
     result = await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
-    assert "STORAGE_BACKEND=postgres" in result["code"]["skipped"]
+    assert "Postgres" in result["code"]["skipped"]
     assert fake_sync.code == []
     assert result["indexed"] == ["org-handbook--README"]
 
@@ -363,7 +363,7 @@ async def test_index_repo_javascript_only_without_postgres_fails(cfg, deps, fake
     cfg = dataclasses.replace(cfg, code_javascript=True)
     fake_sync.tree = {"package.json": "{}", "src/app.js": "x()"}
 
-    with pytest.raises(EnigramError, match="STORAGE_BACKEND=postgres"):
+    with pytest.raises(EnigramError, match="Postgres"):
         await repos.index_repo(cfg, deps, URL, state=file_state(cfg))
 
 

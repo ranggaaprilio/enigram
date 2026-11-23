@@ -104,11 +104,6 @@ def _upload(client, name, data=PDF):
     return client.post("/documents", files={"file": (name, data, "application/octet-stream")})
 
 
-def test_create_app_refuses_file_storage(cfg):
-    with pytest.raises(EnigramError, match="STORAGE_BACKEND=postgres"):
-        api.create_app(cfg)
-
-
 def test_lifespan_builds_rag_without_query_cache_and_cleans_up(pg_cfg, monkeypatch):
     store, rag, build_kw = FakeJobStore(), FakeRag(), {}
 

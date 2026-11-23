@@ -7,7 +7,6 @@ from enigram.adapters.driven import lightrag_engine
 from enigram.adapters.driven.lightrag_engine import LightRagEngine
 from enigram.application import indexing as index
 from enigram.application.files import atomic_write_text, file_sha256
-from enigram.bootstrap import build_deps
 from enigram.domain.chunk import Chunk
 from enigram.domain.errors import EnigramError
 
@@ -46,8 +45,6 @@ def test_select_books_retries_failed(cfg, tmp_path):
 
 
 def test_select_books_rejects_changed_pdf(cfg, tmp_path):
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "kv_store_doc_status.json").write_text("{}")
     pdf = tmp_path / "p.pdf"
     pdf.write_bytes(b"new content")
     manifest = {"books": {"p": {"status": "indexed", "sha256": "0" * 64}}}
@@ -68,8 +65,9 @@ async def test_run_index_returns_early_without_llm_when_up_to_date(cfg, deps, tm
     folder.mkdir()
     pdf = folder / "p.pdf"
     pdf.write_bytes(b"x")
-    manifest = {"books": {"p": {"status": "indexed", "sha256": file_sha256(pdf)}}}
-    index.guard_chunk_settings(cfg, manifest)
+    manifest = {"books": {}}
+    index.guard_chunk_settings(cfg, manifest)  # records the settings of a fresh index
+    manifest["books"] = {"p": {"status": "indexed", "sha256": file_sha256(pdf)}}
     save_manifest(cfg, manifest)
 
     async def no_llm():
@@ -84,8 +82,6 @@ async def test_run_index_returns_early_without_llm_when_up_to_date(cfg, deps, tm
 
 
 def test_guard_embed_model_records_then_rejects_another_model(cfg):
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "kv_store.json").write_text("{}")
     manifest = {"books": {"p": {"status": "indexed"}}}
     index.guard_embed_model(cfg, manifest)  # recorded before: trusted and recorded
     assert manifest["embed_model"] == cfg.embed_model
@@ -103,8 +99,6 @@ def test_guard_llm_model_records_model_on_fresh_index(cfg):
 
 
 def test_guard_llm_model_rejects_index_from_another_model(cfg):
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "kv_store.json").write_text("{}")
     stored = {"llm_provider": "deepseek", "llm_model": "deepseek-v4-pro"}
     manifest = {"books": {"p": {"status": "indexed"}}, **stored}
     with pytest.raises(EnigramError, match="Extraction LLM changed"):
@@ -113,16 +107,12 @@ def test_guard_llm_model_rejects_index_from_another_model(cfg):
 
 def test_guard_llm_model_rejects_manifest_without_provider(cfg):
     # Indexes built before the provider was recorded were extracted on a local model.
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "kv_store.json").write_text("{}")
     manifest = {"books": {"p": {"status": "indexed"}}}
     with pytest.raises(EnigramError, match="Extraction LLM changed"):
         index.guard_llm_model(cfg, manifest)
 
 
 def test_guard_llm_model_accepts_same_model(cfg):
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "kv_store.json").write_text("{}")
     manifest = {"books": {"p": {}}, "llm_provider": "deepseek", "llm_model": "deepseek-flash"}
     index.guard_llm_model(cfg, manifest)
 
@@ -140,13 +130,6 @@ def test_list_sources_finds_pdf_and_markdown(tmp_path):
         "c.markdown",
         "d.MD",
     ]
-
-
-async def test_load_manifest_reports_corruption(cfg):
-    cfg.manifest_path.parent.mkdir(parents=True)
-    cfg.manifest_path.write_text('{"books": {')
-    with pytest.raises(EnigramError, match="corrupt"):
-        await file_state(cfg).load_manifest()
 
 
 def test_atomic_write_text_leaves_no_temp_file(tmp_path):
@@ -188,12 +171,6 @@ def test_build_rag_postgres_uses_pg_storages_in_its_workspace(pg_cfg):
     assert rag.workspace == "default"
 
 
-def test_build_rag_file_keeps_json_storages(cfg):
-    rag = lightrag_engine.build_rag(cfg)
-    assert (rag.kv_storage, rag.graph_storage) == ("JsonKVStorage", "NetworkXStorage")
-    assert rag.workspace == ""
-
-
 def test_build_rag_query_cache_off_keeps_extraction_cache(cfg):
     assert lightrag_engine.build_rag(cfg).enable_llm_cache is True
     rag = lightrag_engine.build_rag(cfg, query_cache=False)
@@ -220,44 +197,11 @@ async def test_load_graph_postgres_empty_raises(pg_cfg, monkeypatch):
         await lightrag_engine.load_graph(pg_cfg)
 
 
-def test_guard_llm_model_postgres_trusts_manifest(pg_cfg):
-    # No local rag_dir: with Postgres the manifest alone says an index exists.
+def test_guard_llm_model_trusts_the_manifest(pg_cfg):
+    # The manifest alone says an index exists.
     manifest = {"books": {"p": {"status": "indexed"}}, "llm_provider": "deepseek", "llm_model": "x"}
     with pytest.raises(EnigramError, match="Extraction LLM changed"):
         index.guard_llm_model(pg_cfg, manifest)
-
-
-def test_guard_storage_rejects_file_manifest_on_postgres(pg_cfg):
-    # A manifest from before the storage was recorded describes a file index.
-    manifest = {"books": {"p": {"status": "indexed"}}}
-    with pytest.raises(EnigramError, match="delete them to re-index"):
-        index.guard_storage(pg_cfg, manifest)
-
-
-def test_guard_storage_rejects_other_workspace(pg_cfg):
-    manifest = {"books": {"p": {}}, "storage": "postgres", "workspace": "papers"}
-    with pytest.raises(EnigramError, match="'papers'"):
-        index.guard_storage(pg_cfg, manifest)
-
-
-def test_guard_storage_records_storage_and_accepts_legacy_file_manifest(cfg, pg_cfg):
-    fresh = {"books": {}}
-    index.guard_storage(pg_cfg, fresh)
-    assert (fresh["storage"], fresh["workspace"]) == ("postgres", "default")
-
-    legacy = {"books": {"p": {"status": "indexed"}}}
-    index.guard_storage(cfg, legacy)
-    assert (legacy["storage"], legacy["workspace"]) == ("file", None)
-
-
-async def test_run_index_rejects_storage_switch_before_skipping_up_to_date(pg_cfg, tmp_path):
-    folder = tmp_path / "docs"
-    folder.mkdir()
-    doc = folder / "p.md"
-    doc.write_text("# P\n")
-    save_manifest(pg_cfg, {"books": {"p": {"status": "indexed", "sha256": file_sha256(doc)}}})
-    with pytest.raises(EnigramError, match="describe an index in"):
-        await index.run_index(pg_cfg, build_deps(pg_cfg), file_state(pg_cfg), folder)
 
 
 async def test_insert_book_inserts_all_when_doc_status_returns_empty(cfg):

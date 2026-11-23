@@ -3,7 +3,6 @@
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import networkx as nx
@@ -28,14 +27,11 @@ from enigram.domain.errors import EnigramError
 
 # PGTableGraphStorage keeps the graph in plain tables, so no Apache AGE extension is needed
 # (managed Postgres such as RDS or Cloud SQL does not offer AGE). The vectors need pgvector.
-STORAGE_CLASSES: dict[str, dict[str, str]] = {
-    "file": {},
-    "postgres": {
-        "kv_storage": "PGKVStorage",
-        "vector_storage": "PGVectorStorage",
-        "graph_storage": "PGTableGraphStorage",
-        "doc_status_storage": "PGDocStatusStorage",
-    },
+STORAGE_CLASSES: dict[str, str] = {
+    "kv_storage": "PGKVStorage",
+    "vector_storage": "PGVectorStorage",
+    "graph_storage": "PGTableGraphStorage",
+    "doc_status_storage": "PGDocStatusStorage",
 }
 
 # Replaces LightRAG's generic type list (Creature, NaturalObject, ...). Besides the types, the
@@ -70,9 +66,8 @@ def build_rag(cfg: Config, *, query_cache: bool = True) -> LightRAG:
     """LightRAG over cfg's storage; index and query must share it (same embedding func, cache)."""
     return LightRAG(
         working_dir=str(cfg.rag_dir),
-        # "" keeps the file layout of indexes built before WORKSPACE existed.
-        workspace=cfg.workspace if cfg.storage == "postgres" else "",
-        **STORAGE_CLASSES[cfg.storage],
+        workspace=cfg.workspace,
+        **STORAGE_CLASSES,
         llm_model_func=make_llm_func(cfg),
         embedding_func=make_embedding_func(cfg),
         chunk_token_size=LIGHTRAG_CHUNK_TOKEN_SIZE,
@@ -238,26 +233,16 @@ class LightRagEngine:
         return _outcome(await self.rag.adelete_by_relation(source, target))
 
 
-def find_graph_file(cfg: Config) -> Path:
-    """The GraphML file of a file-storage index; raises when `enigram index` has not run."""
-    files = sorted(cfg.rag_dir.rglob("*.graphml")) if cfg.rag_dir.exists() else []
-    if not files:
-        raise EnigramError(f"No index found in {cfg.index_location}. Run `enigram index` first.")
-    return files[0]
-
-
 @asynccontextmanager
 async def open_engine(
     cfg: Config, *, query_cache: bool = True, require_index: bool = True
 ) -> AsyncIterator[LightRagEngine]:
     """Load the index once. With require_index, fails fast when `enigram index` has not run yet;
     the API turns it off because a fresh deployment has no index and must still start."""
-    if require_index and cfg.storage == "file":
-        find_graph_file(cfg)
     rag = build_rag(cfg, query_cache=query_cache)
     await rag.initialize_storages()
     try:
-        if require_index and cfg.storage == "postgres":
+        if require_index:
             counts = await rag.doc_status.get_status_counts()
             if not counts.get(DocStatus.PROCESSED):
                 raise EnigramError(
@@ -269,9 +254,7 @@ async def open_engine(
 
 
 async def load_graph(cfg: Config) -> nx.Graph:
-    """The entity graph as NetworkX, read from whichever storage holds the index."""
-    if cfg.storage == "file":
-        return nx.read_graphml(find_graph_file(cfg))
+    """The entity graph as NetworkX, read from the index's Postgres tables."""
     rag = build_rag(cfg)
     await rag.initialize_storages()
     try:

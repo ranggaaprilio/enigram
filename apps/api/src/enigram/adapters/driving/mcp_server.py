@@ -57,8 +57,8 @@ class AppContext:
     engine: KnowledgeEngine
     store: JobRepository | None = None  # set over HTTP: queries are logged, jobs show in documents
     memory: MemoryRepository | None = None  # set over HTTP: memories belong to an API key
-    code_graph: CodeGraphRepository | None = None  # needs STORAGE_BACKEND=postgres
-    notes: AnnotationRepository | None = None  # needs STORAGE_BACKEND=postgres
+    code_graph: CodeGraphRepository | None = None  # needs Postgres
+    notes: AnnotationRepository | None = None  # needs Postgres
     decider: DecisionProvider | None = None  # the abstain guard and the route; None skips them
     code_embedder: CodeEmbedder | None = None  # search_code's semantic channel; None = full text
     conflicts: ConflictRepository | None = None  # docs-vs-code results; needs postgres
@@ -272,10 +272,6 @@ def create_server(
     async def open_index(server: MCPServer) -> AsyncIterator[AppContext]:
         async with deps.open_engine() as engine:
             decider = deps.decider()
-            if cfg.storage != "postgres":
-                state = await deps.new_index_state(None)
-                yield AppContext(engine=engine, decider=decider, index_state=state)
-                return
             store = await deps.open_store()  # only for the code graph: stdio logs no queries
             try:
                 code_graph = await deps.new_code_graph(store)
@@ -369,9 +365,7 @@ def create_server(
         with metered(cap, "this query") as meter:
             try:
                 if resolve_scope(scope, repo) == "code" and app.code_graph is None:
-                    raise ToolError(
-                        "Code questions need STORAGE_BACKEND=postgres and an indexed repository"
-                    )
+                    raise ToolError("Code questions need Postgres and an indexed repository")
                 graph = app.code_graph
 
                 async def repo_names() -> list[str]:
@@ -530,7 +524,7 @@ def create_server(
     async def _repos(app: AppContext, repo: str | None) -> list[dict[str, Any]]:
         """The indexed repositories, or those with URL `repo` (every ref)."""
         if app.code_graph is None:
-            raise ToolError("This needs STORAGE_BACKEND=postgres and an indexed repository")
+            raise ToolError("This needs Postgres and an indexed repository")
         repos = await app.code_graph.list_repos()
         if repo is None:
             return repos
@@ -542,7 +536,7 @@ def create_server(
 
     def notes_of(app: AppContext) -> AnnotationRepository:
         if app.notes is None:
-            raise ToolError("Annotations need STORAGE_BACKEND=postgres")
+            raise ToolError("Annotations need Postgres")
         return app.notes
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))

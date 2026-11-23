@@ -59,13 +59,6 @@ def graph_stats(graph: nx.Graph) -> dict[str, Any]:
     }
 
 
-def _llm_cache_entries(cfg: Config) -> int | None:
-    files = list(cfg.rag_dir.rglob("kv_store_llm_response_cache.json"))
-    if not files:
-        return None
-    return len(json.loads(files[0].read_text(encoding="utf-8")))
-
-
 def write_review_sample(
     graph: nx.Graph, path: Path, n: int = REVIEW_SAMPLE_SIZE, seed: int = REVIEW_SEED
 ) -> None:
@@ -167,7 +160,6 @@ def _render_markdown(data: dict[str, Any]) -> str:
         f"Insert: {t['insert_secs_per_chunk']} s/chunk",
         f"- Total: {t['pages']} pages, {t['chunks']} chunks, parse {t['parse_secs']} s, "
         f"insert {t['insert_secs']} s",
-        f"- LLM cache entries (≈ LLM calls): {data['llm_cache_entries']}",
         "",
         "## Graph",
         "",
@@ -231,7 +223,6 @@ def build_report(
         "books": manifest.get("books", {}),
         "totals": _manifest_totals(manifest),
         "graph": graph_stats(graph),
-        "llm_cache_entries": _llm_cache_entries(cfg),
         "review_file": str(review_path),
         "manual_precision": manual_precision,
     }

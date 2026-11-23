@@ -380,9 +380,8 @@ class DocumentParser(Protocol):
 
 class IndexState(Protocol):
     """One workspace's manifest (which documents are indexed, and the settings the index was
-    built with) and each document's parsed chunks. Postgres for the API and worker, files for
-    STORAGE_BACKEND=file (plans/stateless.md, S1 and S3). Where it lives, for messages:
-    Config.manifest_location."""
+    built with) and each document's parsed chunks, in Postgres (plans/stateless.md, S1 and S3).
+    Where it lives, for messages: Config.manifest_location."""
 
     async def load_manifest(self) -> dict[str, Any]:
         """{"books": {book: entry}, <index settings>}; {"books": {}} when nothing is indexed."""
@@ -901,9 +900,8 @@ class Deps:
     new_stats: Callable[[JobRepository], Awaitable[DashboardStats]]
     # new_chat(store): chat sessions and messages, sharing the store's pool like new_memory.
     new_chat: Callable[[JobRepository], Awaitable[ChatRepository]]
-    # new_index_state(store): the manifest and chunks; Postgres needs the store (its pool),
-    # STORAGE_BACKEND=file takes None.
-    new_index_state: Callable[[JobRepository | None], Awaitable[IndexState]]
+    # new_index_state(store): the manifest and chunks, over the store's pool.
+    new_index_state: Callable[[JobRepository], Awaitable[IndexState]]
     new_blob_store: Callable[[], BlobStore]  # the source files (BLOB_URL, or the books folder)
     judge: Callable[[], ChatModel]  # the evaluation judge model
     answer_scorer: Callable[[], AnswerScorer]

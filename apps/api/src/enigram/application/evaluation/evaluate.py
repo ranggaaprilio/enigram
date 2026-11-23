@@ -581,7 +581,7 @@ async def _unresolved_share(
 ) -> float | None:
     """The indexed repository's unresolved share in flows, when Postgres is configured."""
     repo = (runs.get("code") or {}).get("repo")
-    if not repo or cfg.storage != "postgres":
+    if not repo:
         return None
     try:
         store = await deps.open_store()
@@ -600,8 +600,6 @@ async def _unresolved_share(
 
 async def _symbols(cfg: Config, deps: Deps, repo: dict[str, Any]) -> list | None:
     """The indexed symbols of the pinned repository, when Postgres has them."""
-    if cfg.storage != "postgres":
-        return None
     try:
         store = await deps.open_store()
     except EnigramError:

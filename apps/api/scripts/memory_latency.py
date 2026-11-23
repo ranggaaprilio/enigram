@@ -3,7 +3,7 @@
 Uses the real Postgres and embedding model from .env, in a scratch workspace whose rows are
 deleted at the end, so real memories are never touched. Note text is never printed.
 
-Needs STORAGE_BACKEND=postgres. Usage:
+Needs the Postgres from .env. Usage:
     uv run python scripts/memory_latency.py [--notes 200] [--searches 50]
 """
 
@@ -92,8 +92,6 @@ def main() -> int:
         _setup_logging(cfg.log_level)
         for name in ("enigram.adapters.driven.postgres_memory", "httpx", "httpx2"):  # per call
             logging.getLogger(name).setLevel(logging.WARNING)
-        if cfg.storage != "postgres":
-            raise EnigramError("Memories live in Postgres: set STORAGE_BACKEND=postgres")
         asyncio.run(measure(cfg, args.notes, args.searches))
     except EnigramError as e:
         print(f"error: {e}", file=sys.stderr)

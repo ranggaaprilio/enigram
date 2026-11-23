@@ -547,7 +547,7 @@ async def test_delete_repo_job_needs_the_code_graph(cfg, store, deps):
     job = await store.enqueue("delete_repo", {"repo_id": 3})
     await worker.process_next(cfg, store, deps)
     failed = await store.get_job(job.id)
-    assert failed.status == "failed" and "postgres" in failed.error
+    assert failed.status == "failed" and "Postgres" in failed.error
 
 
 async def test_poll_repos_queues_only_moved_heads(cfg, store, monkeypatch, caplog):
@@ -881,4 +881,4 @@ async def test_detect_conflicts_job_needs_postgres(cfg, store, deps):
     job = await store.enqueue("detect_conflicts", {"url": "u"})
     await worker.process_next(cfg, store, deps)
     failed = await store.get_job(job.id)
-    assert failed.status == "failed" and "postgres" in failed.error
+    assert failed.status == "failed" and "Postgres" in failed.error

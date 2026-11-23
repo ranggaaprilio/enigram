@@ -38,24 +38,13 @@ def _now() -> str:
 
 @asynccontextmanager
 async def opened_index_state(cfg: Config, deps: Deps) -> AsyncIterator[IndexState]:
-    """The manifest and chunks for a caller that holds no job store (the CLI): on Postgres it
-    opens one for as long as the state is used."""
-    if cfg.storage != "postgres":
-        yield await deps.new_index_state(None)
-        return
+    """The manifest and chunks for a caller that holds no job store (the CLI): opens one for as
+    long as the state is used."""
     store = await deps.open_store()
     try:
         yield await deps.new_index_state(store)
     finally:
         await store.close()
-
-
-def _has_index(cfg: Config) -> bool:
-    if cfg.storage == "postgres":
-        # The tables cannot be inspected without a connection; the guards also require the
-        # manifest to list books, so the manifest decides whether an index exists.
-        return True
-    return cfg.rag_dir.exists() and any(cfg.rag_dir.iterdir())
 
 
 def guard_chunk_settings(cfg: Config, manifest: dict[str, Any]) -> None:
@@ -67,29 +56,11 @@ def guard_chunk_settings(cfg: Config, manifest: dict[str, Any]) -> None:
         "tokenizer": CHUNK_TOKENIZER,
     }
     stored = {k: manifest.get(k) for k in current}
-    if _has_index(cfg) and manifest.get("books") and stored != current:
+    if manifest.get("books") and stored != current:
         changed = {k: (stored[k], current[k]) for k in current if stored[k] != current[k]}
         raise EnigramError(
             f"Chunk settings changed {changed}. "
             f"Delete {cfg.index_location} and {cfg.manifest_location} to re-index."
-        )
-    manifest.update(current)
-
-
-def guard_storage(cfg: Config, manifest: dict[str, Any]) -> None:
-    """The manifest says which documents are indexed, so it must describe this storage's index."""
-    current = {
-        "storage": cfg.storage,
-        "workspace": cfg.workspace if cfg.storage == "postgres" else None,
-    }
-    stored = {k: manifest.get(k) for k in current}
-    if stored["storage"] is None:
-        # Manifests written before the storage was recorded describe a file index.
-        stored = {"storage": "file", "workspace": None}
-    if manifest.get("books") and stored != current:
-        raise EnigramError(
-            f"{cfg.manifest_location} describe an index in {stored}, not {current}. "
-            f"Switch back, or delete them to re-index into {cfg.index_location}."
         )
     manifest.update(current)
 
@@ -101,7 +72,7 @@ def guard_embed_model(cfg: Config, manifest: dict[str, Any]) -> None:
     current = {"embed_model": cfg.embed_model, "embed_dim": cfg.embed_dim}
     stored = {k: manifest.get(k) for k in current}
     known = stored["embed_model"] is not None
-    if known and _has_index(cfg) and manifest.get("books") and stored != current:
+    if known and manifest.get("books") and stored != current:
         raise EnigramError(
             f"Embedding model changed from {stored} to {current}. "
             f"Delete {cfg.index_location} and {cfg.manifest_location} to re-index."
@@ -113,7 +84,7 @@ def guard_llm_model(cfg: Config, manifest: dict[str, Any]) -> None:
     """Entities and relations from two extraction models must not mix in one graph."""
     current = {"llm_provider": cfg.llm_provider, "llm_model": cfg.llm_model}
     stored = {k: manifest.get(k) for k in current}
-    if _has_index(cfg) and manifest.get("books") and stored != current:
+    if manifest.get("books") and stored != current:
         raise EnigramError(
             f"Extraction LLM changed from {stored} to {current}. "
             f"Delete {cfg.index_location} and {cfg.manifest_location} to re-index."
@@ -171,7 +142,7 @@ def select_books(
     for name, pdf in names.items():
         entry = manifest["books"].get(name, {})
         sha = file_sha256(pdf)
-        if entry.get("sha256") and entry["sha256"] != sha and _has_index(cfg):
+        if entry.get("sha256") and entry["sha256"] != sha:
             raise EnigramError(
                 f"{pdf.name} changed since it was indexed; its old chunks are still in the graph. "
                 f"Delete {cfg.index_location} and {cfg.manifest_location} to re-index."
@@ -380,7 +351,6 @@ async def run_index(
         raise EnigramError(f"No PDF or Markdown files found in {folder}{matching}")
 
     manifest = await state.load_manifest()
-    guard_storage(cfg, manifest)
     guard_chunk_settings(cfg, manifest)
     guard_embed_model(cfg, manifest)
     todo, up_to_date = select_books(cfg, pdfs, manifest)

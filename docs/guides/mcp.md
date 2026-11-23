@@ -71,7 +71,7 @@ answer, `found`, and `sources`. With `include_context=true` it also returns the 
 chunks (large).
 
 - `scope`: `auto` (default, the router picks), `docs`, or `code` (the code agent over the indexed
-  repositories; needs `STORAGE_BACKEND=postgres`).
+  repositories).
 - `repo=<url>` names a repository and makes `auto` a code question.
 - `found` is false when the indexed sources do not answer the question.
 
@@ -117,7 +117,7 @@ uv run python apps/api/scripts/memory_latency.py --notes 200 --searches 50
 
 ## Trust metadata: changes, notes, conflicts
 
-With `STORAGE_BACKEND=postgres` and an indexed repository, four tools give an agent trust
+With an indexed repository, four tools give an agent trust
 metadata, not just text.
 
 ### `what_changed_since(since, repo?)`
