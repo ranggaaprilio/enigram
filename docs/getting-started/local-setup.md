@@ -19,7 +19,7 @@ Use this for development, or to run the CLI against your own Postgres.
 
 ```bash
 uv sync
-cp .env.example .env              # fill in DEEPSEEK_API_KEY and VOYAGE_API_KEY
+cp .env.example .env              # fill in LLM_API_KEY and VOYAGE_API_KEY
 cd tools/ts-graph && npm ci && cd -
 docker compose up -d postgres     # pgvector/pgvector:pg17 on POSTGRES_PORT (default 5432)
 ```
@@ -71,7 +71,7 @@ Some changes invalidate the index, and `index` refuses to run until you reset it
 | Change | What to reset |
 |---|---|
 | `CHUNK_MAX_TOKENS`, or a Docling upgrade (chunk ids change) | The workspace's index, and `data/parsed` |
-| `LLM_PROVIDER` or `LLM_MODEL` (another entity extractor) | The workspace's index |
+| `LLM_BASE_URL` or `LLM_MODEL` (another entity extractor) | The workspace's index |
 | The embedding model | The workspace's index |
 | Only `THINKING_MODE` | The LLM cache: the workspace's `LIGHTRAG_LLM_CACHE` rows |
 

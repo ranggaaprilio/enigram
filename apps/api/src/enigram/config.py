@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -16,19 +17,25 @@ from enigram.domain.errors import EnigramError
 # 1.5x margin is only a safety net that keeps one Docling chunk == one LightRAG chunk.
 LIGHTRAG_CHUNK_TOKEN_SIZE = 1200
 
-# off sends thinking.type=disabled to DeepSeek; on leaves its thinking on. Other providers
-# get no thinking parameter either way.
+# off sends thinking.type=disabled to a DeepSeek endpoint; on leaves its thinking on. Other
+# endpoints get no thinking parameter either way.
 THINKING_MODES = ("off", "on")
 
-# Chat completions; embeddings come from EMBED_PROVIDER (DeepSeek serves no embedding model).
-# openai-compatible: any /v1/chat/completions endpoint (OpenAI, OpenRouter, Ollama, vLLM, ...)
-# at <PREFIX>_BASE_URL with <PREFIX>_MODEL; what the model must support:
-# docs/getting-started/model-providers.md.
-LLM_PROVIDERS = ("deepseek", "openai-compatible")
+# Chat completions: any /v1/chat/completions endpoint (DeepSeek, OpenAI, OpenRouter, Ollama,
+# vLLM, ...) at <PREFIX>_BASE_URL with <PREFIX>_MODEL; what the model must support:
+# docs/getting-started/model-providers.md. Embeddings come from EMBED_PROVIDER (DeepSeek serves
+# no embedding model). The provider name is derived from the base URL (provider_name).
+DEEPSEEK_HOST = "api.deepseek.com"
+# Settings from before DeepSeek became one OpenAI-compatible endpoint; from_env refuses them.
+LEGACY_LLM_VARS = {
+    "DEEPSEEK_API_KEY": (
+        "renamed to LLM_API_KEY; also set LLM_BASE_URL=https://api.deepseek.com and LLM_MODEL"
+    ),
+    "LLM_PROVIDER": "no longer used; the provider follows LLM_BASE_URL",
+    "JUDGE_PROVIDER": "no longer used; the judge's provider follows JUDGE_BASE_URL",
+}
 # The OpenAI SDK refuses an empty key; local servers (Ollama, vLLM) accept any value.
 NO_API_KEY = "unused"
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
 # voyage, or openai-compatible: any /v1/embeddings endpoint at EMBED_BASE_URL. The Voyage
 # model defaults do not apply there, so EMBED_MODEL, EMBED_DIM, CODE_EMBED_MODEL and
 # CODE_EMBED_DIM must be set.
@@ -59,6 +66,13 @@ MIN_API_KEY_LENGTH = 16
 DEFAULT_REPO_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org")
 DEFAULT_CODE_MAX_FILES = 2000  # the v1 repository size of the code graph PRD
 DEFAULT_CODE_MAX_LOC = 50_000
+
+
+def provider_name(base_url: str) -> str:
+    """The provider name for an endpoint: deepseek for DeepSeek's API (which needs its thinking
+    switch), else openai-compatible. Recorded in the index manifest, so it keeps the value the
+    old LLM_PROVIDER setting had."""
+    return "deepseek" if urlparse(base_url).hostname == DEEPSEEK_HOST else "openai-compatible"
 
 
 def _required(name: str) -> str:
@@ -285,43 +299,38 @@ class Config:
             raise EnigramError(
                 f"THINKING_MODE must be one of {THINKING_MODES}, got {thinking_mode!r}"
             )
-        llm_provider = os.environ.get("LLM_PROVIDER", "deepseek").strip() or "deepseek"
-        if llm_provider not in LLM_PROVIDERS:
-            raise EnigramError(f"LLM_PROVIDER must be one of {LLM_PROVIDERS}, got {llm_provider!r}")
+        legacy = [f"{k} {why}" for k, why in LEGACY_LLM_VARS.items() if os.environ.get(k)]
+        if legacy:
+            raise EnigramError("Update .env:\n" + "\n".join(f"  - {line}" for line in legacy))
 
         def endpoint(
-            provider: str, prefix: str, fallback: tuple[str, str, str] = ("", "", "")
+            prefix: str, fallback: tuple[str, str, str] = ("", "", "")
         ) -> tuple[str, str, str]:
             """(base_url, api_key, model) for <prefix>_*; `fallback` fills what is unset."""
             base_fallback, key_fallback, model_fallback = fallback
-            model = os.environ.get(f"{prefix}_MODEL", "").strip() or model_fallback
-            if provider == "deepseek":
-                return (
-                    DEEPSEEK_BASE_URL,
-                    _required("DEEPSEEK_API_KEY"),
-                    model or DEEPSEEK_DEFAULT_MODEL,
-                )
-            base_url = os.environ.get(f"{prefix}_BASE_URL", "").strip() or base_fallback
+            base_url = os.environ.get(f"{prefix}_BASE_URL", "").strip().rstrip("/")
+            base_url = base_url or base_fallback
             if not base_url:
-                raise EnigramError(f"{prefix}_BASE_URL is not set ({prefix}_PROVIDER={provider}).")
+                raise EnigramError(f"{prefix}_BASE_URL is not set.")
+            model = os.environ.get(f"{prefix}_MODEL", "").strip() or model_fallback
             if not model:
-                raise EnigramError(f"{prefix}_MODEL is not set ({prefix}_PROVIDER={provider}).")
-            api_key = os.environ.get(f"{prefix}_API_KEY", "").strip() or key_fallback or NO_API_KEY
-            return base_url.rstrip("/"), api_key, model
+                raise EnigramError(f"{prefix}_MODEL is not set.")
+            api_key = os.environ.get(f"{prefix}_API_KEY", "").strip() or key_fallback
+            if not api_key and provider_name(base_url) == "deepseek":
+                raise EnigramError(f"{prefix}_API_KEY is not set ({base_url} needs one).")
+            return base_url, api_key or NO_API_KEY, model
 
-        llm_base_url, llm_api_key, llm_model = endpoint(llm_provider, "LLM")
+        llm_base_url, llm_api_key, llm_model = endpoint("LLM")
+        llm_provider = provider_name(llm_base_url)
         # The judge defaults to the generator; set JUDGE_* so a model never grades its own answers.
-        judge_provider = os.environ.get("JUDGE_PROVIDER", "").strip() or llm_provider
-        if judge_provider not in LLM_PROVIDERS:
-            raise EnigramError(
-                f"JUDGE_PROVIDER must be one of {LLM_PROVIDERS}, got {judge_provider!r}"
-            )
-        same = judge_provider == llm_provider
+        # Another JUDGE_BASE_URL does not inherit the generator's key.
+        judge_base = os.environ.get("JUDGE_BASE_URL", "").strip().rstrip("/")
+        same = judge_base in ("", llm_base_url)
         judge_base_url, judge_api_key, judge_model = endpoint(
-            judge_provider,
             "JUDGE",
-            (llm_base_url, llm_api_key, llm_model) if same else ("", "", ""),
+            (llm_base_url, llm_api_key if same else "", llm_model),
         )
+        judge_provider = provider_name(judge_base_url)
         llm_max_tokens = _int("LLM_MAX_TOKENS", 2048)
         embed_provider = os.environ.get("EMBED_PROVIDER", "voyage").strip() or "voyage"
         if embed_provider not in EMBED_PROVIDERS:

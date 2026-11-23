@@ -22,7 +22,9 @@ from enigram.domain.errors import EnigramError
 
 @pytest.fixture
 def embed_env(clean_env, monkeypatch, tmp_path):
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("LLM_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-flash")
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("EMBED_PROVIDER", "openai-compatible")
     monkeypatch.setenv("EMBED_BASE_URL", "http://ollama.test:11434/v1/")

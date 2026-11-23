@@ -1,6 +1,6 @@
 """Live judges on the claim Qwen3-8B got wrong in Phase 2: the paper says 86.9% *lack* guidelines.
 
-Skipped unless DEEPSEEK_API_KEY and VOYAGE_API_KEY are set (live).
+Skipped unless LLM_API_KEY and VOYAGE_API_KEY are set (live).
 """
 
 import pytest

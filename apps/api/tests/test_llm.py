@@ -13,7 +13,7 @@ from enigram.domain import llm_output as llm
 from enigram.domain.errors import EnigramError, ProviderUnavailableError
 
 
-@pytest.mark.parametrize("name", ["DEEPSEEK_API_KEY", "VOYAGE_API_KEY"])
+@pytest.mark.parametrize("name", ["LLM_API_KEY", "VOYAGE_API_KEY"])
 def test_config_missing_key_raises(cfg, clean_env, monkeypatch, name):
     monkeypatch.delenv(name)
     with pytest.raises(EnigramError, match=name):
@@ -120,10 +120,17 @@ def test_config_deepseek_provider(cfg):
     assert cfg.llm_model == "deepseek-flash"
 
 
-@pytest.mark.parametrize("provider", ["omlx", "gpt"])
-def test_config_rejects_unknown_provider(cfg, clean_env, monkeypatch, provider):
-    monkeypatch.setenv("LLM_PROVIDER", provider)
-    with pytest.raises(EnigramError, match="LLM_PROVIDER"):
+@pytest.mark.parametrize(
+    ("name", "hint"),
+    [
+        ("DEEPSEEK_API_KEY", "renamed to LLM_API_KEY"),
+        ("LLM_PROVIDER", "provider follows LLM_BASE_URL"),
+        ("JUDGE_PROVIDER", "follows JUDGE_BASE_URL"),
+    ],
+)
+def test_config_rejects_legacy_settings_with_a_hint(cfg, clean_env, monkeypatch, name, hint):
+    monkeypatch.setenv(name, "deepseek")
+    with pytest.raises(EnigramError, match=f"{name} .*{hint}"):
         Config.from_env(clean_env)
 
 
@@ -580,20 +587,19 @@ async def test_check_providers_survives_a_jev_outage(cfg, clean_env, monkeypatch
     assert result.decision == (f"llm_judge ({cfg.judge_model}); jev unavailable: Cannot reach jev")
 
 
-# --- LLM_PROVIDER=openai-compatible (plans/llm-providers.md, L1) ---
+# --- other OpenAI-compatible endpoints (plans/llm-providers.md, L1) ---
 
 
 @pytest.fixture
 def compat_env(clean_env, monkeypatch, tmp_path):
     monkeypatch.setenv("VOYAGE_API_KEY", "vo-key-not-real")
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
     monkeypatch.setenv("LLM_BASE_URL", "http://ollama.test:11434/v1/")
     monkeypatch.setenv("LLM_MODEL", "local-model")
     return clean_env
 
 
-def test_config_openai_compatible_needs_no_deepseek_key(compat_env):
+def test_config_local_endpoint_needs_no_key(compat_env):
     cfg = Config.from_env(compat_env)
     assert (cfg.llm_provider, cfg.llm_base_url, cfg.llm_model) == (
         "openai-compatible",
@@ -635,27 +641,37 @@ def test_config_openai_compatible_requires_url_and_model(compat_env, monkeypatch
         Config.from_env(compat_env)
 
 
-def test_config_deepseek_judge_with_compatible_generator(compat_env, monkeypatch):
-    monkeypatch.setenv("JUDGE_PROVIDER", "deepseek")
-    with pytest.raises(EnigramError, match="DEEPSEEK_API_KEY"):
+def test_config_deepseek_url_needs_a_key(compat_env, monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com/")
+    with pytest.raises(EnigramError, match="LLM_API_KEY"):
         Config.from_env(compat_env)
 
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_API_KEY", "ds-key-not-real")
     cfg = Config.from_env(compat_env)
-    assert (cfg.judge_base_url, cfg.judge_model) == ("https://api.deepseek.com", "deepseek-flash")
+    assert (cfg.llm_provider, cfg.llm_base_url) == ("deepseek", "https://api.deepseek.com")
 
 
-def test_config_compatible_judge_with_deepseek_generator(cfg, clean_env, monkeypatch):
-    monkeypatch.setenv("JUDGE_PROVIDER", "openai-compatible")
-    with pytest.raises(EnigramError, match="JUDGE_BASE_URL"):
-        Config.from_env(clean_env)
+def test_config_deepseek_judge_with_local_generator(compat_env, monkeypatch):
+    monkeypatch.setenv("JUDGE_BASE_URL", "https://api.deepseek.com")
+    with pytest.raises(EnigramError, match="JUDGE_API_KEY"):
+        Config.from_env(compat_env)
 
+    monkeypatch.setenv("JUDGE_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("JUDGE_MODEL", "deepseek-v4-pro")
+    cfg = Config.from_env(compat_env)
+    assert (cfg.llm_provider, cfg.judge_provider) == ("openai-compatible", "deepseek")
+    # Only the judge gets DeepSeek's thinking switch.
+    assert openai_llm.provider_extra_body(cfg) == {}
+    assert openai_llm.provider_extra_body(cfg.judge) == {"thinking": {"type": "disabled"}}
+
+
+def test_config_other_judge_with_deepseek_generator(cfg, clean_env, monkeypatch):
     monkeypatch.setenv("JUDGE_BASE_URL", "https://judge.test/v1")
     monkeypatch.setenv("JUDGE_MODEL", "judge-model")
     loaded = Config.from_env(clean_env)
-    # Nothing is inherited from DeepSeek: another provider gets its own key.
+    # Nothing is inherited from DeepSeek: another endpoint gets its own key.
     assert (loaded.judge_base_url, loaded.judge_api_key) == ("https://judge.test/v1", "unused")
-    assert loaded.llm_base_url == "https://api.deepseek.com"
+    assert (loaded.llm_provider, loaded.judge_provider) == ("deepseek", "openai-compatible")
 
 
 @pytest.mark.parametrize(
@@ -783,7 +799,7 @@ async def test_check_providers_warns_on_missing_usage_and_thinking(compat_env, m
 
     assert result.tool_calls_ok
     assert result.warnings == [
-        "THINKING_MODE=on has no effect with LLM_PROVIDER=openai-compatible",
+        "THINKING_MODE=on has no effect with http://ollama.test:11434/v1",
         "the endpoint reports no token usage; token budgets will not count it",
     ]
 

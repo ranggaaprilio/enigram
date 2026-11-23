@@ -9,7 +9,6 @@ from enigram.adapters.driven.openai_llm import OpenAIChatModel
 from enigram.adapters.driven.ragas_scorer import RagasScorer
 from enigram.application.evaluation import judges
 from enigram.config import Config
-from enigram.domain.errors import EnigramError
 
 CHUNKS = [
     {"ref": 1, "chunk_id": "p-c00000-chunk-000", "text": "Intro text."},
@@ -88,10 +87,9 @@ def test_judge_defaults_to_generator(cfg):
     assert cfg.judge_max_tokens == cfg.llm_max_tokens
 
 
-def test_judge_on_another_provider_is_rejected(cfg, clean_env, monkeypatch):
-    monkeypatch.setenv("JUDGE_PROVIDER", "openai")
-    with pytest.raises(EnigramError, match="JUDGE_PROVIDER"):
-        Config.from_env(clean_env)
+def test_judge_provider_follows_its_base_url(cfg, clean_env, monkeypatch):
+    monkeypatch.setenv("JUDGE_BASE_URL", "https://judge.test/v1")
+    assert Config.from_env(clean_env).judge_provider == "openai-compatible"
 
 
 @pytest.mark.parametrize(

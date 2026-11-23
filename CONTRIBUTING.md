@@ -45,7 +45,7 @@ Docker (for Postgres), and DeepSeek and Voyage API keys (see the README).
 
 ```bash
 uv sync
-cp .env.example .env            # fill in DEEPSEEK_API_KEY and VOYAGE_API_KEY
+cp .env.example .env            # fill in LLM_API_KEY and VOYAGE_API_KEY
 docker compose up -d postgres
 uv run enigram check
 npm --prefix apps/web install

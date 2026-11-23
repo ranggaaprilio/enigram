@@ -64,12 +64,12 @@ CONFIG_ENV = (
 
 
 def pytest_collection_modifyitems(config, items):
-    live_keys = ("DEEPSEEK_API_KEY", "VOYAGE_API_KEY")
+    live_keys = ("LLM_API_KEY", "VOYAGE_API_KEY")
     skips = {
         "live": (
             None
             if all(os.environ.get(k) for k in live_keys)
-            else "DEEPSEEK_API_KEY and VOYAGE_API_KEY not set"
+            else "LLM_API_KEY and VOYAGE_API_KEY not set"
         ),
         "postgres": (
             None if os.environ.get("ENIGRAM_TEST_PG_DSN") else "ENIGRAM_TEST_PG_DSN not set"
@@ -118,7 +118,9 @@ def clean_env(monkeypatch):
 
 @pytest.fixture
 def cfg(clean_env, monkeypatch, tmp_path) -> Config:
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("LLM_API_KEY", "ds-key-not-real")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-flash")
     monkeypatch.setenv("VOYAGE_API_KEY", "vo-key-not-real")
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     return Config.from_env(clean_env)

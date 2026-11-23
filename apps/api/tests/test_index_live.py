@@ -1,6 +1,6 @@
 """End-to-end indexing against the real DeepSeek and Voyage APIs.
 
-Skipped unless DEEPSEEK_API_KEY and VOYAGE_API_KEY are set; needs the Postgres from .env."""
+Skipped unless LLM_API_KEY and VOYAGE_API_KEY are set; needs the Postgres from .env."""
 
 import dataclasses
 import json
