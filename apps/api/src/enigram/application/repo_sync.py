@@ -271,13 +271,11 @@ async def index_repo(
             await stage("code")
         if js and graph is None and files:
             # Opting into CODE_JAVASCRIPT must not break a Markdown sync without Postgres.
-            code = {"skipped": "a JavaScript code graph needs STORAGE_BACKEND=postgres"}
+            code = {"skipped": "a JavaScript code graph needs Postgres"}
         elif ts or js:
             if graph is None:
                 language = "TypeScript" if ts else "JavaScript"
-                raise EnigramError(
-                    f"Indexing a {language} repository needs STORAGE_BACKEND=postgres"
-                )
+                raise EnigramError(f"Indexing a {language} repository needs Postgres")
             code = await index_code(
                 cfg, deps, graph, root, url, ref, limit=limit, notes=notes, decider=decider
             )

@@ -490,9 +490,10 @@ def test_verify_badges_lists_the_origins_that_may_show_a_verdict(cfg, clean_env,
         Config.from_env(clean_env)
 
 
-def test_config_rejects_unknown_storage_backend(cfg, clean_env, monkeypatch):
-    monkeypatch.setenv("STORAGE_BACKEND", "sqlite")
-    with pytest.raises(EnigramError, match="STORAGE_BACKEND"):
+@pytest.mark.parametrize("value", ["file", "postgres"])
+def test_config_refuses_the_old_storage_backend_setting(cfg, clean_env, monkeypatch, value):
+    monkeypatch.setenv("STORAGE_BACKEND", value)
+    with pytest.raises(EnigramError, match="STORAGE_BACKEND is no longer used"):
         Config.from_env(clean_env)
 
 

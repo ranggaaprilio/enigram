@@ -46,30 +46,23 @@ see [Command line](../guides/cli.md).
 
 ## Index storage
 
-| `STORAGE_BACKEND` | Where the index lives |
-|---|---|
-| `postgres` (the `.env.example` default) | Documents, chunks, vectors (pgvector), the entity graph (plain tables, no Apache AGE) and the LLM cache, all in PostgreSQL |
-| `file` | JSON and GraphML in `data/rag_storage` |
+PostgreSQL is the only index storage: documents, chunks, vectors (pgvector), the entity graph
+(plain tables, no Apache AGE) and the LLM cache. The manifest (which documents are indexed, and the
+settings they were indexed with) and the parsed chunks are the tables `enigram_index_settings`,
+`enigram_documents` and `enigram_chunks`, so the API does not read them from the worker's disk.
+Uploaded files stay in `data/books` unless `BLOB_URL` puts them in a bucket (see
+[Source files](../self-hosting/deployment.md#source-files)); the Docling parse cache, repository
+clones and CLI reports stay in `DATA_DIR`, and are safe to delete.
 
-The manifest (which documents are indexed, and the settings they were indexed with) and the parsed
-chunks follow the backend: with `postgres` they are the tables `enigram_index_settings`,
-`enigram_documents` and `enigram_chunks`, so the API does not read them from the worker's disk; with
-`file` they are `data/index_manifest.json` and `data/parsed/<doc>.chunks.jsonl`. Uploaded files
-stay in `data/books` unless `BLOB_URL` puts them in a bucket (see
-[Source files](../self-hosting/deployment.md#source-files)); the Docling parse cache and reports
-stay in `DATA_DIR`. The service (API, worker, code graph,
-notes) needs `postgres`.
-
-On the first start with `postgres`, the API or worker copies an existing
-`data/index_manifest.json` and its chunk files into an empty workspace, then renames them to
-`*.imported`. Back up `data/` before upgrading.
+Older versions had `STORAGE_BACKEND`; the app now refuses to start while it is set. An index kept
+in files (`data/rag_storage`, `data/index_manifest.json`) is not read any more: re-index into
+Postgres.
 
 In production point `POSTGRES_*` at a managed Postgres with the `vector` extension and set
 `POSTGRES_SSL_MODE=require`.
 
-`WORKSPACE` separates indexes in one database (`index --pages` writes to `<WORKSPACE>_dev`).
-Switching backends does not move an existing index: `index` refuses until you delete the old
-manifest (see [Reset](#reset)), then re-indexes. A new `WORKSPACE` starts empty.
+`WORKSPACE` separates indexes in one database (`index --pages` writes to `<WORKSPACE>_dev`). A new
+`WORKSPACE` starts empty.
 
 ## Reset
 
@@ -77,16 +70,11 @@ Some changes invalidate the index, and `index` refuses to run until you reset it
 
 | Change | What to reset |
 |---|---|
-| `CHUNK_MAX_TOKENS`, or a Docling upgrade (chunk ids change) | Everything: `data/rag_storage`, `data/parsed`, `data/index_manifest.json` |
-| `LLM_BASE_URL` or `LLM_MODEL` (another entity extractor) | `data/rag_storage` and `data/index_manifest.json` |
-| The embedding model | `data/rag_storage` and `data/index_manifest.json` |
-| Only `THINKING_MODE` | The LLM cache: `data/rag_storage/**/kv_store_llm_response_cache.json` |
+| `CHUNK_MAX_TOKENS`, or a Docling upgrade (chunk ids change) | The workspace's index, and `data/parsed` |
+| `LLM_BASE_URL` or `LLM_MODEL` (another entity extractor) | The workspace's index |
+| The embedding model | The workspace's index |
+| Only `THINKING_MODE` | The LLM cache: the workspace's `LIGHTRAG_LLM_CACHE` rows |
 
-```bash
-rm -rf data/rag_storage data/parsed data/index_manifest.json
-```
-
-With `STORAGE_BACKEND=postgres`, replace `data/rag_storage`, `data/parsed` and
-`data/index_manifest.json` with the workspace's rows (`LIGHTRAG_*`, `enigram_index_settings`,
-`enigram_documents`, `enigram_chunks`): use a new `WORKSPACE`, or locally wipe the whole database
-with `docker compose down -v`.
+The workspace's index is its rows in `LIGHTRAG_*`, `enigram_index_settings`, `enigram_documents`
+and `enigram_chunks`: use a new `WORKSPACE`, or locally wipe the whole database with
+`docker compose down -v`. `data/parsed` is only the Docling cache: `rm -rf data/parsed`.

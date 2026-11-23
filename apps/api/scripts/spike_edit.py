@@ -11,7 +11,7 @@ LLM cache.
 Questions are asked with `querying.PRECEDENCE` (graph descriptions win over chunks), as
 every query is; `--no-precedence` asks without it, to compare.
 
-Needs STORAGE_BACKEND=postgres and no running worker. Usage:
+Needs no running worker. Usage:
     uv run python scripts/spike_edit.py [--file eval/golden.yaml] [--no-precedence]
 """
 
@@ -120,8 +120,6 @@ async def run_case(
 
 
 async def run_spike(cfg: Config, golden_path: Path, precedence: bool = True) -> Path:
-    if cfg.storage != "postgres":
-        raise EnigramError("The spike needs STORAGE_BACKEND=postgres")
     questions = {q.id: q.question for q in load_golden(golden_path)}
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_path = cfg.eval_dir / f"spike-edit-backup-{stamp}.json"

@@ -496,11 +496,6 @@ def create_app(
     """`deps` (the process workspace) defaults to the real adapters and `deps_for` builds them
     for another workspace from `cfg.for_workspace(name)`; tests pass fakes for both."""
     deps = deps or build_deps(cfg)
-    if cfg.storage != "postgres":
-        raise EnigramError(
-            "The API needs STORAGE_BACKEND=postgres: the job queue lives there, and only "
-            "Postgres storage lets the API see what the worker indexes."
-        )
 
     async def mcp_workspace(name: str) -> AppContext:
         """The adapters of one workspace for an MCP tool; the tool checked the role first."""

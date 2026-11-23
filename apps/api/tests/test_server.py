@@ -1,14 +1,16 @@
 import dataclasses
-import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import pytest
+from code_fakes import FakeAnnotations, FakeCodeGraph, FakeConflicts
+from manifest_files import save_manifest
 from mcp import Client
 from test_query import FakeRag
 from test_worker import FakeJobStore
 
 from enigram.adapters.driven import lightrag_engine
+from enigram.adapters.driving import mcp_server
 from enigram.adapters.driving.mcp_server import AppContext, create_server
 from enigram.domain.errors import EnigramError
 from enigram.domain.memory import Memory, MemorySearch
@@ -68,10 +70,28 @@ class FakeMemoryStore:
         return len(self.notes) < before
 
 
+@pytest.fixture(autouse=True)
+def stdio_deps(deps, monkeypatch):
+    """The stdio server's adapters: the manifest file and in-memory code graph and conflicts, so
+    its default lifespan never reaches Postgres."""
+
+    async def new_code_graph(store):
+        return FakeCodeGraph()
+
+    async def new_annotations(store):
+        return FakeAnnotations()
+
+    async def new_conflicts(store):
+        return FakeConflicts()
+
+    deps.new_code_graph, deps.new_conflicts = new_code_graph, new_conflicts
+    deps.new_annotations = new_annotations
+    monkeypatch.setattr(mcp_server, "build_deps", lambda cfg: deps)
+    return deps
+
+
 @pytest.fixture
 def fake_rag(cfg, monkeypatch):
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "graph_chunk_entity_relation.graphml").write_text("<graphml/>")
     rag = FakeRag()
     monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: rag)
     return rag
@@ -156,20 +176,9 @@ async def test_query_failure_is_a_tool_error(cfg, fake_rag):
     assert "Connection error" in result.content[0].text
 
 
-async def test_code_scope_on_stdio_with_file_storage_is_a_tool_error(cfg, fake_rag):
-    async with Client(create_server(cfg), raise_exceptions=True) as client:
-        result = await client.call_tool(
-            "query_knowledge_base", {"question": "Who may call /users?", "scope": "code"}
-        )
-
-    assert result.is_error
-    assert "STORAGE_BACKEND=postgres" in result.content[0].text
-    assert fake_rag.params == []
-
-
 async def test_list_documents_reads_the_manifest(cfg, fake_rag):
-    cfg.manifest_path.write_text(
-        json.dumps({"books": {"paper-a": {"status": "indexed", "title": "Paper A", "pages": 3}}})
+    save_manifest(
+        cfg, {"books": {"paper-a": {"status": "indexed", "title": "Paper A", "pages": 3}}}
     )
     async with Client(create_server(cfg), raise_exceptions=True) as client:
         result = await client.call_tool("list_documents", {})
@@ -530,7 +539,7 @@ async def test_agent_tools_need_the_code_graph(cfg):
             ("propose_annotation", {"target": "A.b", "text": "t"}),
         ]:
             result = await client.call_tool(name, args)
-            assert result.is_error and "STORAGE_BACKEND=postgres" in result.content[0].text
+            assert result.is_error and "Postgres" in result.content[0].text
 
 
 async def test_stdio_serves_only_its_workspace(cfg, fake_rag):

@@ -349,12 +349,11 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
     deps = build_deps(cfg)
     decider = deps.decider()
     scope = resolve_scope(args.scope, args.repo)
-    # The code graph lives in Postgres; with file storage only a forced code question tries it.
-    store = await deps.open_store() if cfg.storage == "postgres" or scope == "code" else None
+    store = await deps.open_store()
     try:
-        notes = await deps.new_annotations(store) if store else None
+        notes = await deps.new_annotations(store)
         # A forced documents question never touches the code graph.
-        graph = await deps.new_code_graph(store) if store and scope != "docs" else None
+        graph = await deps.new_code_graph(store) if scope != "docs" else None
 
         async def repo_names():
             repos = await graph.list_repos() if graph else []
@@ -395,8 +394,7 @@ async def _query(cfg: Config, args: argparse.Namespace) -> int:
             ask_docs=ask_docs,
         )
     finally:
-        if store:
-            await store.close()
+        await store.close()
     print(result.answer)
     if line := verification_line(verification_view(result.answer, result.extra, cfg.verify_badges)):
         print(f"\n{line}")
@@ -781,7 +779,7 @@ async def _golden_citations(cfg: Config, path: Path) -> int:
     run = load_answers(path)
     repo = run.get("repo")
     symbols = None
-    if repo and cfg.storage == "postgres":
+    if repo:
         try:
             symbols = await _graph_symbols(cfg, repo["url"], repo["ref"], repo["pinned_sha"])
         except EnigramError as e:

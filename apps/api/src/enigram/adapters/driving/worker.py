@@ -137,7 +137,7 @@ async def _run_delete_repo_job(
     log.info("[worker] job %d: deleting repository %d", job.id, repo_id)
     try:
         if graph is None or notes is None:
-            raise EnigramError("Deleting a repository needs STORAGE_BACKEND=postgres")
+            raise EnigramError("Deleting a repository needs Postgres")
         result = await delete_repo_job(cfg, graph, notes, repo_id)
     except Exception as e:  # noqa: BLE001 - one bad job must not stop the worker
         log.exception("[worker] job %d failed", job.id)
@@ -161,7 +161,7 @@ async def _run_conflicts_job(
     log.info("[worker] job %d: detecting docs-vs-code conflicts in %s", job.id, url)
     try:
         if graph is None or conflicts is None:
-            raise EnigramError("Conflict detection needs STORAGE_BACKEND=postgres")
+            raise EnigramError("Conflict detection needs Postgres")
         repo = await graph.get_repo(url, ref)
         if repo is None:
             raise EnigramError(f"{url} ({ref or 'default branch'}) is not indexed")

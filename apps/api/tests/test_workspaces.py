@@ -67,7 +67,7 @@ def test_for_workspace_moves_files_but_not_clones(pg_cfg):
     assert pg_cfg.for_workspace(pg_cfg.workspace) is pg_cfg
     assert other.workspace == "ws-a"
     assert other.books_dir == pg_cfg.data_dir / "workspaces" / "ws-a" / "books"
-    assert other.manifest_path.parent == pg_cfg.data_dir / "workspaces" / "ws-a"
+    assert other.parsed_dir == pg_cfg.data_dir / "workspaces" / "ws-a" / "parsed"
     assert other.repo_store == pg_cfg.repo_store
 
 

@@ -19,8 +19,7 @@ Uploads land in `data/books/`, or in a bucket with `BLOB_URL` (see [Source files
 the worker indexes them with the same pipeline as `enigram index`, and every query is stored with
 its retrieval trace.
 
-- The service needs `STORAGE_BACKEND=postgres`: the job queue lives there, and only Postgres lets
-  the API see what the worker indexed.
+- Postgres holds the job queue and the whole index, so the API sees what the worker indexed.
 - The image also carries Node and the `tools/ts-graph` sidecar.
 - The first PDF downloads Docling's layout models into the `model-cache` volume.
 - Do not run `enigram index` on the host while the worker runs: both would write the same index.

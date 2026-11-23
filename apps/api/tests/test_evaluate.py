@@ -62,6 +62,18 @@ def _label(sheet, correct):
     sheet.write_text(text)
 
 
+@pytest.fixture(autouse=True)
+def empty_code_graph(deps):
+    """The eval reads the unresolved share and the symbols from the code graph: an empty one,
+    in memory, unless a test brings its own."""
+    from code_fakes import FakeCodeGraph
+
+    async def new_code_graph(store):
+        return FakeCodeGraph()
+
+    deps.new_code_graph = new_code_graph
+
+
 @pytest.fixture
 def two_systems(cfg):
     code_items = [_item(q) for q in DEV] + [
@@ -184,7 +196,6 @@ async def test_eval_fails_below_seven_and_far_behind_the_agent(cfg, deps, two_sy
 async def test_eval_reads_the_unresolved_share_from_the_code_graph(
     cfg, deps, two_systems, monkeypatch
 ):
-    from dataclasses import replace
 
     from code_fakes import FakeCodeGraph, fixture_graph
 
@@ -208,7 +219,7 @@ async def test_eval_reads_the_unresolved_share_from_the_code_graph(
         return graph
 
     deps.open_store, deps.new_code_graph = open_store, new_code_graph
-    run = await evaluate.run_eval(replace(cfg, storage="postgres"), deps, [code, agent], [sheet])
+    run = await evaluate.run_eval(cfg, deps, [code, agent], [sheet])
 
     assert run.verdicts["phase1_unresolved_share"] == "FAIL"
 

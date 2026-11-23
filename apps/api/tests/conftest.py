@@ -107,6 +107,11 @@ def reset_lightrag_shared_storage():
 def clean_env(monkeypatch):
     for name in CONFIG_ENV:
         monkeypatch.delenv(name, raising=False)
+    # Postgres is the only storage, so every config names a database (never reached by unit
+    # tests: they use fakes or the `postgres` marker).
+    monkeypatch.setenv("POSTGRES_USER", "enigram")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "pg-password-not-real")
+    monkeypatch.setenv("POSTGRES_DATABASE", "enigram")
     # Point load_dotenv at a missing file so a developer's .env never leaks into unit tests.
     return Path("/nonexistent/.env")
 
@@ -125,24 +130,23 @@ def cfg(clean_env, monkeypatch, tmp_path) -> Config:
 def deps(cfg):
     """The real adapters for cfg; tests replace single fields with fakes. The decision layer is
     a FakeDecider (undecided answers) and the code embedder a FakeEmbedder: every query and
-    index path asks them, and a unit test must never reach the judge model or Voyage."""
+    index path asks them, and a unit test must never reach the judge model or Voyage. The index
+    state is the manifest file the tests write with manifest_files.save_manifest."""
     from code_fakes import FakeDecider, FakeEmbedder
+    from manifest_files import use_file_state
 
     from enigram.bootstrap import build_deps
 
-    deps = build_deps(cfg)
+    deps = use_file_state(cfg, build_deps(cfg))
     deps.decider = FakeDecider
     deps.code_embedder = FakeEmbedder
     return deps
 
 
 @pytest.fixture
-def pg_cfg(cfg, clean_env, monkeypatch) -> Config:
-    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
-    monkeypatch.setenv("POSTGRES_USER", "enigram")
-    monkeypatch.setenv("POSTGRES_PASSWORD", "pg-password-not-real")
-    monkeypatch.setenv("POSTGRES_DATABASE", "enigram")
-    return Config.from_env(clean_env)
+def pg_cfg(cfg) -> Config:
+    """Every config is a Postgres one now (plans/stateless.md, S7); kept for the tests' wording."""
+    return cfg
 
 
 def make_book_pdf(path: Path) -> Path:
@@ -201,8 +205,6 @@ def golden_env(cfg, tmp_path, monkeypatch):
     from enigram.adapters.driven import lightrag_engine
 
     write_index(cfg)
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "graph_chunk_entity_relation.graphml").write_text("<graphml/>")
     path = write_golden(
         tmp_path / "golden.yaml",
         "questions:\n"

@@ -49,8 +49,9 @@ DEFAULT_CODE_RERANK_MODEL = "rerank-2.5"
 # The Docling chunker's tokenizer, recorded in the manifest by guard_chunk_settings.
 CHUNK_TOKENIZER = "tiktoken:cl100k_base"
 
-# Where LightRAG keeps the index: JSON/GraphML files under rag_dir, or PostgreSQL (pgvector).
-STORAGE_BACKENDS = ("file", "postgres")
+# The index, manifest and chunks live in PostgreSQL (pgvector) only: nothing durable on local
+# disk (plans/stateless.md, S7). STORAGE_BACKEND chose between files and Postgres before that.
+STORAGE_BACKEND_GONE = "STORAGE_BACKEND is no longer used (Postgres is the only storage)."
 
 # The decision layer: Jev (TypeSafe System One) with the LLM judge as automatic fallback,
 # or the judge alone (the default when DECISION_PROVIDER is empty).
@@ -230,7 +231,6 @@ class Config:
     judge_max_tokens: int
     max_parallel_insert: int
     thinking_mode: str
-    storage: str
     postgres_database: str
     workspace: str
     # (name, key) pairs from ENIGRAM_API_KEYS; empty means the API is open.
@@ -353,15 +353,11 @@ class Config:
             embed_base_url = os.environ["EMBED_BASE_URL"].strip().rstrip("/")
             embed_api_key = os.environ.get("EMBED_API_KEY", "").strip() or NO_API_KEY
             voyage_api_key = ""
-        storage = os.environ.get("STORAGE_BACKEND", "file").strip() or "file"
-        if storage not in STORAGE_BACKENDS:
-            raise EnigramError(
-                f"STORAGE_BACKEND must be one of {STORAGE_BACKENDS}, got {storage!r}"
-            )
-        if storage == "postgres":
-            # LightRAG reads the POSTGRES_* variables itself; check them here for a clear error.
-            for name in ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DATABASE"):
-                _required(name)
+        if os.environ.get("STORAGE_BACKEND", "").strip():
+            raise EnigramError(STORAGE_BACKEND_GONE)
+        # LightRAG reads the POSTGRES_* variables itself; check them here for a clear error.
+        for name in ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DATABASE"):
+            _required(name)
         repo_poll_secs = _int("REPO_POLL_SECS", 120)
         if repo_poll_secs < 0:
             raise EnigramError(f"REPO_POLL_SECS must be 0 (off) or more, got {repo_poll_secs}")
@@ -426,7 +422,6 @@ class Config:
             judge_max_tokens=_int("JUDGE_MAX_TOKENS", llm_max_tokens),
             max_parallel_insert=_int("MAX_PARALLEL_INSERT", 2),
             thinking_mode=thinking_mode,
-            storage=storage,
             postgres_database=os.environ.get("POSTGRES_DATABASE", "").strip(),
             workspace=os.environ.get("WORKSPACE", "").strip() or "default",
             api_keys=_api_keys(os.environ.get("ENIGRAM_API_KEYS", "")),
@@ -498,27 +493,24 @@ class Config:
 
     @property
     def rag_dir(self) -> Path:
+        """LightRAG's working_dir: it creates the folder, its Postgres storages leave it empty."""
         return self.data_dir / "rag_storage"
 
     @property
     def index_location(self) -> str:
         """Where the index lives, for messages that tell the user what to delete."""
-        if self.storage == "postgres":
-            return (
-                f"the LIGHTRAG_* rows of workspace {self.workspace!r} "
-                f"in database {self.postgres_database!r}"
-            )
-        return str(self.rag_dir)
+        return (
+            f"the LIGHTRAG_* rows of workspace {self.workspace!r} "
+            f"in database {self.postgres_database!r}"
+        )
 
     @property
     def manifest_location(self) -> str:
         """Where the manifest and parsed chunks live (IndexState), for the same messages."""
-        if self.storage == "postgres":
-            return (
-                "the enigram_index_settings, enigram_documents and enigram_chunks rows of "
-                f"workspace {self.workspace!r}"
-            )
-        return f"{self.manifest_path} and {self.parsed_dir}"
+        return (
+            "the enigram_index_settings, enigram_documents and enigram_chunks rows of "
+            f"workspace {self.workspace!r}"
+        )
 
     @property
     def reports_dir(self) -> Path:
@@ -527,7 +519,3 @@ class Config:
     @property
     def eval_dir(self) -> Path:
         return self.data_dir / "eval"
-
-    @property
-    def manifest_path(self) -> Path:
-        return self.data_dir / "index_manifest.json"

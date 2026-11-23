@@ -1,4 +1,4 @@
-# Local PostgreSQL with pgvector for STORAGE_BACKEND=postgres. Production uses a managed
+# Local PostgreSQL with pgvector, the only index storage. Production uses a managed
 # Postgres with the pgvector extension instead (RDS, Cloud SQL, Azure, ...).
 #
 # `docker compose up -d postgres` runs only the database (for the CLI on the host);
