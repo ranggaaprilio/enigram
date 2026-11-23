@@ -50,7 +50,7 @@ PostgreSQL is the only index storage: documents, chunks, vectors (pgvector), the
 (plain tables, no Apache AGE) and the LLM cache. The manifest (which documents are indexed, and the
 settings they were indexed with) and the parsed chunks are the tables `enigram_index_settings`,
 `enigram_documents` and `enigram_chunks`, so the API does not read them from the worker's disk.
-Uploaded files stay in `data/books` unless `BLOB_URL` puts them in a bucket (see
+Uploaded files are in the `BLOB_URL` bucket (see
 [Source files](../self-hosting/deployment.md#source-files)); the Docling parse cache, repository
 clones and CLI reports stay in `DATA_DIR`, and are safe to delete.
 

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from code_fakes import FakeAnnotations, FakeCodeGraph
 from fastapi.testclient import TestClient
+from local_blob_store import books_dir
 from test_api import LAPTOP_KEY, _deps, _push, _signed, _upload
 from test_query import FakeRag
 from test_worker import FakeJobStore
@@ -66,7 +67,6 @@ def test_for_workspace_moves_files_but_not_clones(pg_cfg):
 
     assert pg_cfg.for_workspace(pg_cfg.workspace) is pg_cfg
     assert other.workspace == "ws-a"
-    assert other.books_dir == pg_cfg.data_dir / "workspaces" / "ws-a" / "books"
     assert other.parsed_dir == pg_cfg.data_dir / "workspaces" / "ws-a" / "parsed"
     assert other.repo_store == pg_cfg.repo_store
 
@@ -129,7 +129,7 @@ def test_uploads_go_to_the_workspace_folder_and_queue(ws_env, pg_cfg):
 
     assert response.status_code == 202
     assert (pg_cfg.data_dir / "workspaces" / "ws-a" / "books" / "Paper One.pdf").exists()
-    assert not pg_cfg.books_dir.exists()
+    assert not books_dir(pg_cfg).exists()
     assert [j.payload["book"] for j in store.scoped["ws-a"].jobs] == ["Paper-One"]
     assert store.jobs == []
     assert client.get("/documents").json() == []

@@ -1,4 +1,5 @@
-"""BlobStore on a local folder: DATA_DIR/books, the default when BLOB_URL is empty."""
+"""Test stand-in for the S3 blob store: the source files in DATA_DIR/books, so unit tests run
+without a bucket. tests/test_blob_store.py checks it against the same contract as S3BlobStore."""
 
 import asyncio
 import os
@@ -6,7 +7,12 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 
+from enigram.config import Config
 from enigram.domain.errors import NotFound
+
+
+def books_dir(cfg: Config) -> Path:
+    return cfg.data_dir / "books"
 
 
 class LocalBlobStore:

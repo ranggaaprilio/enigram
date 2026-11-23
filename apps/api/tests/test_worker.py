@@ -3,8 +3,8 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
 import pytest
+from local_blob_store import LocalBlobStore, books_dir
 
-from enigram.adapters.driven.local_blob_store import LocalBlobStore
 from enigram.adapters.driving import worker
 from enigram.adapters.driving.workspaces import Workspaces
 from enigram.application.indexing import IndexRun
@@ -167,9 +167,9 @@ def fake_index(monkeypatch):
 
 def _upload(cfg, *books):
     """Source files as the API stores them (LocalBlobStore), each holding its workspace/book."""
-    cfg.books_dir.mkdir(parents=True, exist_ok=True)
+    books_dir(cfg).mkdir(parents=True, exist_ok=True)
     for book in books:
-        (cfg.books_dir / f"{book}.pdf").write_text(f"{cfg.workspace}/{book}")
+        (books_dir(cfg) / f"{book}.pdf").write_text(f"{cfg.workspace}/{book}")
 
 
 async def test_process_next_indexes_the_book_and_records_its_entry(cfg, store, deps, fake_index):
@@ -309,7 +309,7 @@ def _workspaces(cfg, deps, store, *names):
         store.workspaces[name] = datetime.now(UTC)
 
     def deps_for(c):
-        return replace(deps, new_blob_store=lambda: LocalBlobStore(c.books_dir))
+        return replace(deps, new_blob_store=lambda: LocalBlobStore(books_dir(c)))
 
     return Workspaces(cfg, _fake_adapters(deps), deps_for, store, AsyncExitStack())
 

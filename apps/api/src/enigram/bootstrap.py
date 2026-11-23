@@ -14,7 +14,6 @@ from enigram.adapters.driven.lightrag_engine import (
     open_engine,
 )
 from enigram.adapters.driven.llm_decider import LlmDecider
-from enigram.adapters.driven.local_blob_store import LocalBlobStore
 from enigram.adapters.driven.openai_llm import OpenAIChatModel, check_providers
 from enigram.adapters.driven.postgres_annotations import PostgresAnnotations
 from enigram.adapters.driven.postgres_chat import PostgresChat
@@ -115,13 +114,10 @@ async def _new_index_state(cfg: Config, store: JobRepository) -> IndexState:
 
 
 def _new_blob_store(cfg: Config) -> BlobStore:
-    """The workspace's source files: BLOB_URL's bucket, or the books folder (plans/stateless.md,
-    S2)."""
-    if cfg.blob_url:
-        from enigram.adapters.driven.s3_blob_store import S3BlobStore
+    """The workspace's source files in BLOB_URL's bucket (plans/stateless.md, S2 and S7)."""
+    from enigram.adapters.driven.s3_blob_store import S3BlobStore
 
-        return S3BlobStore(cfg.blob_url, cfg.workspace)
-    return LocalBlobStore(cfg.books_dir)
+    return S3BlobStore(cfg.blob_url, cfg.workspace)
 
 
 def _decider(cfg: Config) -> DecisionProvider:

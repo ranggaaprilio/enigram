@@ -117,8 +117,13 @@ def _shutdown_grace_secs() -> int:
 
 def _blob_url() -> str:
     value = os.environ.get("BLOB_URL", "").strip().rstrip("/")
-    if value and not (value.startswith("s3://") and value[len("s3://") :].split("/")[0]):
-        raise EnigramError(f"BLOB_URL must be s3://bucket[/prefix] or empty, got {value!r}")
+    if not value:
+        raise EnigramError(
+            "BLOB_URL is required: s3://bucket[/prefix] on an S3-compatible store "
+            "(source files are no longer kept in DATA_DIR/books)"
+        )
+    if not (value.startswith("s3://") and value[len("s3://") :].split("/")[0]):
+        raise EnigramError(f"BLOB_URL must be s3://bucket[/prefix], got {value!r}")
     return value
 
 
@@ -284,7 +289,7 @@ class Config:
     verify_badges: tuple[str, ...] = ()
     # Where uploaded and repository-synced source files live (plans/stateless.md, S2):
     # s3://bucket[/prefix] on any S3-compatible store (AWS_* credentials, AWS_ENDPOINT_URL for
-    # MinIO); empty (default): the books folder in DATA_DIR.
+    # MinIO or SeaweedFS). Required: nothing durable on local disk (plans/stateless.md, S7).
     blob_url: str = ""
     # Seconds the API waits on shutdown (SIGTERM) for open connections, then again for chat
     # answers still running, before it exits (plans/stateless.md, S6); 0 = no wait.
@@ -485,11 +490,6 @@ class Config:
     @property
     def parsed_dir(self) -> Path:
         return self.data_dir / "parsed"
-
-    @property
-    def books_dir(self) -> Path:
-        """Uploaded and synced documents when BLOB_URL is empty (LocalBlobStore)."""
-        return self.data_dir / "books"
 
     @property
     def rag_dir(self) -> Path:

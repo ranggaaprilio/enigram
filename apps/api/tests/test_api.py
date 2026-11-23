@@ -16,6 +16,7 @@ from code_fakes import (
     choice,
 )
 from fastapi.testclient import TestClient
+from local_blob_store import books_dir
 from manifest_files import file_state, save_manifest
 from test_query import FakeRag
 from test_server import FakeMemoryStore
@@ -129,8 +130,8 @@ def test_upload_new_pdf_queues_a_job(env, pg_cfg):
     body = response.json()
     assert (body["book"], body["status"]) == ("Paper-One", "queued")
     assert body["job"]["payload"] == {"book": "Paper-One", "file": "Paper One.pdf"}
-    assert (pg_cfg.books_dir / "Paper One.pdf").read_bytes() == PDF
-    assert [p.name for p in pg_cfg.books_dir.iterdir()] == ["Paper One.pdf"]  # no temp left
+    assert (books_dir(pg_cfg) / "Paper One.pdf").read_bytes() == PDF
+    assert [p.name for p in books_dir(pg_cfg).iterdir()] == ["Paper One.pdf"]  # no temp left
     assert len(store.jobs) == 1
 
 
@@ -142,7 +143,7 @@ def test_upload_rejects_unsupported_files(env, pg_cfg, name):
 
     assert response.status_code in (400, 422)  # "" fails FastAPI's own validation
     assert store.jobs == []
-    assert not pg_cfg.books_dir.exists() or not any(pg_cfg.books_dir.iterdir())
+    assert not books_dir(pg_cfg).exists() or not any(books_dir(pg_cfg).iterdir())
 
 
 def test_upload_of_indexed_unchanged_file_is_a_no_op(env, pg_cfg):
@@ -159,8 +160,8 @@ def test_upload_of_indexed_unchanged_file_is_a_no_op(env, pg_cfg):
 
 def test_upload_of_changed_indexed_file_is_rejected(env, pg_cfg):
     client, store, _, _ = env
-    pg_cfg.books_dir.mkdir(parents=True)
-    (pg_cfg.books_dir / "Paper One.pdf").write_bytes(b"old")
+    books_dir(pg_cfg).mkdir(parents=True)
+    (books_dir(pg_cfg) / "Paper One.pdf").write_bytes(b"old")
     old_sha = hashlib.sha256(b"old").hexdigest()
     save_manifest(pg_cfg, {"books": {"Paper-One": {"status": "indexed", "sha256": old_sha}}})
 
@@ -168,14 +169,14 @@ def test_upload_of_changed_indexed_file_is_rejected(env, pg_cfg):
 
     assert response.status_code == 409
     assert "delete Paper-One first" in response.json()["detail"]
-    assert (pg_cfg.books_dir / "Paper One.pdf").read_bytes() == b"old"
+    assert (books_dir(pg_cfg) / "Paper One.pdf").read_bytes() == b"old"
     assert store.jobs == []
 
 
 def test_upload_rejects_document_id_collision(env, pg_cfg):
     client, store, _, _ = env
-    pg_cfg.books_dir.mkdir(parents=True)
-    (pg_cfg.books_dir / "a b.pdf").write_bytes(PDF)
+    books_dir(pg_cfg).mkdir(parents=True)
+    (books_dir(pg_cfg) / "a b.pdf").write_bytes(PDF)
 
     response = _upload(client, "a-b.pdf")
 
@@ -211,8 +212,8 @@ def test_uploads_of_one_name_use_separate_temp_files_outside_the_store(env, pg_c
 
     assert len(set(paths)) == 2  # concurrent uploads must not truncate each other's file
     # Never half-written in the store: the API lists it, and it may be a bucket.
-    assert not any(p.is_relative_to(pg_cfg.books_dir) for p in paths)
-    assert (pg_cfg.books_dir / "Paper One.pdf").read_bytes() == PDF
+    assert not any(p.is_relative_to(books_dir(pg_cfg)) for p in paths)
+    assert (books_dir(pg_cfg) / "Paper One.pdf").read_bytes() == PDF
 
 
 def test_documents_lists_manifest_books_and_queued_uploads(env, pg_cfg):
@@ -695,8 +696,8 @@ def test_delete_document_queues_a_job_and_lists_it_as_deleting(env, pg_cfg):
 
 def test_delete_document_of_an_uploaded_unindexed_file(env, pg_cfg):
     client, store, _, _ = env
-    pg_cfg.books_dir.mkdir(parents=True)
-    (pg_cfg.books_dir / "Paper One.pdf").write_bytes(PDF)
+    books_dir(pg_cfg).mkdir(parents=True)
+    (books_dir(pg_cfg) / "Paper One.pdf").write_bytes(PDF)
 
     assert client.delete("/documents/Paper-One").status_code == 202
 

@@ -23,7 +23,7 @@ class S3BlobStore:
         self.bucket, prefix = parse_blob_url(url)
         self.prefix = f"{prefix}/{workspace}/books/" if prefix else f"{workspace}/books/"
         if client is None:
-            import boto3  # only deployments with BLOB_URL load it
+            import boto3
 
             client = boto3.client("s3")
         self.client = client

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from local_blob_store import books_dir
 from manifest_files import file_state, load_manifest, save_manifest
 
 from enigram.application import repo_store
@@ -213,7 +214,7 @@ async def test_index_repo_indexes_and_tags_every_markdown_file(cfg, deps, fake_s
     assert fake_sync.opened == 0  # nothing to delete: no index needed
     entry = load_manifest(cfg)["books"]["org-handbook--docs--guide"]
     assert (entry["repo"], entry["repo_path"], entry["repo_ref"]) == (URL, "docs/guide.md", "main")
-    assert (cfg.books_dir / "org-handbook--README.md").read_text() == "# Readme"
+    assert (books_dir(cfg) / "org-handbook--README.md").read_text() == "# Readme"
 
 
 async def test_index_repo_resync_reindexes_changed_and_deletes_removed(cfg, deps, fake_sync):
@@ -226,8 +227,8 @@ async def test_index_repo_resync_reindexes_changed_and_deletes_removed(cfg, deps
     assert fake_sync.deleted == ["org-handbook--b", "org-handbook--a"]
     assert (result["deleted"], result["reindexed"]) == (["org-handbook--b"], ["org-handbook--a"])
     assert (result["indexed"], result["unchanged"]) == (["org-handbook--a"], 1)
-    assert not (cfg.books_dir / "org-handbook--b.md").exists()
-    assert (cfg.books_dir / "org-handbook--a.md").read_text() == "# A, revised"
+    assert not (books_dir(cfg) / "org-handbook--b.md").exists()
+    assert (books_dir(cfg) / "org-handbook--a.md").read_text() == "# A, revised"
     assert "org-handbook--b" not in load_manifest(cfg)["books"]
 
 
