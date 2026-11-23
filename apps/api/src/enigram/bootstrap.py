@@ -5,7 +5,6 @@ from functools import partial
 
 from enigram.adapters.driven.docling_parser import DoclingParser
 from enigram.adapters.driven.embedding import code_embedder, make_embedding_func
-from enigram.adapters.driven.file_index_state import FileIndexState
 from enigram.adapters.driven.jev_decider import JevDecider
 from enigram.adapters.driven.lightrag_engine import (
     QUERY_MAX_ENTITY_TOKENS,
@@ -106,16 +105,12 @@ async def _new_chat(cfg: Config, store: JobRepository) -> ChatRepository:
     return chat
 
 
-async def _new_index_state(cfg: Config, store: JobRepository | None) -> IndexState:
-    """Files for STORAGE_BACKEND=file; Postgres otherwise, importing a DATA_DIR manifest once
-    (plans/stateless.md, S1 and S3)."""
-    if cfg.storage != "postgres":
-        return FileIndexState(cfg)
+async def _new_index_state(cfg: Config, store: JobRepository) -> IndexState:
+    """The manifest and chunks in Postgres (plans/stateless.md, S1 and S3)."""
     if not isinstance(store, PostgresJobStore):
         raise EnigramError("The Postgres manifest needs the job store's connection")
     state = PostgresIndexState(store.pool, cfg.workspace)
     await state.ensure_schema()
-    await state.import_files(cfg.manifest_path, cfg.parsed_dir)
     return state
 
 

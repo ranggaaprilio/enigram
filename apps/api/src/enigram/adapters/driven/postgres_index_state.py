@@ -4,12 +4,10 @@ without a shared DATA_DIR. Shares the job store's pool and never closes it."""
 import dataclasses
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
 import asyncpg
 
-from enigram.application.files import read_chunks_jsonl
 from enigram.domain.chunk import Chunk
 
 log = logging.getLogger(__name__)
@@ -38,8 +36,6 @@ CREATE TABLE IF NOT EXISTS enigram_chunks (
     PRIMARY KEY (workspace, book, position)
 );
 """
-
-IMPORTED = ".imported"
 
 
 def _chunk(value: str) -> Chunk:
@@ -123,41 +119,3 @@ class PostgresIndexState:
         await self.pool.execute(
             "DELETE FROM enigram_chunks WHERE workspace = $1 AND book = $2", self.workspace, book
         )
-
-    async def import_files(self, manifest_path: Path, parsed_dir: Path) -> int | None:
-        """Copies an index_manifest.json and its parsed/<book>.chunks.jsonl into a workspace
-        that has no manifest yet, then renames the files to *.imported. Runs once: under a
-        lock, so an API and a worker starting together import it once. The number of documents
-        imported; None when there was nothing to import."""
-        if not manifest_path.exists():
-            return None
-        async with self.pool.acquire() as conn, conn.transaction():
-            await conn.execute(
-                "SELECT pg_advisory_xact_lock(hashtext($1))", f"index_state:{self.workspace}"
-            )
-            if await conn.fetchval(
-                "SELECT 1 FROM enigram_index_settings WHERE workspace = $1", self.workspace
-            ):
-                return None
-            if not manifest_path.exists():  # renamed by a process that held the lock first
-                return None
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            await self._save(conn, manifest)
-            chunk_files = []
-            for book in manifest.get("books", {}):
-                path = parsed_dir / f"{book}.chunks.jsonl"
-                if path.exists():
-                    await self._write_chunks(conn, book, read_chunks_jsonl(path))
-                    chunk_files.append(path)
-        # After the commit: a failed import leaves the files where they were.
-        for path in [manifest_path, *chunk_files]:
-            path.replace(path.with_name(path.name + IMPORTED))
-        books = len(manifest.get("books", {}))
-        log.info(
-            "[index] workspace %s: imported %s (%d documents, %d chunk files) into Postgres",
-            self.workspace,
-            manifest_path,
-            books,
-            len(chunk_files),
-        )
-        return books

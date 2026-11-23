@@ -1,6 +1,5 @@
-import dataclasses
-
 import pytest
+from lightrag.base import DocStatus
 from lightrag.query_validation import RAGQueryTooShortError
 
 from enigram.adapters.driven import lightrag_engine
@@ -63,10 +62,19 @@ def success_response() -> dict:
     }
 
 
+class FakeDocStatus:
+    def __init__(self, processed):
+        self.processed = processed
+
+    async def get_status_counts(self):
+        return {DocStatus.PROCESSED: self.processed}
+
+
 class FakeRag:
-    def __init__(self, response=None, error=None):
+    def __init__(self, response=None, error=None, processed=1):
         self.response = response if response is not None else success_response()
         self.error = error
+        self.doc_status = FakeDocStatus(processed)  # open_engine's "is anything indexed?"
         self.params = []
         self.initialized = 0
         self.finalized = 0
@@ -294,7 +302,8 @@ async def test_retrieve_failure_and_too_short_raise():
         await lightrag_engine.LightRagEngine(rag).retrieve("a")
 
 
-async def test_open_engine_without_index_raises(cfg):
+async def test_open_engine_without_index_raises(cfg, monkeypatch):
+    monkeypatch.setattr(lightrag_engine, "build_rag", lambda cfg, **kw: FakeRag(processed=0))
     with pytest.raises(EnigramError, match="No index found"):
         async with lightrag_engine.open_engine(cfg):
             pass
@@ -625,7 +634,6 @@ async def test_cli_query_auto_routes_a_flow_question_to_the_agent(cfg, deps, mon
     deps.new_annotations, deps.open_engine = new_annotations, no_engine
     deps.generator = lambda: ScriptedChat([answer_reply(final)])
     monkeypatch.setattr(bootstrap, "build_deps", lambda cfg: deps)
-    cfg = dataclasses.replace(cfg, storage="postgres")
     args = cli._build_parser().parse_args(["query", "Walk through GET /users/:id"])
 
     assert await cli._query(cfg, args) == 0

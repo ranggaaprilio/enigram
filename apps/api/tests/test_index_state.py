@@ -1,5 +1,5 @@
-"""IndexState (plans/stateless.md, S1 and S3): one contract on the file and Postgres adapters,
-and the one-time import of a DATA_DIR manifest into Postgres."""
+"""IndexState (plans/stateless.md, S1 and S3): one contract on the Postgres adapter and the
+tests' file stand-in."""
 
 import os
 from contextlib import asynccontextmanager
@@ -7,11 +7,9 @@ from uuid import uuid4
 
 import asyncpg
 import pytest
-from manifest_files import save_manifest
+from manifest_files import FileIndexState
 
-from enigram.adapters.driven.file_index_state import FileIndexState
 from enigram.adapters.driven.postgres_index_state import PostgresIndexState
-from enigram.application.files import write_chunks_jsonl
 from enigram.bootstrap import build_deps
 from enigram.domain.chunk import Chunk
 from enigram.domain.errors import EnigramError
@@ -52,10 +50,9 @@ async def state(request, cfg):
         yield state
 
 
-async def test_bootstrap_picks_the_adapter_by_storage(cfg, pg_cfg):
-    assert isinstance(await build_deps(cfg).new_index_state(None), FileIndexState)
+async def test_bootstrap_needs_the_job_store(cfg):
     with pytest.raises(EnigramError, match="needs the job store"):
-        await build_deps(pg_cfg).new_index_state(None)
+        await build_deps(cfg).new_index_state(None)
 
 
 async def test_empty_manifest(state):
@@ -94,31 +91,3 @@ async def test_chunks_round_trip_in_order_and_replace(state):
     await state.delete_chunks("a")
     assert await state.read_chunks("a") == []
     assert await state.read_chunks("b") == [_chunk("b", 0)]
-
-
-@pytest.mark.postgres
-async def test_import_copies_the_files_once_and_renames_them(cfg, pg_state):
-    manifest = {"storage": "postgres", "books": {"a": {"status": "indexed"}, "b": {}}}
-    save_manifest(cfg, manifest)
-    write_chunks_jsonl(cfg.parsed_dir / "a.chunks.jsonl", [_chunk("a", 0), _chunk("a", 1)])
-
-    assert await pg_state.import_files(cfg.manifest_path, cfg.parsed_dir) == 2
-
-    assert await pg_state.load_manifest() == manifest
-    assert await pg_state.read_chunks("a") == [_chunk("a", 0), _chunk("a", 1)]
-    assert await pg_state.read_chunks("b") == []
-    assert not cfg.manifest_path.exists()
-    assert cfg.manifest_path.with_name("index_manifest.json.imported").exists()
-    assert (cfg.parsed_dir / "a.chunks.jsonl.imported").exists()
-
-    # A manifest file that shows up again is not imported over the Postgres one.
-    save_manifest(cfg, {"books": {"other": {}}})
-    assert await pg_state.import_files(cfg.manifest_path, cfg.parsed_dir) is None
-    assert await pg_state.load_manifest() == manifest
-    assert cfg.manifest_path.exists()
-
-
-@pytest.mark.postgres
-async def test_import_without_a_manifest_file_does_nothing(cfg, pg_state):
-    assert await pg_state.import_files(cfg.manifest_path, cfg.parsed_dir) is None
-    assert await pg_state.load_manifest() == {"books": {}}

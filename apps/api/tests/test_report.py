@@ -3,7 +3,6 @@ import json
 import networkx as nx
 import pytest
 
-from enigram.adapters.driven.lightrag_engine import load_graph
 from enigram.application import indexing as index
 from enigram.application import report
 from enigram.domain.errors import EnigramError
@@ -70,19 +69,12 @@ def test_score_review_nothing_judged(tmp_path):
     assert score["relation_precision"] is None
 
 
-async def test_load_graph_without_index_raises(cfg):
-    with pytest.raises(EnigramError, match="No index found"):
-        await load_graph(cfg)
-
-
 async def test_build_report_writes_md_json_and_review(cfg):
-    cfg.rag_dir.mkdir(parents=True)
-    nx.write_graphml(_graph(), cfg.rag_dir / "graph_chunk_entity_relation.graphml")
     manifest = {
         "books": {"book-a": {"status": "indexed", "pages": 10, "chunks": 4, "parse_secs": 5.0}}
     }
 
-    md_path = report.build_report(cfg, await load_graph(cfg), manifest)
+    md_path = report.build_report(cfg, _graph(), manifest)
 
     data = json.loads(md_path.with_suffix(".json").read_text())
     assert data["graph"]["entities"] == 4
@@ -93,16 +85,12 @@ async def test_build_report_writes_md_json_and_review(cfg):
 
 
 def test_guard_chunk_settings_rejects_changed_chunking(cfg):
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "kv_store_doc_status.json").write_text("{}")
     manifest = {"books": {"a": {}}, "chunk_max_tokens": 500, "docling_version": "0.0.1"}
     with pytest.raises(EnigramError, match="Chunk settings changed"):
         index.guard_chunk_settings(cfg, manifest)
 
 
 def test_guard_chunk_settings_rejects_index_from_older_parser(cfg):
-    cfg.rag_dir.mkdir(parents=True)
-    (cfg.rag_dir / "kv_store_doc_status.json").write_text("{}")
     manifest = {"books": {"a": {}}}
     index.guard_chunk_settings(cfg, {"books": {}})  # fresh manifest: records settings, no error
     with pytest.raises(EnigramError, match="parser_version"):

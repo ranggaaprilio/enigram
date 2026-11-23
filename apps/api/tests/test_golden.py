@@ -3,7 +3,7 @@ from itertools import zip_longest
 from pathlib import Path
 
 import pytest
-from manifest_files import save_manifest
+from manifest_files import save_manifest, use_file_state
 
 from enigram.application.evaluation import golden
 from enigram.application.files import write_chunks_jsonl
@@ -34,7 +34,7 @@ def write_index(cfg) -> None:
 
 def check(cfg, path, **kw):
     """check_golden with the chunks a document set resolves against, as the CLI does."""
-    chunks = asyncio.run(golden.golden_chunks(cfg, build_deps(cfg), path))
+    chunks = asyncio.run(golden.golden_chunks(cfg, use_file_state(cfg, build_deps(cfg)), path))
     return golden.check_golden(cfg, path, chunks=chunks, **kw)
 
 

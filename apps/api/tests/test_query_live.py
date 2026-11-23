@@ -1,12 +1,13 @@
 """Index the synthetic harbor PDF and ask a 2-hop question.
 
-Skipped unless DEEPSEEK_API_KEY and VOYAGE_API_KEY are set."""
+Skipped unless DEEPSEEK_API_KEY and VOYAGE_API_KEY are set; needs the Postgres from .env."""
 
 import dataclasses
+from uuid import uuid4
 
 import pytest
+from live_pg import delete_workspace_rows
 
-from enigram.adapters.driven.file_index_state import FileIndexState
 from enigram.adapters.driven.lightrag_engine import open_engine
 from enigram.application import indexing as index
 from enigram.application.querying import answer_question
@@ -15,17 +16,26 @@ from enigram.config import Config
 
 
 @pytest.fixture
-def live_cfg(tmp_path) -> Config:
-    cfg = Config.from_env()
-    # File storage under tmp_path whatever .env says: with STORAGE_BACKEND=postgres the test
-    # would index into the real workspace and find its own documents there on the next run.
-    return dataclasses.replace(cfg, data_dir=tmp_path / "data", storage="file")
+async def live_cfg(tmp_path):
+    """The real Postgres from .env, in a workspace of its own so the test never indexes into a
+    real one; its LightRAG and manifest rows are deleted afterwards."""
+    cfg = dataclasses.replace(
+        Config.from_env(), data_dir=tmp_path / "data", workspace=f"test_live_{uuid4().hex[:8]}"
+    )
+    yield cfg
+    store = await build_deps(cfg).open_store()
+    try:
+        await delete_workspace_rows(store.pool, cfg.workspace)
+    finally:
+        await store.close()
 
 
 @pytest.mark.live
 @pytest.mark.docling
 async def test_query_answers_two_hop_question_with_sources(live_cfg, book_pdf):
-    await index.run_index(live_cfg, build_deps(live_cfg), FileIndexState(live_cfg), book_pdf.parent)
+    deps = build_deps(live_cfg)
+    async with index.opened_index_state(live_cfg, deps) as state:
+        await index.run_index(live_cfg, deps, state, book_pdf.parent)
 
     # Storm Archive (Chapter 2) → Lighthouse Protocol → designed by Mira Okafor (Chapter 1).
     async with open_engine(live_cfg) as engine:
